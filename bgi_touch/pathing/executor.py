@@ -95,11 +95,15 @@ class PathingExecutor:
 
     # ---- movement ----
 
+    _tp_task = None
+
     def _teleport(self, wp: Waypoint) -> None:
-        raise NotImplementedError(
-            "传送（打开大地图并定位传送锚点）依赖大地图匹配，尚未移植。"
-            "需要先完成地图资产接入（docs/ROADMAP.md）。"
-        )
+        if self._tp_task is None:
+            from .tp import TpTask
+            self._tp_task = TpTask(self.ctx, log=self.log)
+        self._tp_task.tp(wp.x, wp.y)
+        if self.positioner is not None:
+            self.positioner.reset()  # 传送后位置突变，清除局部搜索缓存
 
     def _move_to(self, wp: Waypoint, timeout_s: float = 60, arrive_dist: float = 2.0) -> None:
         if self.positioner is None:

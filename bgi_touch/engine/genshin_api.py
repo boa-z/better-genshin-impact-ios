@@ -117,8 +117,14 @@ class GenshinApi:
 
     # ---- 未移植（依赖大地图定位）----
 
+    _tp_task = None
+
     def tp(self, x, y, map_name=None, force=False):
-        _todo("tp")
+        """打开大地图并传送到 (x, y) 附近锚点。"""
+        if self._tp_task is None:
+            from ..pathing.tp import TpTask
+            self._tp_task = TpTask(self.ctx, log=self.log)
+        return self._tp_task.tp(float(x), float(y))
 
     def moveMapTo(self, x, y, country=None):
         _todo("moveMapTo")
