@@ -132,8 +132,20 @@ class GenshinApi:
     def tpToStatueOfTheSeven(self):
         _todo("tpToStatueOfTheSeven")
 
+    _big_locator = None
+
     def getPositionFromBigMap(self, map_name=None):
-        _todo("getPositionFromBigMap")
+        """大地图打开状态下，返回视野中心的世界坐标（Point2f）；失败抛错。"""
+        if self._big_locator is None:
+            from ..pathing.tp import BigMapLocator
+            self._big_locator = BigMapLocator()
+        view = self._big_locator.locate_view(self.ctx.capture_bgr())
+        if view is None:
+            raise RuntimeError("大地图视野匹配失败（地图未打开？）")
+        from ..pathing.map_locator import MapConfig
+        wx, wy = MapConfig().image_to_world(view[0] * 8, view[1] * 8)
+        from .recognition import Point2f
+        return Point2f(wx, wy)
 
     _positioner = None
 

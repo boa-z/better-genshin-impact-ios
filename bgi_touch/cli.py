@@ -165,6 +165,15 @@ def cmd_trigger(args) -> int:
     return 0
 
 
+def cmd_reconnect(args) -> int:
+    from .engine.context import GameContext
+    ctx = GameContext(mcp_url=args.url)
+    ctx.device.reconnect_device()
+    print("设备通道已重建")
+    ctx.close()
+    return 0
+
+
 def cmd_web(args) -> int:
     from .webui.server import serve
     serve(host=args.host, port=args.port)
@@ -199,6 +208,7 @@ def main() -> int:
     p = sub.add_parser("web", help="启动 WebUI 控制台")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8899)
+    sub.add_parser("reconnect", help="重建设备通道（触控失效时使用）")
     p = sub.add_parser("trigger", help="长驻实时触发器（自动拾取/自动剧情）")
     p.add_argument("--pick", action="store_true", help="自动拾取")
     p.add_argument("--skip", action="store_true", help="自动剧情推进")
@@ -210,7 +220,7 @@ def main() -> int:
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
                 "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web,
-                "trigger": cmd_trigger}
+                "trigger": cmd_trigger, "reconnect": cmd_reconnect}
     return handlers[args.command](args)
 
 

@@ -30,6 +30,29 @@ class GameContext:
         self.layout = ControlLayout.load(layout_path)
         self.refresh_orientation(status)
         self.input = InputSimulator(self.device, self.layout, self.transform)
+        self._start_orientation_watch()
+
+    def _start_orientation_watch(self) -> None:
+        """朝向看门狗：应用切换（游戏↔其他 App/重登）会改变服务器 tap 坐标空间，
+        且感知有延迟——静态映射会在切换窗口内失效，因此持续轮询并热更新。"""
+        import threading
+
+        def watch():
+            last = None
+            while True:
+                time.sleep(2.5)
+                try:
+                    st = self.device.status()
+                    ori = str(st.get("orientation", ""))
+                    if ori != last:
+                        if last is not None:
+                            print(f"[context] 屏幕朝向变化 {last} → {ori}，更新触控映射")
+                        self.refresh_orientation(st)
+                        last = ori
+                except Exception:
+                    pass  # 设备暂不可用时静默重试
+
+        threading.Thread(target=watch, daemon=True, name="orientation-watch").start()
 
     def refresh_orientation(self, status: dict | None = None) -> None:
         """按服务器当前朝向决定 tap 坐标映射。
@@ -70,6 +93,14 @@ class GameContext:
 
     def launch_game(self) -> None:
         self.device.launch_app(GENSHIN_BUNDLE_ID, wait=True)
+        self.sleep(3000)
+        # 前台切换后 HID 注入通道可能失效（实测门界面点按只在重连后生效），
+        # 启动游戏后主动重建设备通道再刷新朝向映射。
+        try:
+            self.device.reconnect_device()
+            self.sleep(2000)
+        except Exception as e:
+            print(f"[context] 设备重连失败（忽略）：{e}")
         self.refresh_orientation()
 
     _trigger_loop = None

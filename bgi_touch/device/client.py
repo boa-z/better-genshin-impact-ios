@@ -192,6 +192,17 @@ class DeviceClient:
     def type_text(self, text: str) -> None:
         self.call("type_text", text=text)
 
+    def reconnect_device(self) -> None:
+        """重建设备通道并等待新帧。
+
+        实测：前台应用切换（游戏冷启动/切回）后 HID 注入可能整体失效，
+        重连设备通道可恢复——门界面点按只在 reconnect 后生效过。
+        """
+        st = self.status()
+        udid = st.get("active_udid")
+        if udid:
+            self.call("reconnect_device", udid=udid)
+
     def paste_text(self, text: str) -> None:
         self.call("paste_text", text=text)
 
