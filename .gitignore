@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+scripts/
+node_modules/
+*.png
+!assets/**/*.png

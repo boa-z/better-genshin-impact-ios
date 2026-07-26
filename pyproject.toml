@@ -1,0 +1,24 @@
+[project]
+name = "bgi-touch"
+version = "0.1.0"
+description = "BetterGI 跨平台移植：通过 devicehub-mask MCP 在 macOS/Linux 上自动化 iPhone 端原神"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0",
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+ocr = ["rapidocr-onnxruntime>=1.3"]
+js = ["pythonmonkey>=1.0"]
+
+[project.scripts]
+bgi-touch = "bgi_touch.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bgi_touch*"]
