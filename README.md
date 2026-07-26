@@ -72,6 +72,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 战斗策略 DSL（combat txt / action_params） | ✅ 解析+执行 |
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |
+| WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid | ⚠️ 启发式实现，待更多实测 |
 | 实时触发器（自动拾取/自动剧情） | ❌ 计划中（需帧循环 + 模板资产） |
 | pathing 执行（小地图定位/大地图传送） | ❌ 框架就绪，定位待地图资产接入（见 docs/ROADMAP.md） |
