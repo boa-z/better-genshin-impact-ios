@@ -24,18 +24,31 @@ class GameContext:
         if status.get("status") != "connected":
             raise RuntimeError(f"设备未连接（status={status.get('status')}），请检查 DeviceHub Mask")
         w, h = status["screen_size"]
-        self._raw_portrait = h > w  # 设备帧是否为竖屏（横屏游戏内容旋转 90° 呈现）
-        self._raw_size = (int(w), int(h))
-        if self._raw_portrait:
+        if h > w:
             w, h = h, w
         self.transform = ScreenTransform(int(w), int(h))
         self.layout = ControlLayout.load(layout_path)
-        if self._raw_portrait:
-            # 横屏逻辑坐标 L → 竖屏截图坐标 P：横屏画面 = 竖屏帧逆时针转 90°，
-            # 逆变换为 P.x = P_W - L.y，P.y = L.x
-            pw, ph = self._raw_size
-            self.device.set_coord_mapper(lambda x, y: (pw - y, x, pw, ph))
+        self.refresh_orientation(status)
         self.input = InputSimulator(self.device, self.layout, self.transform)
+
+    def refresh_orientation(self, status: dict | None = None) -> None:
+        """按服务器当前朝向决定 tap 坐标映射。
+
+        实测（iPhone 13 Pro Max + DeviceHub Mask）：
+        - 服务器 status.orientation 为 landscape-* 时，tap 坐标空间即横屏空间，
+          与本项目逻辑空间一致，无需映射；
+        - 为 portrait 时（服务器尚未感知游戏横屏），tap 空间是竖屏帧空间，
+          需做 P.x = P_W - L.y, P.y = L.x 逆旋转映射；
+        - 截图流的帧朝向独立于此（capture_bgr 按帧宽高自适应旋转）。
+        游戏启动/切前台后服务器朝向可能变化，此时应再调用本方法。
+        """
+        status = status or self.device.status()
+        w, h = status["screen_size"]
+        if "landscape" in str(status.get("orientation", "")) or w >= h:
+            self.device.set_coord_mapper(None)
+        else:
+            pw, ph = int(w), int(h)
+            self.device.set_coord_mapper(lambda x, y: (pw - y, x, pw, ph))
 
     def sleep(self, ms: float) -> None:
         time.sleep(ms / 1000)
@@ -57,6 +70,7 @@ class GameContext:
 
     def launch_game(self) -> None:
         self.device.launch_app(GENSHIN_BUNDLE_ID, wait=True)
+        self.refresh_orientation()
 
     def close(self) -> None:
         self.input.release_all()

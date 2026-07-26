@@ -1,44 +1,159 @@
 {
-  "$comment": "Genshin Impact mobile touch layout, landscape, normalized to screen size. Calibrate with `bgi-touch calibrate` on your device — in-game HUD scale/layout settings shift these.",
-  "joystick": { "center": { "nx": 0.145, "ny": 0.66 }, "radiusN": 0.085 },
-  "camera": { "region": { "nx": 0.62, "ny": 0.35, "nw": 0.3, "nh": 0.35 }, "pixelsPerDegree": 6.5 },
+  "$comment": "原神移动端触控布局（iPhone 13 Pro Max 2816x1296 实测校准，2026-07-26）。归一化坐标；不同机型/HUD 缩放请用 `bgi-touch calibrate` 重新校准。",
+  "joystick": {
+    "center": {
+      "nx": 0.18,
+      "ny": 0.75
+    },
+    "radiusN": 0.07
+  },
+  "camera": {
+    "region": {
+      "nx": 0.62,
+      "ny": 0.3,
+      "nw": 0.3,
+      "nh": 0.35
+    },
+    "pixelsPerDegree": 6.5
+  },
   "buttons": {
-    "attack": { "nx": 0.845, "ny": 0.75 },
-    "skill": { "nx": 0.745, "ny": 0.855 },
-    "burst": { "nx": 0.915, "ny": 0.60 },
-    "jump": { "nx": 0.925, "ny": 0.78 },
-    "sprint": { "nx": 0.90, "ny": 0.90 },
-    "aim": { "nx": 0.665, "ny": 0.90 },
-    "interact": { "nx": 0.62, "ny": 0.52 },
-    "gadget": { "nx": 0.665, "ny": 0.76 },
-    "elementalSight": { "nx": 0.075, "ny": 0.34 },
-    "map": { "nx": 0.075, "ny": 0.155 },
-    "minimapCenter": { "nx": 0.075, "ny": 0.155 },
-    "paimonMenu": { "nx": 0.033, "ny": 0.06 },
-    "party1": { "nx": 0.97, "ny": 0.155 },
-    "party2": { "nx": 0.97, "ny": 0.27 },
-    "party3": { "nx": 0.97, "ny": 0.385 },
-    "party4": { "nx": 0.97, "ny": 0.50 }
+    "attack": {
+      "nx": 0.795,
+      "ny": 0.777
+    },
+    "skill": {
+      "nx": 0.72,
+      "ny": 0.894
+    },
+    "burst": {
+      "nx": 0.649,
+      "ny": 0.926
+    },
+    "jump": {
+      "nx": 0.88,
+      "ny": 0.864
+    },
+    "sprint": {
+      "nx": 0.883,
+      "ny": 0.663
+    },
+    "aim": {
+      "nx": 0.665,
+      "ny": 0.9
+    },
+    "interact": {
+      "nx": 0.62,
+      "ny": 0.52
+    },
+    "gadget": {
+      "nx": 0.328,
+      "ny": 0.932
+    },
+    "elementalSight": {
+      "nx": 0.188,
+      "ny": 0.046
+    },
+    "map": {
+      "nx": 0.128,
+      "ny": 0.123
+    },
+    "minimapCenter": {
+      "nx": 0.128,
+      "ny": 0.123
+    },
+    "paimonMenu": {
+      "nx": 0.065,
+      "ny": 0.06
+    },
+    "partyRow1": {
+      "nx": 0.96,
+      "ny": 0.212
+    },
+    "partyRow2": {
+      "nx": 0.96,
+      "ny": 0.348
+    },
+    "partyRow3": {
+      "nx": 0.96,
+      "ny": 0.457
+    }
   },
   "keyMap": {
-    "W": { "type": "joystick", "angleDeg": 270 },
-    "S": { "type": "joystick", "angleDeg": 90 },
-    "A": { "type": "joystick", "angleDeg": 180 },
-    "D": { "type": "joystick", "angleDeg": 0 },
-    "E": { "type": "button", "button": "skill" },
-    "Q": { "type": "button", "button": "burst" },
-    "SPACE": { "type": "button", "button": "jump" },
-    "LSHIFT": { "type": "button", "button": "sprint" },
-    "SHIFT": { "type": "button", "button": "sprint" },
-    "F": { "type": "button", "button": "interact" },
-    "Z": { "type": "button", "button": "gadget" },
-    "R": { "type": "button", "button": "aim" },
-    "M": { "type": "button", "button": "map" },
-    "ESC": { "type": "button", "button": "paimonMenu" },
-    "ESCAPE": { "type": "button", "button": "paimonMenu" },
-    "1": { "type": "button", "button": "party1" },
-    "2": { "type": "button", "button": "party2" },
-    "3": { "type": "button", "button": "party3" },
-    "4": { "type": "button", "button": "party4" }
+    "W": {
+      "type": "joystick",
+      "angleDeg": 270
+    },
+    "S": {
+      "type": "joystick",
+      "angleDeg": 90
+    },
+    "A": {
+      "type": "joystick",
+      "angleDeg": 180
+    },
+    "D": {
+      "type": "joystick",
+      "angleDeg": 0
+    },
+    "E": {
+      "type": "button",
+      "button": "skill"
+    },
+    "Q": {
+      "type": "button",
+      "button": "burst"
+    },
+    "SPACE": {
+      "type": "button",
+      "button": "jump"
+    },
+    "LSHIFT": {
+      "type": "button",
+      "button": "sprint"
+    },
+    "SHIFT": {
+      "type": "button",
+      "button": "sprint"
+    },
+    "F": {
+      "type": "button",
+      "button": "interact"
+    },
+    "Z": {
+      "type": "button",
+      "button": "gadget"
+    },
+    "T": {
+      "type": "button",
+      "button": "gadget"
+    },
+    "R": {
+      "type": "button",
+      "button": "aim"
+    },
+    "M": {
+      "type": "button",
+      "button": "map"
+    },
+    "ESCAPE": {
+      "type": "button",
+      "button": "paimonMenu"
+    },
+    "1": {
+      "type": "party",
+      "slot": 1
+    },
+    "2": {
+      "type": "party",
+      "slot": 2
+    },
+    "3": {
+      "type": "party",
+      "slot": 3
+    },
+    "4": {
+      "type": "party",
+      "slot": 4
+    }
   }
 }
