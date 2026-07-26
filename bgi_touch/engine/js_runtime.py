@@ -294,7 +294,21 @@ class JsScriptRuntime:
                     from ..tasks.auto_wood import AutoWoodTask
                     AutoWoodTask(ctx, log=log).run(cancelled=lambda: rt.cancelled)
                     return
+                if name == "AutoDomain":
+                    from ..tasks.auto_domain import AutoDomainTask
+                    c = cfg if isinstance(cfg, dict) else {}
+                    AutoDomainTask(ctx, rounds=int(c.get("domainRoundNum", 1) or 1),
+                                   combat_strategy_path=c.get("combatStrategyPath"),
+                                   party_slots=rt.party_slots, log=log).run(cancelled=lambda: rt.cancelled)
+                    return
                 raise NotImplementedError(f"SoloTask {name} 尚未移植（见 docs/ROADMAP.md）")
+
+            def runAutoDomainTask(self, param):
+                from ..tasks.auto_domain import AutoDomainTask
+                rounds = getattr(param, "domainRoundNum", None) or (param.get("domainRoundNum") if isinstance(param, dict) else 1) or 1
+                path = getattr(param, "combatStrategyPath", None) or (param.get("combatStrategyPath") if isinstance(param, dict) else None)
+                AutoDomainTask(ctx, rounds=int(rounds), combat_strategy_path=path,
+                               party_slots=rt.party_slots, log=log).run(cancelled=lambda: rt.cancelled)
 
             def runAutoFightTask(self, param):
                 from ..tasks.auto_fight import AutoFightTask

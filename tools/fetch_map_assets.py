@@ -34,6 +34,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.0.19")
     ap.add_argument("--nupkg", help="已下载的 .nupkg 路径（跳过下载）")
+    ap.add_argument("--models", action="store_true", help="同时下载 YOLO 模型资产（BetterGI.Assets.Model）")
     args = ap.parse_args()
 
     DEST.mkdir(parents=True, exist_ok=True)
@@ -61,6 +62,24 @@ def main() -> None:
                 shutil.copyfileobj(src, dst)
             print(f"解出 {w}")
     print(f"完成：{DEST}")
+
+    if args.models:
+        mdl_dest = PROJECT_ROOT / "assets" / "models"
+        mdl_dest.mkdir(parents=True, exist_ok=True)
+        wanted = ["Domain/bgi_tree.onnx", "Fish/bgi_fish.onnx", "Mine/bgi_mine.onnx"]
+        pkg2 = Path(tempfile.gettempdir()) / "bettergi-model-1.0.29.nupkg"
+        if not pkg2.exists():
+            print("下载模型包（~160MB）…")
+            urllib.request.urlretrieve(NUPKG_URL.format(version="1.0.29").replace("Assets.Map", "Assets.Model"), pkg2)
+        with zipfile.ZipFile(pkg2) as z:
+            for w in wanted:
+                out = mdl_dest / Path(w).name
+                if out.exists():
+                    continue
+                with z.open("contentFiles/any/any/Assets/Model/" + w) as src, open(out, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                print(f"解出 {w}")
+        print(f"模型完成：{mdl_dest}")
 
 
 if __name__ == "__main__":
