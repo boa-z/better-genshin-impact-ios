@@ -144,6 +144,12 @@ def cmd_pathing(args) -> int:
     return 0
 
 
+def cmd_web(args) -> int:
+    from .webui.server import serve
+    serve(host=args.host, port=args.port)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="bgi-touch",
                                      description="BetterGI 跨平台移植：经 devicehub-mask MCP 自动化 iPhone 端原神")
@@ -169,6 +175,9 @@ def main() -> int:
     p = sub.add_parser("pathing", help="解析/执行 pathing JSON")
     p.add_argument("file")
     p.add_argument("--dry-run", action="store_true", help="仅解析并输出统计")
+    p = sub.add_parser("web", help="启动 WebUI 控制台")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8899)
 
     args = parser.parse_args()
     if args.url is None:
@@ -176,7 +185,7 @@ def main() -> int:
         args.url = os.environ.get("BGI_MCP_URL", "http://127.0.0.1:8009/mcp")
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
-                "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing}
+                "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web}
     return handlers[args.command](args)
 
 

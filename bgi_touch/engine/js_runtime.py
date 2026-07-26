@@ -104,8 +104,14 @@ class JsScriptRuntime:
     # ---- API implementations ----
 
     def _sleep(self, ms: float) -> None:
+        # 分片睡眠，保证 cancelled 置位后能在 ~100ms 内中断长 sleep
+        remain = max(0.0, float(ms)) / 1000
+        while remain > 0:
+            self._check_cancel()
+            step = min(0.1, remain)
+            time.sleep(step)
+            remain -= step
         self._check_cancel()
-        time.sleep(max(0.0, float(ms)) / 1000)
 
     def _capture(self) -> Any:
         self._check_cancel()

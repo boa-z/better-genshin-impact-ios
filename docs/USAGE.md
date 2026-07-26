@@ -203,7 +203,29 @@ attack(2), jump, w(0.5)            // 无角色名 = 当前角色：普攻2秒�
 
 ---
 
-## 6. 用 Python 直接写脚本
+## 6. WebUI 控制台
+
+```bash
+pip install -e '.[web]'          # fastapi + uvicorn
+bgi-touch web                    # 默认 http://127.0.0.1:8899
+bgi-touch web --host 0.0.0.0 --port 8899   # 局域网访问（注意无鉴权，慎用）
+```
+
+功能一览：
+
+- **屏幕实况**：0.5/1/2 fps 可调；**在预览图上点击 = 点按设备对应位置，
+  拖拽 = 滑动**；可叠加触控布局标注（等价 `calibrate`）辅助校准。
+- **手动控制**：WASD 按住式移动（按下=key_down，松开=key_up）、普攻/E/Q/跳/
+  冲刺/F/菜单、1-4 切人、视角四方向。
+- **脚本面板**：列出 `scripts/` 下已转换的四类脚本（JS 包显示兼容结论），
+  一键运行/停止；同一时刻只允许一个任务，顶部标签显示
+  idle/running/done/error/cancelled。
+- **转换**：粘贴 bettergi-scripts-list 中的路径，转换产物直接进列表。
+- **日志**：任务与操作日志实时滚动（即 CLI 里的输出）。
+
+顶部红色「■ 停止」= 终止当前任务并松开所有按住的触点（跑飞时先按它）。
+
+## 7. 用 Python 直接写脚本
 
 不走 JS 兼容层时，可以直接用本项目的 Python API（同步阻塞式）：
 
@@ -238,7 +260,7 @@ ctx.close()
 
 ---
 
-## 7. 故障排查
+## 8. 故障排查
 
 | 现象 | 原因与处理 |
 |---|---|
@@ -254,7 +276,7 @@ ctx.close()
 
 ---
 
-## 8. 命令速查
+## 9. 命令速查
 
 ```
 bgi-touch [--url URL] <命令>
@@ -268,4 +290,5 @@ run <脚本目录> [--set k=v]   运行 JS 脚本包
 combat <文件.txt>            执行战斗策略 DSL
 macro <宏.json>              回放键鼠宏（自动翻译为触控）
 pathing <文件.json> [--dry-run]  解析/执行 pathing 路线
+web [--host H] [--port P]    启动 WebUI 控制台（默认 127.0.0.1:8899）
 ```

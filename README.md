@@ -54,6 +54,7 @@ bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼�
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 解析 pathing 文件
+bgi-touch web                          # WebUI 控制台（实况画面/点按/脚本管理）
 ```
 
 - 触控布局：`config/controls/genshin-default.json`（已按 iPhone 13 Pro Max 实测校准；其他机型先跑 `calibrate` 对照调整）。
