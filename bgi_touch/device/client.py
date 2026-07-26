@@ -36,35 +36,82 @@ class DeviceClient:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True, name="mcp-loop")
         self._thread.start()
-        self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
+        self._close_event: asyncio.Event | None = None
+        self._session_task = None
         self._lock = threading.Lock()
-        self._run(self._connect())
+        self._start_session()
 
     # ---- plumbing ----
+    # anyio 的 task group 必须在进入它的同一协程内退出，因此把整个会话生命
+    # 周期放进一个驻留协程：连接→就绪→等待关闭事件→原地退出。close/重连
+    # 只是置位事件并等待该协程结束，避免跨任务关闭导致 cancel scope 报错。
 
     def _run(self, coro):
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=CALL_TIMEOUT_S)
 
-    async def _connect(self) -> None:
-        self._stack = AsyncExitStack()
-        read, write, _ = await self._stack.enter_async_context(streamablehttp_client(self.url))
-        self._session = await self._stack.enter_async_context(ClientSession(read, write))
-        await self._session.initialize()
+    def _start_session(self) -> None:
+        import concurrent.futures
 
-    def close(self) -> None:
-        if self._stack is not None:
+        ready: concurrent.futures.Future = concurrent.futures.Future()
+
+        async def runner():
+            self._close_event = asyncio.Event()
             try:
-                self._run(self._stack.aclose())
+                async with AsyncExitStack() as stack:
+                    read, write, _ = await stack.enter_async_context(streamablehttp_client(self.url))
+                    session = await stack.enter_async_context(ClientSession(read, write))
+                    await session.initialize()
+                    self._session = session
+                    ready.set_result(None)
+                    await self._close_event.wait()
+            except Exception as e:
+                if not ready.done():
+                    ready.set_exception(e)
+            finally:
+                self._session = None
+
+        self._session_task = asyncio.run_coroutine_threadsafe(runner(), self._loop)
+        ready.result(timeout=CALL_TIMEOUT_S)
+
+    def _end_session(self) -> None:
+        if self._close_event is not None:
+            self._loop.call_soon_threadsafe(self._close_event.set)
+        if self._session_task is not None:
+            try:
+                self._session_task.result(timeout=10)
             except Exception:
                 pass
-            self._stack = None
+            self._session_task = None
+
+    def close(self) -> None:
+        self._end_session()
         self._loop.call_soon_threadsafe(self._loop.stop)
+
+    def _reconnect(self) -> None:
+        """会话被服务器终止后重建（Streamable HTTP 会话可能因闲置被回收）。"""
+        self._end_session()
+        self._start_session()
+
+    # 这些关键字意味着请求未被处理（会话死亡/连接断开），重连后重试是安全的；
+    # 工具级业务错误（isError 结果、设备侧超时）不在此列，不做自动重试。
+    _TRANSIENT_KEYWORDS = ("session terminated", "session termination", "closedresource",
+                           "connection", "disconnected", "broken", "404")
 
     def call(self, name: str, **args: Any) -> ToolResult:
         args = {k: v for k, v in args.items() if v is not None}
         with self._lock:  # 串行化设备操作，保持手势顺序确定
-            result = self._run(self._session.call_tool(name, args))
+            try:
+                if self._session is None:
+                    self._reconnect()
+                result = self._run(self._session.call_tool(name, args))
+            except Exception as e:
+                msg = f"{type(e).__name__}: {e}".lower()
+                if not any(k in msg for k in self._TRANSIENT_KEYWORDS):
+                    raise
+                print(f"[device] MCP 会话失效（{e}），重连后重试 {name}")
+                self._reconnect()
+                result = self._run(self._session.call_tool(name, args))
         text: str | None = None
         parsed: Any | None = None
         image: bytes | None = None
