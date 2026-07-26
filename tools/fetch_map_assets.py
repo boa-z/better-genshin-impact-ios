@@ -38,30 +38,31 @@ def main() -> None:
     args = ap.parse_args()
 
     DEST.mkdir(parents=True, exist_ok=True)
-    if all((DEST / w).exists() for w in WANTED):
-        print(f"资产已就绪：{DEST}")
-        return
+    maps_ready = all((DEST / w).exists() for w in WANTED)
+    if maps_ready:
+        print(f"地图资产已就绪：{DEST}")
 
-    if args.nupkg:
-        pkg = Path(args.nupkg)
-    else:
-        url = NUPKG_URL.format(version=args.version)
-        pkg = Path(tempfile.gettempdir()) / f"bettergi-map-{args.version}.nupkg"
-        if not pkg.exists():
-            print(f"下载 {url} …")
-            urllib.request.urlretrieve(url, pkg)
-        print(f"包就绪：{pkg}（{pkg.stat().st_size / 1e6:.0f} MB）")
+    if not maps_ready:
+        if args.nupkg:
+            pkg = Path(args.nupkg)
+        else:
+            url = NUPKG_URL.format(version=args.version)
+            pkg = Path(tempfile.gettempdir()) / f"bettergi-map-{args.version}.nupkg"
+            if not pkg.exists():
+                print(f"下载 {url} …")
+                urllib.request.urlretrieve(url, pkg)
+            print(f"包就绪：{pkg}（{pkg.stat().st_size / 1e6:.0f} MB）")
 
-    with zipfile.ZipFile(pkg) as z:
-        for w in WANTED:
-            out = DEST / w
-            if out.exists():
-                continue
-            out.parent.mkdir(parents=True, exist_ok=True)
-            with z.open(PKG_PREFIX + w) as src, open(out, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-            print(f"解出 {w}")
-    print(f"完成：{DEST}")
+        with zipfile.ZipFile(pkg) as z:
+            for w in WANTED:
+                out = DEST / w
+                if out.exists():
+                    continue
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with z.open(PKG_PREFIX + w) as src, open(out, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                print(f"解出 {w}")
+        print(f"完成：{DEST}")
 
     if args.models:
         mdl_dest = PROJECT_ROOT / "assets" / "models"
