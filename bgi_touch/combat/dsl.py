@@ -66,7 +66,7 @@ def parse_combat_script(text: str) -> list[CombatLine]:
         body = line
         if " " in line:
             head, rest = line.split(" ", 1)
-            head_action = re.sub(r"\(.*", "", head).lower()
+            head_action = re.sub(r"\(.*", "", head).rstrip(",，、;").lower()
             if head_action not in KNOWN_ACTIONS:
                 character, body = head.strip(), rest
         commands = []
