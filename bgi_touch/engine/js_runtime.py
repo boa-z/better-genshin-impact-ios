@@ -271,7 +271,7 @@ class JsScriptRuntime:
         expose("pathingScript", wrap(_Pathing()), proxy=False)
 
         # dispatcher / 任务模型
-        combat = CombatExecutor(ctx.input, sleep=ctx.sleep, party_slots=self.party_slots, log=log)
+        combat = CombatExecutor.for_context(ctx, party_slots=self.party_slots, log=log)
 
         class _CTS:
             def __init__(self): self._cancelled = False
@@ -285,9 +285,21 @@ class JsScriptRuntime:
                 name = getattr(task, "name", None) or (task.get("name") if isinstance(task, dict) else str(task))
                 raise NotImplementedError(f"SoloTask {name} 尚未移植（见 docs/ROADMAP.md）")
             def runCombatScript(self, script, avatar=None): combat.run(str(script))
-            def addTimer(self, timer): log(f"[dispatcher] 实时任务 {getattr(timer, 'name', timer)} 暂不支持，忽略")
-            def addTrigger(self, trigger): self.addTimer(trigger)
-            def clearAllTriggers(self): pass
+            def addTimer(self, timer):
+                name = str(getattr(timer, "name", timer))
+                try:
+                    ctx.triggers.clear()  # 原版 addTimer 语义：清除既有触发器再启用
+                    ctx.enable_trigger(name)
+                except ValueError as e:
+                    log(f"[dispatcher] {e}")
+            def addTrigger(self, trigger):
+                name = str(getattr(trigger, "name", trigger))
+                try:
+                    ctx.enable_trigger(name)
+                except ValueError as e:
+                    log(f"[dispatcher] {e}")
+            def clearAllTriggers(self):
+                ctx.triggers.clear()
             def getLinkedCancellationTokenSource(self): return wrap(_CTS())
             def getLinkedCancellationToken(self): return wrap(_CTS())
         expose("dispatcher", wrap(_Dispatcher()), proxy=False)

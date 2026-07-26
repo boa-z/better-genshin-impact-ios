@@ -90,12 +90,24 @@ class CombatExecutor:
     def __init__(self, input_sim, sleep: Callable[[float], None] | None = None,
                  party_slots: dict[str, int] | None = None,
                  log: Callable[[str], None] = print,
-                 check_combat_end: Callable[[], bool] | None = None):
+                 check_combat_end: Callable[[], bool] | None = None,
+                 team_switcher=None, skill_ready: Callable[[], bool] | None = None):
         self.input = input_sim
         self.sleep = sleep or (lambda ms: time.sleep(ms / 1000))
         self.party_slots = party_slots or {}
         self.log = log
         self.check_combat_end = check_combat_end
+        self.team_switcher = team_switcher  # combat.hud.TeamSwitcher：按名 OCR 切人
+        self.skill_ready = skill_ready      # ready 指令的技能就绪检测
+
+    @classmethod
+    def for_context(cls, ctx, party_slots=None, log=print, sleep=None):
+        """带识别增强的构造：按名切人 + 技能就绪 + 战斗结束检测。"""
+        from .hud import TeamSwitcher, enemies_nearby, is_skill_ready
+        return cls(ctx.input, sleep=sleep or ctx.sleep, party_slots=party_slots, log=log,
+                   team_switcher=TeamSwitcher(ctx, log),
+                   skill_ready=lambda: is_skill_ready(ctx),
+                   check_combat_end=lambda: not enemies_nearby(ctx))
 
     def run(self, script: str | list[CombatLine], loop_until_end: bool = False) -> None:
         lines = parse_combat_script(script) if isinstance(script, str) else script
@@ -116,11 +128,13 @@ class CombatExecutor:
 
     def switch_to(self, character: str) -> None:
         slot = self.party_slots.get(character)
-        if not slot:
-            self.log(f"[combat] 角色“{character}”未配置队伍槽位，跳过切人（见 config/party.json）")
+        if slot:
+            self.input.key_press(str(slot))
+            self.sleep(600)
             return
-        self.input.key_press(str(slot))
-        self.sleep(600)
+        if self.team_switcher is not None and self.team_switcher.switch_by_name(character):
+            return
+        self.log(f"[combat] 无法切换到“{character}”（OCR 未命中且未配置槽位），跳过")
 
     @staticmethod
     def _sec(params: list[str], idx: int = 0, default: float = 0.2) -> float:
@@ -169,7 +183,12 @@ class CombatExecutor:
         elif a == "aim":
             self.input.key_press("R")
         elif a == "ready":
-            self.sleep(500)  # 原版通过识别等待技能就绪
+            if self.skill_ready is None:
+                self.sleep(500)
+            else:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline and not self.skill_ready():
+                    self.sleep(300)
         elif a in ("scroll", "fly", "check"):
             pass
         else:

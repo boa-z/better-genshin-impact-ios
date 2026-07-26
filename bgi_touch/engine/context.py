@@ -72,6 +72,27 @@ class GameContext:
         self.device.launch_app(GENSHIN_BUNDLE_ID, wait=True)
         self.refresh_orientation()
 
+    _trigger_loop = None
+
+    @property
+    def triggers(self):
+        """懒加载的实时触发器帧循环（TriggerLoop）。"""
+        if self._trigger_loop is None:
+            from ..triggers.loop import TriggerLoop
+            self._trigger_loop = TriggerLoop(self)
+        return self._trigger_loop
+
+    def enable_trigger(self, name: str, **kwargs) -> None:
+        if name == "AutoPick":
+            from ..triggers.autopick import AutoPickTrigger
+            self.triggers.add(AutoPickTrigger(self, log=self.triggers.log, **kwargs))
+        elif name == "AutoSkip":
+            from ..triggers.autoskip import AutoSkipTrigger
+            self.triggers.add(AutoSkipTrigger(self, log=self.triggers.log, **kwargs))
+        else:
+            raise ValueError(f"未知触发器 {name}（支持 AutoPick/AutoSkip）")
+        self.triggers.start()
+
     def close(self) -> None:
         self.input.release_all()
         self.device.close()

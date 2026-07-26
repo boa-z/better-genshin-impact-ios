@@ -78,7 +78,7 @@ class PathingExecutor:
                 log(f"[pathing] 无地图定位：{e}")
         self.positioner = positioner
         self.log = log
-        self.combat = CombatExecutor(ctx.input, sleep=ctx.sleep, party_slots=party_slots, log=log)
+        self.combat = CombatExecutor.for_context(ctx, party_slots=party_slots, log=log)
 
     def run(self, task: PathingTask) -> None:
         self.log(f"[pathing] {task.name}: {len(task.positions)} 个路点 @ {task.map_name}")

@@ -120,8 +120,8 @@ class TaskRunner:
                 rt.run()
             elif kind == "combat":
                 from ..combat.dsl import CombatExecutor
-                CombatExecutor(ctx.input, sleep=self._sleep, party_slots=self._party(),
-                               log=weblog).run(Path(path).read_text(encoding="utf-8"))
+                CombatExecutor.for_context(ctx, party_slots=self._party(), log=weblog,
+                                           sleep=self._sleep).run(Path(path).read_text(encoding="utf-8"))
             elif kind == "macro":
                 from ..macro.keymouse import MacroPlayer, load_keymouse
                 MacroPlayer(ctx.input, sleep=self._sleep, log=weblog).play(load_keymouse(path))
@@ -372,6 +372,36 @@ def api_convert(body: dict):
         return info
     except Exception as e:
         return _err(e, 400)
+
+
+@app.get("/api/triggers")
+def api_triggers():
+    try:
+        ctx = get_ctx()
+        loop = ctx.triggers
+        return {"active": [t.name for t in loop.triggers]}
+    except Exception as e:
+        return _err(e)
+
+
+@app.post("/api/triggers")
+def api_triggers_set(body: dict):
+    """body: {"AutoPick": true, "AutoSkip": false}"""
+    try:
+        ctx = get_ctx()
+        for name in ("AutoPick", "AutoSkip"):
+            if name not in body:
+                continue
+            if body[name]:
+                ctx.enable_trigger(name)
+            else:
+                ctx.triggers.triggers = [t for t in ctx.triggers.triggers if t.name != name]
+                weblog(f"[trigger] 停用 {name}")
+        if not ctx.triggers.triggers:
+            ctx.triggers.stop()
+        return {"active": [t.name for t in ctx.triggers.triggers]}
+    except Exception as e:
+        return _err(e)
 
 
 @app.get("/api/logs")

@@ -94,6 +94,10 @@
         视角：<button onclick="cam(-300,0)">←</button><button onclick="cam(300,0)">→</button>
         <button onclick="cam(0,-200)">↑</button><button onclick="cam(0,200)">↓</button>
       </div>
+      <div class="keys">
+        触发器：<label><input type="checkbox" id="trigPick" onchange="setTrigger()"> 自动拾取</label>
+        <label><input type="checkbox" id="trigSkip" onchange="setTrigger()"> 自动剧情</label>
+      </div>
     </section>
 
     <section class="panel">
@@ -219,6 +223,18 @@ async function convert() {
   const r = await post('/api/convert', {source: src});
   if (r.ok) { loadScripts(); }
 }
+
+// ---- 触发器 ----
+async function setTrigger() {
+  await post('/api/triggers', {AutoPick: $('#trigPick').checked, AutoSkip: $('#trigSkip').checked});
+}
+(async () => {
+  try {
+    const d = await (await fetch('/api/triggers')).json();
+    $('#trigPick').checked = (d.active||[]).includes('AutoPick');
+    $('#trigSkip').checked = (d.active||[]).includes('AutoSkip');
+  } catch {}
+})();
 
 // ---- 日志轮询 ----
 let logSeq = 0;

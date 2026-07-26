@@ -95,7 +95,7 @@ def cmd_combat(args) -> int:
     from .combat.dsl import CombatExecutor
     from .engine.context import GameContext
     ctx = GameContext(mcp_url=args.url)
-    executor = CombatExecutor(ctx.input, sleep=ctx.sleep, party_slots=_load_party())
+    executor = CombatExecutor.for_context(ctx, party_slots=_load_party())
     executor.run(Path(args.file).read_text(encoding="utf-8"))
     ctx.close()
     return 0
@@ -144,6 +144,27 @@ def cmd_pathing(args) -> int:
     return 0
 
 
+def cmd_trigger(args) -> int:
+    """长驻运行实时触发器（Ctrl-C 停止）。"""
+    from .engine.context import GameContext
+    ctx = GameContext(mcp_url=args.url)
+    if args.pick:
+        ctx.enable_trigger("AutoPick")
+    if args.skip:
+        ctx.enable_trigger("AutoSkip")
+    if not (args.pick or args.skip):
+        print("未指定触发器（--pick / --skip）")
+        return 2
+    try:
+        import time
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        ctx.triggers.stop()
+        ctx.close()
+    return 0
+
+
 def cmd_web(args) -> int:
     from .webui.server import serve
     serve(host=args.host, port=args.port)
@@ -178,6 +199,9 @@ def main() -> int:
     p = sub.add_parser("web", help="启动 WebUI 控制台")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8899)
+    p = sub.add_parser("trigger", help="长驻实时触发器（自动拾取/自动剧情）")
+    p.add_argument("--pick", action="store_true", help="自动拾取")
+    p.add_argument("--skip", action="store_true", help="自动剧情推进")
 
     args = parser.parse_args()
     if args.url is None:
@@ -185,7 +209,8 @@ def main() -> int:
         args.url = os.environ.get("BGI_MCP_URL", "http://127.0.0.1:8009/mcp")
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
-                "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web}
+                "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web,
+                "trigger": cmd_trigger}
     return handlers[args.command](args)
 
 
