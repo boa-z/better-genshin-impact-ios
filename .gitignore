@@ -6,3 +6,4 @@ scripts/
 node_modules/
 *.png
 !assets/**/*.png
+assets/map/

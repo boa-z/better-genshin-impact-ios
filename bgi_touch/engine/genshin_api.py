@@ -129,8 +129,18 @@ class GenshinApi:
     def getPositionFromBigMap(self, map_name=None):
         _todo("getPositionFromBigMap")
 
+    _positioner = None
+
     def getPositionFromMap(self, *args):
-        _todo("getPositionFromMap")
+        """小地图定位当前世界坐标；失败返回 None（与原版一致）。"""
+        if self._positioner is None:
+            from ..pathing.positioner import MinimapPositioner
+            self._positioner = MinimapPositioner(self.ctx)
+        pos = self._positioner.get_position(self.ctx.capture_bgr())
+        if pos is None:
+            return None
+        from .recognition import Point2f
+        return Point2f(pos[0], pos[1])
 
     def getCameraOrientation(self):
         from ..pathing.executor import camera_orientation_deg

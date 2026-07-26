@@ -67,8 +67,15 @@ def camera_orientation_deg(ctx: GameContext, bgr: np.ndarray) -> Optional[float]
 class PathingExecutor:
     def __init__(self, ctx: GameContext, positioner: Positioner | None = None,
                  party_slots: dict[str, int] | None = None,
-                 log: Callable[[str], None] = print):
+                 log: Callable[[str], None] = print, map_name: str = "Teyvat"):
         self.ctx = ctx
+        if positioner is None:
+            try:
+                from .positioner import MinimapPositioner
+                positioner = MinimapPositioner(ctx, map_name)
+                log(f"[pathing] 已加载 {map_name} 地图定位（SIFT）")
+            except FileNotFoundError as e:
+                log(f"[pathing] 无地图定位：{e}")
         self.positioner = positioner
         self.log = log
         self.combat = CombatExecutor(ctx.input, sleep=ctx.sleep, party_slots=party_slots, log=log)
