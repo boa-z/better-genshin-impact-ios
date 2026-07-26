@@ -73,10 +73,14 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |
 | WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
-| genshin.returnMainUi / chooseTalkOption / relogin / uid | ⚠️ 启发式实现，待更多实测 |
-| 实时触发器（自动拾取/自动剧情） | ❌ 计划中（需帧循环 + 模板资产） |
-| pathing 执行（小地图定位/大地图传送） | ❌ 框架就绪，定位待地图资产接入（见 docs/ROADMAP.md） |
-| 原生 SoloTask（自动战斗收尾检测/秘境/钓鱼等） | ❌ 计划中 |
+| 小地图 SIFT 定位（官方特征库，全局1s/追踪0.05s） | ✅ 真机验证 |
+| 大地图传送 genshin.tp（SIFT 比例自适应拖动+OCR确认） | ⚠️ 已实现，待真机回归验证 |
+| pathing 执行（定位+走点+动作） | ⚠️ 全链路就绪，待真机路线实测 |
+| 实时触发器（AutoPick OCR拾取 / AutoSkip 剧情推进） | ⚠️ 已实现，待真机调阈值 |
+| 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
+| genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
+| SoloTask：AutoFight / AutoWood | ⚠️ 已实现，待真机验证 |
+| SoloTask：AutoDomain / AutoFishing(YOLO) / AutoLeyLine 等 | ❌ 计划中（docs/ROADMAP.md） |
 
 ## 已知约束
 

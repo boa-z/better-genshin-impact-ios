@@ -282,8 +282,25 @@ class JsScriptRuntime:
 
         class _Dispatcher:
             def runTask(self, task, ct=None):
-                name = getattr(task, "name", None) or (task.get("name") if isinstance(task, dict) else str(task))
+                name = str(getattr(task, "name", None) or (task.get("name") if isinstance(task, dict) else task))
+                cfg = getattr(task, "config", None) or {}
+                if name == "AutoFight":
+                    from ..tasks.auto_fight import AutoFightTask
+                    AutoFightTask(ctx, combat_strategy_path=cfg.get("combatStrategyPath") if isinstance(cfg, dict) else None,
+                                  timeout_s=float(cfg.get("timeout", 120000)) / 1000 if isinstance(cfg, dict) and cfg.get("timeout") else 120,
+                                  party_slots=rt.party_slots, log=log).run(cancelled=lambda: rt.cancelled)
+                    return
+                if name == "AutoWood":
+                    from ..tasks.auto_wood import AutoWoodTask
+                    AutoWoodTask(ctx, log=log).run(cancelled=lambda: rt.cancelled)
+                    return
                 raise NotImplementedError(f"SoloTask {name} 尚未移植（见 docs/ROADMAP.md）")
+
+            def runAutoFightTask(self, param):
+                from ..tasks.auto_fight import AutoFightTask
+                path = getattr(param, "combatStrategyPath", None) or (param.get("combatStrategyPath") if isinstance(param, dict) else None)
+                AutoFightTask(ctx, combat_strategy_path=path, party_slots=rt.party_slots,
+                              log=log).run(cancelled=lambda: rt.cancelled)
             def runCombatScript(self, script, avatar=None): combat.run(str(script))
             def addTimer(self, timer):
                 name = str(getattr(timer, "name", timer))

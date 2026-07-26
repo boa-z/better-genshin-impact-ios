@@ -27,27 +27,28 @@ SUPPORTED = [
     "file.read", "file.write", "readTextSync", "readImageMat", "settings.", "notification.",
     "moveMouseBy", "keyMouseScript", "inputText", "http.request", "genshin.returnMainUi",
     "genshin.relogin", "chooseTalkOption", "runCombatScript", "leftButtonClick",
+    "genshin.tp", "getPositionFromMap", "pathingScript",
+    "dispatcher.addTimer", "dispatcher.addTrigger",
 ]
 PARTIAL = {
-    "pathingScript": "解析可用；执行需地图定位资产（docs/ROADMAP.md）",
     "moveMouseTo": "触控无指针，移动为空操作（点击时直接给坐标即可）",
     "rightButton": "近似映射为 E 技能",
     "middleButton": "PC 重置视角，触控端为空操作",
     "verticalScroll": "触控端为空操作",
-    "dispatcher.addTimer": "实时触发器（自动拾取等）暂不支持",
-    "dispatcher.addTrigger": "实时触发器暂不支持",
+    "dispatcher.runTask": "已支持 AutoFight/AutoWood；其余 SoloTask 未移植",
+    "runAutoFightTask": "支持 combatStrategyPath；掉落拾取等附加参数忽略",
 }
 UNSUPPORTED = {
-    "genshin.tp": "依赖大地图定位，未移植",
-    "dispatcher.runTask": "SoloTask（自动战斗/秘境等原生任务）未移植",
-    "dispatcher.runAuto": "原生任务参数入口未移植",
-    "getPositionFromMap": "小地图定位未移植",
-    "getPositionFromBigMap": "大地图定位未移植",
-    "switchParty": "队伍切换流程未移植",
+    "getPositionFromBigMap": "大地图开图定位（getPositionFromBigMap）未移植",
+    "switchParty": "队伍配置切换流程未移植",
     "PostMessage": "后台按键为 Windows 专有",
     "KeyMouseHook": "全局键鼠钩子为 Windows 专有",
-    "setBigMapZoomLevel": "大地图操作未移植",
-    "autoFishing": "自动钓鱼未移植",
+    "setBigMapZoomLevel": "大地图缩放控制未移植（tp 内部自适应，无需缩放）",
+    "autoFishing": "自动钓鱼（YOLO 模型）未移植",
+    "runAutoDomainTask": "自动秘境未移植",
+    "runAutoLeyLine": "自动地脉未移植",
+    "runAutoStygian": "自动幽境危战未移植",
+    "runAutoBossTask": "自动打本未移植",
 }
 
 
