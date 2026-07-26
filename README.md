@@ -42,6 +42,8 @@ python3 -m venv .venv
 
 ## 使用
 
+**完整使用指南（环境准备/校准/脚本转换与运行/Python API/排障）见 [docs/USAGE.md](docs/USAGE.md)。** 速查：
+
 ```bash
 bgi-touch status                       # 设备/游戏状态
 bgi-touch launch                       # 启动原神
