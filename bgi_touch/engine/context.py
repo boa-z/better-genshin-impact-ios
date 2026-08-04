@@ -95,7 +95,19 @@ class GameContext:
         游戏启动/切前台后服务器朝向可能变化，此时应再调用本方法。
         """
         status = status or self.device.status()
-        w, h = status["screen_size"]
+        screen_size = status.get("screen_size")
+        # DeviceHub may briefly report a connected device with no frame size
+        # while a foreground app is being relaunched or the stream is rebuilt.
+        for _ in range(6):
+            if isinstance(screen_size, (list, tuple)) and len(screen_size) == 2:
+                break
+            time.sleep(0.4)
+            status = self.device.status()
+            screen_size = status.get("screen_size")
+        if not isinstance(screen_size, (list, tuple)) or len(screen_size) != 2:
+            print("[context] DeviceHub status 暂无 screen_size，保留旧坐标映射")
+            return
+        w, h = screen_size
         if "landscape" in str(status.get("orientation", "")) or w >= h:
             self.device.set_coord_mapper(None)
         else:
