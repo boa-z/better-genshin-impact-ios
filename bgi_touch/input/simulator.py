@@ -31,6 +31,10 @@ class InputSimulator:
         self.layout = layout
         self.t = transform
         self._held: dict[str, dict] = {}
+        # Some native profile buttons (notably attack) intentionally have no
+        # BetterGI keyboard binding. Keep their raw profile code alongside the
+        # synthetic held-button entry so the lease heartbeat does not drop it.
+        self._held_profile_overrides: dict[str, str] = {}
         self._held_lock = threading.Lock()
         self._pending_camera: list[float] | None = None
         self._pump: threading.Thread | None = None
@@ -111,7 +115,7 @@ class InputSimulator:
     def _profile_raw_keys(self, canonical_keys: list[str]) -> list[str]:
         keys: list[str] = []
         for key in canonical_keys:
-            raw = self.layout.profile_key(key)
+            raw = self._held_profile_overrides.get(key) or self.layout.profile_key(key)
             if raw is not None and raw not in keys:
                 keys.append(raw)
         return keys
@@ -253,6 +257,7 @@ class InputSimulator:
     def release_all(self) -> None:
         with self._held_lock:
             self._held.clear()
+            self._held_profile_overrides.clear()
             self._pending_camera = None
         session_id = self._profile_session_id
         if session_id is not None:
@@ -278,6 +283,31 @@ class InputSimulator:
             return
         x, y = self._button_pos("attack")
         self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+
+    def button_down(self, name: str) -> None:
+        """Hold a semantic HUD button until :meth:`button_up` is called."""
+        key = f"__button__:{name}"
+        with self._held_lock:
+            self._held[key] = {"type": "button", "button": name}
+            raw = self.layout.profile_key_for_button(name)
+            if raw is not None:
+                self._held_profile_overrides[key] = raw
+        if not self._sync_profile_keys():
+            self._ensure_pump()
+
+    def button_up(self, name: str) -> None:
+        key = f"__button__:{name}"
+        with self._held_lock:
+            self._held.pop(key, None)
+            self._held_profile_overrides.pop(key, None)
+        if self._profile_session_id is not None:
+            self._sync_profile_keys()
+
+    def attack_down(self) -> None:
+        self.button_down("attack")
+
+    def attack_up(self) -> None:
+        self.button_up("attack")
 
     def charged_attack(self, hold_ms: int = 800) -> None:
         if self._profile_press("X", hold_ms):

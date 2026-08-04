@@ -155,7 +155,8 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
     simulator.key_up("W")
     simulator.key_press("E", hold_ms=25)
     simulator.key_press("X", hold_ms=25)
-    simulator.release_all()
+    simulator.attack_down()
+    simulator.attack_up()
     assert device.inputs[:3] == [
         ("session-1", ["KeyW"]),
         ("session-1", ["KeyW", "Space"]),
@@ -163,7 +164,61 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
     ]
     assert ("session-1", ["Space", "KeyE"]) in device.inputs
     assert ("session-1", ["Space", "KeyX"]) in device.inputs
+    assert device.inputs[-2:] == [
+        ("session-1", ["Space", "KeyX"]),
+        ("session-1", ["Space"]),
+    ]
+    simulator.release_all()
     assert device.stopped == ["session-1"]
+
+
+def test_native_ui_layout_overlay_changes_space_semantics():
+    from bgi_touch.input.layout import ControlLayout
+
+    layout = ControlLayout.load(Path(__file__).parents[1] / "config" / "controls" / "genshin-native-ui.json")
+    assert layout.binding("SPACE")["button"] == "jump"
+    assert layout.binding("SPACE")["profileCode"] == "Space"
+
+
+def test_auto_cook_color_peak_detector():
+    import cv2
+    import numpy as np
+
+    from bgi_touch.tasks.auto_cook import count_target_color, update_peak
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    # TargetCookColor is RGB (255, 192, 64), while the fixture is BGR.
+    frame[700:720, 700:900] = (64, 192, 255)
+    assert count_target_color(frame, rect=(600, 660, 730, 190)) == 4000
+    candidate = stable = None
+    built = None
+    for value in (1000, 1005, 995):
+        candidate, stable, built = update_peak(value, candidate, stable or 0)
+    assert built == 1005
+
+
+def test_auto_fishing_bar_detector_and_controller():
+    import numpy as np
+
+    from bgi_touch.tasks.auto_fishing import fish_bar_action, get_fish_bar_rects
+
+    frame = np.zeros((240, 800, 3), dtype=np.uint8)
+    yellow = (192, 255, 255)  # RGB (255, 255, 192), HSV_FULL hue≈60°
+    frame[100:120, 120:140] = yellow
+    frame[100:120, 180:580] = yellow
+    rects = get_fish_bar_rects(frame)
+    assert len(rects) == 2
+    assert fish_bar_action(rects) == "hold"
+
+
+def test_task_dispatcher_declares_migrated_core_tasks():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    assert TaskDispatcher.IMPLEMENTED >= {
+        "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest"
+    }
+    with pytest.raises(NotImplementedError, match="尚未移植"):
+        TaskDispatcher(object()).run_task({"name": "AutoBoss", "config": {}})
 
 
 # ---- 地图定位（需要资产与夹具，缺则跳过）----

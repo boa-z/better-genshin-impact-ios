@@ -1,35 +1,43 @@
 # 路线图
 
-## P0 — pathing 可用化（最大缺口）
+## 已完成 — DeviceHub/iOS 输入与核心运行时
 
-pathing 脚本（社区仓库 5000+ 个）依赖两件事，均已留好接口：
+- DeviceHub Mask MCP 设备连接、原生截图、横竖屏坐标变换和游戏 session 租约。
+- `Genshin-Impact-fixed-16by9` profile 的原始 KeyboardEvent.code 映射，以及
+  `config/controls/genshin-native-ui.json` 的小游戏键位覆盖。
+- BetterGI 兼容 JS 运行时、统一 `TaskDispatcher`、战斗 DSL、宏和 WebUI/CLI 任务入口。
+- AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）和
+  AutoOpenChest 的可测试 Python 实现。
+
+## P0 — pathing 真机稳定性
+
+离线链路已可用，剩余工作是不同地图/设备上的真机调参：
 
 1. **小地图定位**（`bgi_touch/pathing/executor.py` 的 `Positioner` 协议）
-   - 原版方案：小地图裁剪 → SIFT/模板匹配到大地图，特征数据来自 NuGet 包
-     `BetterGI.Assets.Map`（不在脚本仓库内）。
-   - 移植路径：下载/提取原版地图资产 → 用 OpenCV SIFT 复刻
-     `SceneBaseMap.GetMiniMapPosition`（先局部搜索上次位置附近，失败再全局）。
-   - 相机朝向检测（小地图视野扇形）已实现简化版：`camera_orientation_deg`。
+   - 小地图裁剪 → SIFT/模板匹配到大地图，特征数据来自原版地图资产。
+   - 当前支持上次位置附近的局部搜索，失败后回退全局搜索；相机朝向检测为简化实现。
 2. **大地图传送**（`PathingExecutor._teleport`）
-   - 打开地图 → 缩放到合适级别 → 按世界坐标拖动地图 → 点传送锚点 → 确认。
-   - 依赖大地图定位（同上）+ 地图缩放/拖动的像素-世界坐标换算常数。
+   - 打开地图 → 按世界坐标拖动地图 → 点传送锚点 → OCR/模板确认。
+   - `genshin.moveMapTo`、`set/getBigMapZoomLevel` 和可见七天神像传送已接入；
+     pinch 缩放仍需在真机上校准等级与手势增益。
 
-## P1 — 实时触发器
+## P1 — 实时触发器与任务视觉回归
 
-原版 ~50ms 帧循环驱动 AutoPick（自动拾取 F）、AutoSkip（自动剧情）。
-移植：后台线程 1-2 fps 截图 → 模板/OCR 检测 → 触发点按。需要从原版仓库
-`GameTask/*/Assets/` 提取模板 PNG（注意按 1080p 基准，识别层会自动缩放）。
+AutoPick、AutoSkip 已有后台截图循环；需要在更多 iOS HUD 缩放下校准模板阈值。
+AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼条轮廓控制和 AutoOpenChest 的
+模板导航已经迁移，真机需要分别从烹饪、钓鱼、宝箱交互状态启动回归。
 
 ## P1 — 战斗增强
 
-- `check`（战斗结束检测）：原版用经验条/YOLO；可先用"屏幕无敌血条"启发式。
+- `check`（战斗结束检测）：原版用经验条/YOLO；当前使用敌血条启发式。
 - `ready`（技能就绪检测）：技能图标区域亮度/颜色判断。
-- 队伍识别：右侧角色名 OCR → 自动生成 party_slots，替代手工 config/party.json。
+- 队伍识别：右侧角色名 OCR → 自动生成 party_slots，替代手工 `config/party.json`。
 
-## P2 — 原生 SoloTask
+## P2 — 原生 SoloTask 扩展
 
-AutoFight / AutoDomain / AutoWood 等按需移植；多数由"识别 + 战斗 DSL + 点击流"
-组合而成，地基（识别层/输入层/DSL）已就绪。
+AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught、AutoGeniusInvokation、
+完整 AutoCook 菜单流、鱼塘 YOLO 选鱼和奖励领取流程仍需继续移植；多数由
+“识别 + 战斗 DSL + 点击流”组合而成，识别层/输入层/DSL 地基已就绪。
 
 ## 工程
 

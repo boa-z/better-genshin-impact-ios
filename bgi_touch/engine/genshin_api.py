@@ -1,11 +1,13 @@
 """genshin 全局对象：游戏语义级助手（bettergi.d.ts 的 genshin.*）。
 
-已实现：基础属性、returnMainUi（模板/启发式）、chooseTalkOption（OCR）。
-依赖大地图定位/复杂流程的方法抛出带路线图指引的 NotImplementedError。
+地图移动、传送、位置识别、角色槽位切换和自动钓鱼已接入 iOS 任务实现。
+依赖完整 Windows 窗口状态机的奖励/城市导航接口仍保持显式未迁移状态。
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Callable
 
 from ..vision.coordinate import REF_HEIGHT, REF_WIDTH
@@ -21,6 +23,9 @@ class GenshinApi:
     def __init__(self, ctx: GameContext, log: Callable[[str], None] = print):
         self.ctx = ctx
         self.log = log
+        self._tp_task = None
+        self._big_locator = None
+        self._positioner = None
 
     # ---- 属性（脚本假定 1080p 基准）----
     @property
@@ -115,24 +120,29 @@ class GenshinApi:
         self.ctx.input.click_ref(960, 540)  # 点击进入
         self.ctx.sleep(15000)
 
-    # ---- 未移植（依赖大地图定位）----
-
-    _tp_task = None
+    # ---- 地图与任务能力 ----
 
     def tp(self, x, y, map_name=None, force=False):
         """打开大地图并传送到 (x, y) 附近锚点。"""
         if self._tp_task is None:
             from ..pathing.tp import TpTask
             self._tp_task = TpTask(self.ctx, log=self.log)
-        return self._tp_task.tp(float(x), float(y))
+        result = self._tp_task.tp(float(x), float(y))
+        if result and self._positioner is not None:
+            self._positioner.set_prior(float(x), float(y))
+        return result
 
     def moveMapTo(self, x, y, country=None):
-        _todo("moveMapTo")
+        if self._tp_task is None:
+            from ..pathing.tp import TpTask
+            self._tp_task = TpTask(self.ctx, log=self.log)
+        return self._tp_task.move_map_to(float(x), float(y))
 
     def tpToStatueOfTheSeven(self):
-        _todo("tpToStatueOfTheSeven")
-
-    _big_locator = None
+        if self._tp_task is None:
+            from ..pathing.tp import TpTask
+            self._tp_task = TpTask(self.ctx, log=self.log)
+        return self._tp_task.tp_to_statue()
 
     def getPositionFromBigMap(self, map_name=None):
         """大地图打开状态下，返回视野中心的世界坐标（Point2f）；失败抛错。"""
@@ -146,8 +156,6 @@ class GenshinApi:
         wx, wy = MapConfig().image_to_world(view[0] * 8, view[1] * 8)
         from .recognition import Point2f
         return Point2f(wx, wy)
-
-    _positioner = None
 
     def getPositionFromMap(self, *args):
         """小地图定位当前世界坐标；失败返回 None（与原版一致）。"""
@@ -168,16 +176,46 @@ class GenshinApi:
         return deg
 
     def switchParty(self, name):
-        _todo("switchParty")
+        """Switch the active character by the local party name mapping.
+
+        BetterGI's Windows implementation edits the full party composition.
+        On iOS this compatible method selects the corresponding visible slot;
+        `config/party.json` maps names to slots and can be replaced per user.
+        """
+        try:
+            slot = int(name)
+        except (TypeError, ValueError):
+            config = Path(__file__).resolve().parents[2] / "config" / "party.json"
+            if not config.exists():
+                self.log("[genshin] 未找到 config/party.json")
+                return False
+            mapping = json.loads(config.read_text(encoding="utf-8"))
+            slot = mapping.get(str(name))
+            if isinstance(slot, dict):
+                slot = slot.get("slot")
+            if slot is None:
+                self.log(f"[genshin] 队伍配置中未找到角色/槽位：{name}")
+                return False
+        if int(slot) not in (1, 2, 3, 4):
+            return False
+        self.ctx.input.switch_party_slot(int(slot))
+        return True
 
     def setBigMapZoomLevel(self, level):
-        _todo("setBigMapZoomLevel")
+        if self._tp_task is None:
+            from ..pathing.tp import TpTask
+            self._tp_task = TpTask(self.ctx, log=self.log)
+        return self._tp_task.set_big_map_zoom_level(float(level))
 
     def getBigMapZoomLevel(self):
-        _todo("getBigMapZoomLevel")
+        if self._tp_task is None:
+            from ..pathing.tp import TpTask
+            self._tp_task = TpTask(self.ctx, log=self.log)
+        return self._tp_task.get_big_map_zoom_level()
 
     def autoFishing(self, policy=None):
-        _todo("autoFishing")
+        from ..tasks.dispatcher import TaskDispatcher
+        return TaskDispatcher(self.ctx, log=self.log).run_auto_fishing_task(policy)
 
     def blessingOfTheWelkinMoon(self):
         _todo("blessingOfTheWelkinMoon")
@@ -201,4 +239,5 @@ class GenshinApi:
         _todo("wonderlandCycle")
 
     def clearPartyCache(self):
-        pass
+        if self._positioner is not None:
+            self._positioner.reset()

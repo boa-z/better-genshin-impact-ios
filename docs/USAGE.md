@@ -65,6 +65,17 @@ profile 使用浏览器 `KeyboardEvent.code`（例如 `KeyW`、`Digit1`）。布
 `profileCode` 保持 BetterGI 的 PC 语义；本 profile 将 `Space` 放在冲刺键、
 `ShiftLeft` 放在跳跃键，因此配置中已显式交换这两个 profile code。
 
+布局支持 `extends` 覆盖，不需要复制整份布局。原生 UI 小游戏可使用：
+
+```bash
+bgi-touch --layout config/controls/genshin-native-ui.json task AutoFishing \
+  --config '{"targetCatches":1}'
+bgi-touch --layout config/controls/genshin-native-ui.json task AutoCook
+```
+
+默认战斗布局仍使用 `config/controls/genshin-default.json`；`--layout` 只改变
+BetterGI 语义到 profile 原始键码的本地解释，不会修改 DeviceHub 的原始 profile。
+
 ---
 
 ## 2. 快速开始
@@ -209,10 +220,14 @@ manifest `http_allowed_urls` 声明过的地址。
 # 战斗策略：逐行执行（角色名开头的行会先切人，见第 4 节）
 bgi-touch combat scripts/combat/万能战斗策略（萌新推荐）.txt
 
+# 原生 SoloTask：任务参数可用 --config 或 --config-file
+bgi-touch task AutoDomain --config '{"domainRoundNum":1}'
+bgi-touch task AutoOpenChest --config '{"timeoutSeconds":60}'
+
 # 键鼠宏：直接给原始宏 JSON，运行时自动翻译为触控
 bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹-塔拉塔海谷.json
 
-# pathing：--dry-run 只解析统计；实际执行需要地图定位资产（尚未接入，见 ROADMAP）
+# pathing：--dry-run 只解析统计；实际执行需要地图定位资产和真机调参
 bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json --dry-run
 ```
 
@@ -245,7 +260,7 @@ bgi-touch web --host 0.0.0.0 --port 8899   # 局域网访问（注意无鉴权�
   拖拽 = 滑动**；可叠加触控布局标注（等价 `calibrate`）辅助校准。
 - **手动控制**：WASD 按住式移动（按下=key_down，松开=key_up）、普攻/E/Q/跳/
   冲刺/F/菜单、1-4 切人、视角四方向。
-- **脚本面板**：列出 `scripts/` 下已转换的四类脚本（JS 包显示兼容结论），
+- **脚本面板**：列出 `scripts/` 下已转换的四类脚本及 BetterGI SoloTask（JS 包显示兼容结论），
   一键运行/停止；同一时刻只允许一个任务，顶部标签显示
   idle/running/done/error/cancelled。
 - **转换**：粘贴 bettergi-scripts-list 中的路径，转换产物直接进列表。
@@ -314,6 +329,7 @@ launch                      启动原神
 screenshot [-o 文件]         截图（自动转横屏，默认 screenshot.png）
 calibrate  [-o 文件]         输出布局标注图（默认 calibrate.png）
 convert <路径>... [-o 目录]   转换社区脚本（默认输出 ./scripts）
+task <名称> [--config JSON]    执行 BetterGI SoloTask
 run <脚本目录> [--set k=v]   运行 JS 脚本包
 combat <文件.txt>            执行战斗策略 DSL
 macro <宏.json>              回放键鼠宏（自动翻译为触控）

@@ -64,6 +64,9 @@ class TpTask:
         self.log = log
         self.big = BigMapLocator(map_name)
         self.config = MapConfig()
+        # Touch zoom has no reliable semantic level from DeviceHub. Keep the
+        # BetterGI 1..6 scale in-process and use pinch gestures for changes.
+        self._zoom_level = 3.0
 
     # ---- 步骤 ----
 
@@ -92,6 +95,79 @@ class TpTask:
             self.ctx.sleep(900)  # 等惯性衰减
             dx -= sx
             dy -= sy
+
+    def move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+        """Center the visible map on a world coordinate without selecting it."""
+        if not self.open_map():
+            raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
+        tx2048, ty2048 = self.config.world_to_image(wx, wy)
+        tx, ty = tx2048 / 8, ty2048 / 8
+        deadline = time.monotonic() + timeout_s
+        t = self.ctx.transform
+        tol = 0.05 * t.device_width
+        for it in range(14):
+            if time.monotonic() > deadline:
+                break
+            view = self.big.locate_view(self.ctx.capture_bgr())
+            if view is None:
+                self.log("[tp] 大地图视野匹配失败，重试")
+                self.ctx.sleep(800)
+                continue
+            vx, vy, px_per_map = view
+            dx_screen = (tx - vx) * px_per_map
+            dy_screen = (ty - vy) * px_per_map
+            dist = math.hypot(dx_screen, dy_screen)
+            self.log(f"[map] 迭代{it}: 目标偏移 {dist:.0f}px")
+            if dist <= tol:
+                return True
+            self._drag_map(-dx_screen, -dy_screen)
+        raise RuntimeError("大地图移动失败：迭代/超时耗尽")
+
+    def get_big_map_zoom_level(self) -> float:
+        return float(self._zoom_level)
+
+    def set_big_map_zoom_level(self, level: float) -> float:
+        """Best-effort touch equivalent of BetterGI's 1.0..6.0 map zoom."""
+        target = max(1.0, min(6.0, float(level)))
+        if not self.open_map():
+            raise RuntimeError("无法打开大地图，不能调整缩放")
+        delta = target - self._zoom_level
+        steps = min(8, max(0, int(round(abs(delta) * 2))))
+        if steps:
+            W, H = self.ctx.transform.device_width, self.ctx.transform.device_height
+            cx, cy = W / 2, H / 2
+            old_span = min(W, H) * 0.14
+            # BetterGI's level increases as the map zooms out. Pinch inward
+            # for a larger level and outward for a smaller one.
+            sign = -1 if delta > 0 else 1
+            for _ in range(steps):
+                span = old_span + sign * min(W, H) * 0.035
+                self.ctx.device.multi_touch([
+                    {"x1": cx - old_span, "y1": cy, "x2": cx - span, "y2": cy},
+                    {"x1": cx + old_span, "y1": cy, "x2": cx + span, "y2": cy},
+                ], duration_ms=350, image_width=W, image_height=H)
+                old_span = span
+                self.ctx.sleep(350)
+        self._zoom_level = target
+        return self._zoom_level
+
+    def tp_to_statue(self, timeout_s: float = 30) -> bool:
+        """Teleport through a visible Statue of the Seven icon."""
+        if not self.open_map():
+            raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
+        tpl = Mat.from_file(str(TEMPLATES / "StatueOfTheSeven.png"))
+        region = self.ctx.capture_region()
+        hits = region.find_multi(RecognitionObject.template_match(tpl), limit=20)
+        if not hits:
+            raise RuntimeError("当前大地图视野未找到七天神像图标")
+        cx, cy = self.ctx.transform.device_width / 2, self.ctx.transform.device_height / 2
+        target = min(hits, key=lambda h: math.hypot(h.dx + h.dw / 2 - cx, h.dy + h.dh / 2 - cy))
+        target.click()
+        self.ctx.sleep(1000)
+        if not self._find_and_tap_confirm():
+            raise RuntimeError("七天神像已选中，但未找到传送确认")
+        self.ctx.sleep(max(1000, int(timeout_s * 1000 / 10)))
+        return True
 
     def _find_and_tap_confirm(self) -> bool:
         """在弹出卡片中找「传送」并点击。"""

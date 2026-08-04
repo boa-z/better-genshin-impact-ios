@@ -13,8 +13,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def _context(args):
     from .engine.context import GameContext
+    from .input.layout import DEFAULT_LAYOUT
     return GameContext(
         mcp_url=args.url,
+        layout_path=args.layout or DEFAULT_LAYOUT,
         keymap_profile=None if args.no_keymap_profile else args.keymap_profile,
         keymap_profile_path=args.keymap_profile_file,
     )
@@ -121,6 +123,24 @@ def cmd_combat(args) -> int:
     return 0
 
 
+def cmd_task(args) -> int:
+    from .tasks.dispatcher import TaskDispatcher
+
+    if args.config_file:
+        config = json.loads(Path(args.config_file).read_text(encoding="utf-8"))
+    else:
+        config = json.loads(args.config)
+    ctx = _context(args)
+    try:
+        result = TaskDispatcher(ctx, party_slots=_load_party()).run_task(
+            {"name": args.name, "config": config}
+        )
+        print(json.dumps({"task": args.name, "result": result}, ensure_ascii=False))
+        return 0 if result is not False else 1
+    finally:
+        ctx.close()
+
+
 def cmd_macro(args) -> int:
     from .macro.keymouse import MacroPlayer, load_keymouse
     ctx = _context(args)
@@ -201,6 +221,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="bgi-touch",
                                      description="BetterGI 跨平台移植：经 devicehub-mask MCP 自动化 iPhone 端原神")
     parser.add_argument("--url", default=None, help="MCP 地址（默认 http://127.0.0.1:8009/mcp）")
+    parser.add_argument("--layout", default=os.environ.get("BGI_LAYOUT_PATH"),
+                        help="本地触控布局 JSON；支持 config/controls 下的 extends 覆盖")
     parser.add_argument("--keymap-profile", default=os.environ.get(
         "BGI_KEYMAP_PROFILE", "Genshin-Impact-fixed-16by9"),
                         help="DeviceHub profile 名称；传空值或 --no-keymap-profile 禁用")
@@ -222,6 +244,10 @@ def main() -> int:
     p.add_argument("-o", "--output", default="scripts")
     p = sub.add_parser("combat", help="执行战斗策略 .txt")
     p.add_argument("file")
+    p = sub.add_parser("task", help="执行 BetterGI SoloTask（AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest）")
+    p.add_argument("name", help="SoloTask 名称")
+    p.add_argument("--config", default="{}", help="内联 JSON 参数")
+    p.add_argument("--config-file", help="从 JSON 文件读取参数")
     p = sub.add_parser("macro", help="回放键鼠宏 JSON（自动转触控）")
     p.add_argument("file")
     p = sub.add_parser("run", help="运行 JS 脚本包（BetterGI 兼容）")
@@ -244,6 +270,7 @@ def main() -> int:
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
                 "close-game": cmd_close_game,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
+                "task": cmd_task,
                 "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web,
                 "trigger": cmd_trigger, "reconnect": cmd_reconnect}
     return handlers[args.command](args)

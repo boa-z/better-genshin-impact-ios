@@ -1,0 +1,11 @@
+{
+  "$comment": "BetterGI 原生 UI 小游戏键位覆盖：把 PC Space 语义改为 DeviceHub profile 的原始 Space 键。",
+  "extends": "genshin-default.json",
+  "keyMap": {
+    "SPACE": {
+      "type": "button",
+      "button": "jump",
+      "profileCode": "Space"
+    }
+  }
+}

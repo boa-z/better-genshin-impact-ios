@@ -129,6 +129,15 @@ class TaskRunner:
                 from ..pathing.executor import PathingExecutor
                 from ..pathing.model import PathingTask
                 PathingExecutor(ctx, party_slots=self._party(), log=weblog).run(PathingTask.load(path))
+            elif kind == "task":
+                from ..tasks.dispatcher import TaskDispatcher
+                task_path = Path(path)
+                if task_path.exists():
+                    task = json.loads(task_path.read_text(encoding="utf-8"))
+                else:
+                    task = {"name": path, "config": settings}
+                TaskDispatcher(ctx, party_slots=self._party(), log=weblog,
+                               cancelled=self.stop_event.is_set).run_task(task)
             else:
                 raise ValueError(f"未知任务类型 {kind}")
             self.info = {**self.info, "state": "done", "ended": datetime.now().strftime("%H:%M:%S")}
@@ -306,7 +315,9 @@ def api_release():
 
 @app.get("/api/scripts")
 def api_scripts():
-    out = {"js": [], "combat": [], "keymouse": [], "pathing": []}
+    out = {"js": [], "combat": [], "keymouse": [], "pathing": [], "task": []}
+    for name in ("AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest"):
+        out["task"].append({"path": name, "name": name})
     js_dir = SCRIPTS_DIR / "js"
     if js_dir.is_dir():
         for d in sorted(js_dir.iterdir()):
@@ -345,10 +356,10 @@ def api_run(body: dict):
     try:
         kind, path = str(body["kind"]), str(body["path"])
         target = Path(path).resolve()
-        if not target.exists():
+        if kind != "task" and not target.exists():
             return _err(FileNotFoundError(f"路径不存在: {path}"), 404)
         settings = body.get("settings") or {}
-        runner.start(kind, str(target), settings)
+        runner.start(kind, path if kind == "task" else str(target), settings)
         return {"ok": True}
     except RuntimeError as e:
         return _err(e, 409)

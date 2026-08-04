@@ -63,12 +63,14 @@ bgi-touch calibrate -o cal.png         # 输出布局标注图，用于校准触
 bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/pathing/键鼠宏/战斗txt）
 bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼容）
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
+bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 解析 pathing 文件
 bgi-touch web                          # WebUI 控制台（实况画面/点按/脚本管理）
 ```
 
 - 触控布局：`config/controls/genshin-default.json`（已按 iPhone 13 Pro Max 实测校准；其他机型先跑 `calibrate` 对照调整）。
+- 原生 UI 键位覆盖：`config/controls/genshin-native-ui.json` 继承默认布局，把 `SPACE` 切到 profile 原始 `Space`；钓鱼/烹饪等小游戏可用 `--layout` 选择。
 - 队伍映射：`config/party.json`，如 `{"钟离": 1, "那维莱特": 2}`，供战斗 DSL 切人。
 - 脚本 settings：脚本目录放 `user-settings.json` 或 `bgi-touch run --set key=value`。
 
@@ -91,12 +93,14 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
 | 小地图 SIFT 定位（官方特征库，全局1s/追踪0.05s） | ✅ 真机验证 |
 | 大地图传送 genshin.tp（SIFT 比例自适应拖动+OCR确认） | ⚠️ 已实现，待真机回归验证 |
+| genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
 | pathing 执行（定位+走点+动作） | ⚠️ 全链路就绪，待真机路线实测 |
 | 实时触发器（AutoPick OCR拾取 / AutoSkip 剧情推进） | ⚠️ 已实现，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
-| SoloTask：AutoFight / AutoWood | ⚠️ 已实现，待真机验证 |
-| SoloTask：AutoDomain / AutoFishing(YOLO) / AutoLeyLine 等 | ❌ 计划中（docs/ROADMAP.md） |
+| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现，待真机验证 |
+| SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ 视觉逻辑已迁移，需在对应游戏状态真机回归 |
+| SoloTask：AutoLeyLine / AutoBoss / AutoStygian 等 Windows 任务 | ❌ 未迁移（docs/ROADMAP.md） |
 
 ## 已知约束
 

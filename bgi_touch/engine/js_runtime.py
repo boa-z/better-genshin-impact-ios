@@ -18,7 +18,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from ..combat.dsl import CombatExecutor
 from ..macro.keymouse import MacroPlayer, load_keymouse
 from ..pathing.executor import PathingExecutor
 from ..pathing.model import PathingTask
@@ -165,11 +164,11 @@ class JsScriptRuntime:
         expose("moveMouseBy", lambda dx, dy: ctx.input.move_camera_by(float(dx), float(dy)))
         expose("moveMouseTo", lambda x, y: None)  # 无指针；点击时直接给坐标
         expose("leftButtonClick", lambda: ctx.input.attack())
-        expose("leftButtonDown", lambda: None)
-        expose("leftButtonUp", lambda: None)
-        expose("rightButtonClick", lambda: ctx.input.key_press("E"))  # PC 右键≈重击/瞄准，近似映射
-        expose("rightButtonDown", lambda: None)
-        expose("rightButtonUp", lambda: None)
+        expose("leftButtonDown", lambda: ctx.input.attack_down())
+        expose("leftButtonUp", lambda: ctx.input.attack_up())
+        expose("rightButtonClick", lambda: ctx.input.key_press("R"))
+        expose("rightButtonDown", lambda: ctx.input.button_down("aim"))
+        expose("rightButtonUp", lambda: ctx.input.button_up("aim"))
         expose("middleButtonClick", lambda: None)
         expose("verticalScroll", lambda n: None)
 
@@ -270,8 +269,15 @@ class JsScriptRuntime:
             def runFileFromUser(self, p): pathing_exec.run(PathingTask.load(rt._resolve(p)))
         expose("pathingScript", wrap(_Pathing()), proxy=False)
 
-        # dispatcher / 任务模型
-        combat = CombatExecutor.for_context(ctx, party_slots=self.party_slots, log=log)
+        # dispatcher / 任务模型。JS、WebUI、CLI 共用同一个实现，避免任务
+        # 名称和参数在不同入口逐渐分叉。
+        from ..tasks.dispatcher import TaskDispatcher
+        task_dispatcher = TaskDispatcher(
+            ctx,
+            party_slots=self.party_slots,
+            log=log,
+            cancelled=lambda: rt.cancelled,
+        )
 
         class _CTS:
             def __init__(self): self._cancelled = False
@@ -282,55 +288,30 @@ class JsScriptRuntime:
 
         class _Dispatcher:
             def runTask(self, task, ct=None):
-                name = str(getattr(task, "name", None) or (task.get("name") if isinstance(task, dict) else task))
-                cfg = getattr(task, "config", None) or {}
-                if name == "AutoFight":
-                    from ..tasks.auto_fight import AutoFightTask
-                    AutoFightTask(ctx, combat_strategy_path=cfg.get("combatStrategyPath") if isinstance(cfg, dict) else None,
-                                  timeout_s=float(cfg.get("timeout", 120000)) / 1000 if isinstance(cfg, dict) and cfg.get("timeout") else 120,
-                                  party_slots=rt.party_slots, log=log).run(cancelled=lambda: rt.cancelled)
-                    return
-                if name == "AutoWood":
-                    from ..tasks.auto_wood import AutoWoodTask
-                    AutoWoodTask(ctx, log=log).run(cancelled=lambda: rt.cancelled)
-                    return
-                if name == "AutoDomain":
-                    from ..tasks.auto_domain import AutoDomainTask
-                    c = cfg if isinstance(cfg, dict) else {}
-                    AutoDomainTask(ctx, rounds=int(c.get("domainRoundNum", 1) or 1),
-                                   combat_strategy_path=c.get("combatStrategyPath"),
-                                   party_slots=rt.party_slots, log=log).run(cancelled=lambda: rt.cancelled)
-                    return
-                raise NotImplementedError(f"SoloTask {name} 尚未移植（见 docs/ROADMAP.md）")
+                return task_dispatcher.run_task(task, ct)
 
             def runAutoDomainTask(self, param):
-                from ..tasks.auto_domain import AutoDomainTask
-                rounds = getattr(param, "domainRoundNum", None) or (param.get("domainRoundNum") if isinstance(param, dict) else 1) or 1
-                path = getattr(param, "combatStrategyPath", None) or (param.get("combatStrategyPath") if isinstance(param, dict) else None)
-                AutoDomainTask(ctx, rounds=int(rounds), combat_strategy_path=path,
-                               party_slots=rt.party_slots, log=log).run(cancelled=lambda: rt.cancelled)
+                return task_dispatcher.run_auto_domain_task(param)
 
             def runAutoFightTask(self, param):
-                from ..tasks.auto_fight import AutoFightTask
-                path = getattr(param, "combatStrategyPath", None) or (param.get("combatStrategyPath") if isinstance(param, dict) else None)
-                AutoFightTask(ctx, combat_strategy_path=path, party_slots=rt.party_slots,
-                              log=log).run(cancelled=lambda: rt.cancelled)
-            def runCombatScript(self, script, avatar=None): combat.run(str(script))
+                return task_dispatcher.run_auto_fight_task(param)
+            def runAutoCookTask(self, param=None): return task_dispatcher.run_auto_cook_task(param)
+            def runAutoFishingTask(self, param=None): return task_dispatcher.run_auto_fishing_task(param)
+            def runAutoOpenChestTask(self, param=None): return task_dispatcher.run_auto_open_chest_task(param)
+            def runCombatScript(self, script, avatar=None):
+                return task_dispatcher.run_combat_script(str(script), avatar)
             def addTimer(self, timer):
-                name = str(getattr(timer, "name", timer))
                 try:
-                    ctx.triggers.clear()  # 原版 addTimer 语义：清除既有触发器再启用
-                    ctx.enable_trigger(name)
+                    task_dispatcher.add_timer(timer)
                 except ValueError as e:
                     log(f"[dispatcher] {e}")
             def addTrigger(self, trigger):
-                name = str(getattr(trigger, "name", trigger))
                 try:
-                    ctx.enable_trigger(name)
+                    task_dispatcher.add_trigger(trigger)
                 except ValueError as e:
                     log(f"[dispatcher] {e}")
             def clearAllTriggers(self):
-                ctx.triggers.clear()
+                task_dispatcher.clear_all_triggers()
             def getLinkedCancellationTokenSource(self): return wrap(_CTS())
             def getLinkedCancellationToken(self): return wrap(_CTS())
         expose("dispatcher", wrap(_Dispatcher()), proxy=False)

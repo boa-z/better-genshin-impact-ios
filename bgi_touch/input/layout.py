@@ -55,6 +55,17 @@ def _bound_codes(bind: Any) -> list[str]:
     return []
 
 
+def _merge_layout(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge small mode overlays without duplicating the full layout."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_layout(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 @dataclass(frozen=True)
 class DeviceHubProfile:
     """DeviceHub Mask native v2 keymap, retaining raw browser key codes."""
@@ -151,7 +162,17 @@ class ControlLayout:
     def load(cls, path: str | Path = DEFAULT_LAYOUT,
              devicehub_profile: DeviceHubProfile | Mapping[str, Any] | None = None
              ) -> "ControlLayout":
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        layout_path = Path(path)
+        raw = json.loads(layout_path.read_text(encoding="utf-8"))
+        base_name = raw.get("extends")
+        if isinstance(base_name, str) and base_name:
+            base_path = (layout_path.parent / base_name).resolve()
+            if not base_path.is_relative_to(layout_path.parent.resolve()):
+                raise ValueError("布局 extends 不得越出 config/controls 目录")
+            base = json.loads(base_path.read_text(encoding="utf-8"))
+            if not isinstance(base, dict):
+                raise ValueError("布局基文件根节点必须是对象")
+            raw = _merge_layout(base, {k: v for k, v in raw.items() if k != "extends"})
         cam = raw["camera"]["region"]
         if isinstance(devicehub_profile, Mapping):
             devicehub_profile = DeviceHubProfile.from_dict(devicehub_profile)
