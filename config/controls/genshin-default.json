@@ -8,11 +8,12 @@
     "radiusN": 0.07
   },
   "camera": {
+    "$comment": "视角滑动区须避开右侧队伍头像列(x>0.82)与右下按钮簇(y>0.55)、左上小地图",
     "region": {
-      "nx": 0.62,
-      "ny": 0.3,
+      "nx": 0.46,
+      "ny": 0.26,
       "nw": 0.3,
-      "nh": 0.35
+      "nh": 0.26
     },
     "pixelsPerDegree": 6.5
   },
@@ -105,15 +106,18 @@
     },
     "SPACE": {
       "type": "button",
-      "button": "jump"
+      "button": "jump",
+      "profileCode": "ShiftLeft"
     },
     "LSHIFT": {
       "type": "button",
-      "button": "sprint"
+      "button": "sprint",
+      "profileCode": "Space"
     },
     "SHIFT": {
       "type": "button",
-      "button": "sprint"
+      "button": "sprint",
+      "profileCode": "Space"
     },
     "F": {
       "type": "button",

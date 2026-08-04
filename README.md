@@ -30,6 +30,16 @@ bettergi-scripts-list 脚本 ──bgi-touch convert──▶ 可运行脚本 + 
 - **坐标系**：脚本/模板资产按 1920×1080 基准；按高度等比缩放 + 依元素所在三分位做左/中/右锚点重定位（原神移动端 HUD 贴边锚定，iPhone 19.5:9 比 16:9 宽）。
 - **朝向自适应**（真机实测）：游戏横屏时截图流仍是竖屏帧（内容旋转 90°），而 tap 坐标空间跟随 `status.orientation` 动态变化。截图按帧宽高自动旋转；点按映射按 status 动态启停。
 
+## DeviceHub profile
+
+默认读取 DeviceHub 的 `Genshin-Impact-fixed-16by9`，按住状态通过
+`start_game_session` / `set_game_input` 以租约维持；profile 不可用时自动回退旧手势泵。
+也可以用 `--keymap-profile-file "$HOME/Library/Application Support/com.devicehub.mask/profiles/Genshin-Impact-fixed-16by9.json"`
+从本地 v2 JSON 读取，或用 `--no-keymap-profile` 强制使用手势泵。
+
+`status.screen_size` 可能是视频流缩略尺寸，坐标变换以原生 screenshot 帧为准；
+iPhone 13 Pro Max 横屏逻辑空间约为 `2778x1284`。
+
 ## 安装
 
 ```bash
@@ -47,6 +57,7 @@ python3 -m venv .venv
 ```bash
 bgi-touch status                       # 设备/游戏状态
 bgi-touch launch                       # 启动原神
+bgi-touch close-game                   # 测试后停止/后台挂起原神
 bgi-touch screenshot -o shot.png       # 截图（自动转横屏）
 bgi-touch calibrate -o cal.png         # 输出布局标注图，用于校准触控坐标
 bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/pathing/键鼠宏/战斗txt）
@@ -60,6 +71,11 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 - 触控布局：`config/controls/genshin-default.json`（已按 iPhone 13 Pro Max 实测校准；其他机型先跑 `calibrate` 对照调整）。
 - 队伍映射：`config/party.json`，如 `{"钟离": 1, "那维莱特": 2}`，供战斗 DSL 切人。
 - 脚本 settings：脚本目录放 `user-settings.json` 或 `bgi-touch run --set key=value`。
+
+## 真机收尾
+
+测试结束执行 `bgi-touch close-game`。App Store 版原神可能拒绝 MCP 的 `stop_app`，
+此时命令会退回 Home 将其移出前台并挂起；不要让游戏留在前台持续消耗设备性能。
 
 ## 移植进度
 

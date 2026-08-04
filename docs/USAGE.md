@@ -47,6 +47,24 @@ bgi-touch --url http://192.168.1.10:8009/mcp status   # 命令行参数
 export BGI_MCP_URL=http://127.0.0.1:8009/mcp          # 环境变量
 ```
 
+### 1.4 DeviceHub 键位 profile
+
+默认读取 DeviceHub Mask 的 `Genshin-Impact-fixed-16by9` profile。程序启动时会先建立
+active device session，再读取 profile；WASD、技能和切人等按键优先通过
+`start_game_session` + `set_game_input` 发送，租约过期会自动释放输入。服务器不支持
+这些工具时会自动回退到 `multi_touch` 手势泵。
+
+也可以直接指定用户目录中的 v2 JSON：
+
+```bash
+bgi-touch --keymap-profile-file "$HOME/Library/Application Support/com.devicehub.mask/profiles/Genshin-Impact-fixed-16by9.json" status
+bgi-touch --no-keymap-profile status
+```
+
+profile 使用浏览器 `KeyboardEvent.code`（例如 `KeyW`、`Digit1`）。布局文件中的
+`profileCode` 保持 BetterGI 的 PC 语义；本 profile 将 `Space` 放在冲刺键、
+`ShiftLeft` 放在跳跃键，因此配置中已显式交换这两个 profile code。
+
 ---
 
 ## 2. 快速开始
@@ -54,7 +72,7 @@ export BGI_MCP_URL=http://127.0.0.1:8009/mcp          # 环境变量
 ```bash
 # ① 确认设备连接与坐标变换
 bgi-touch status
-# 关注输出里的 device.status == "connected"、transform（如 2816x1296, scale=1.2）
+# 关注输出里的 device.status == "connected"、transform（iPhone 13 Pro Max 约 2778x1284）
 
 # ② 启动原神并等它进到主界面（首次登录/公告需手动点掉）
 bgi-touch launch
@@ -65,6 +83,15 @@ bgi-touch screenshot -o shot.png
 # ④ 校准触控布局（首次使用/换机型必做，见第 3 节）
 bgi-touch calibrate -o cal.png
 ```
+
+调试或真机测试结束后执行：
+
+```bash
+bgi-touch close-game
+```
+
+App Store 版原神可能拒绝 MCP 的 `stop_app`，命令会退回 Home 将其移出前台并挂起；
+此时 `app_status` 仍可能显示 running，但进程应不再占用游戏渲染资源。
 
 ---
 
@@ -110,7 +137,8 @@ EOF
 ```
 
 `keyMap` 决定脚本里 `keyPress("E")` 等 PC 键位落到哪个触控动作，一般不用改；
-要调整的是 `buttons` 里的坐标。
+要调整的是 `buttons` 里的坐标。启用 DeviceHub profile 时，按键坐标由 profile
+映射执行，`buttons` 仍用于视角/鼠标参考坐标和 profile 失效时的回退路径。
 
 ---
 

@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _context(args):
+    from .engine.context import GameContext
+    return GameContext(
+        mcp_url=args.url,
+        keymap_profile=None if args.no_keymap_profile else args.keymap_profile,
+        keymap_profile_path=args.keymap_profile_file,
+    )
 
 
 def _load_party() -> dict[str, int]:
@@ -18,8 +28,8 @@ def _load_party() -> dict[str, int]:
 
 
 def cmd_status(args) -> int:
-    from .engine.context import GENSHIN_BUNDLE_ID, GameContext
-    ctx = GameContext(mcp_url=args.url)
+    from .engine.context import GENSHIN_BUNDLE_ID
+    ctx = _context(args)
     st = ctx.device.status()
     try:
         app = ctx.device.app_status(GENSHIN_BUNDLE_ID)
@@ -34,8 +44,7 @@ def cmd_status(args) -> int:
 
 
 def cmd_screenshot(args) -> int:
-    from .engine.context import GameContext
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     png = ctx.device.screenshot_png()
     out = Path(args.output)
     out.write_bytes(png)
@@ -45,19 +54,31 @@ def cmd_screenshot(args) -> int:
 
 
 def cmd_launch(args) -> int:
-    from .engine.context import GameContext
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     ctx.launch_game()
     print("原神已启动")
     ctx.close()
     return 0
 
 
+def cmd_close_game(args) -> int:
+    from .engine.context import GENSHIN_BUNDLE_ID
+    ctx = _context(args)
+    try:
+        ctx.device.stop_app(GENSHIN_BUNDLE_ID)
+        print("原神已停止")
+    except Exception as e:
+        mode = ctx.device.background_current_app()
+        print(f"MCP 无法终止当前 App（{e}），已通过 {mode} 将原神移出前台并挂起")
+    finally:
+        ctx.close()
+    return 0
+
+
 def cmd_calibrate(args) -> int:
     """截图并叠加当前布局的按钮标注，输出到文件用于人工校准。"""
     import cv2
-    from .engine.context import GameContext
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     bgr = ctx.capture_bgr()
     h, w = bgr.shape[:2]
     for name, (nx, ny) in ctx.layout.buttons.items():
@@ -93,8 +114,7 @@ def cmd_convert(args) -> int:
 
 def cmd_combat(args) -> int:
     from .combat.dsl import CombatExecutor
-    from .engine.context import GameContext
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     executor = CombatExecutor.for_context(ctx, party_slots=_load_party())
     executor.run(Path(args.file).read_text(encoding="utf-8"))
     ctx.close()
@@ -102,22 +122,22 @@ def cmd_combat(args) -> int:
 
 
 def cmd_macro(args) -> int:
-    from .engine.context import GameContext
     from .macro.keymouse import MacroPlayer, load_keymouse
-    ctx = GameContext(mcp_url=args.url)
-    raw = load_keymouse(args.file)
-    if raw.get("format") == "bgi-touch-macro/1":
-        print("提示：.touch.json 是预览格式；回放请直接使用原始宏 JSON")
-        return 2
-    MacroPlayer(ctx.input, sleep=ctx.sleep).play(raw)
-    ctx.close()
-    return 0
+    ctx = _context(args)
+    try:
+        raw = load_keymouse(args.file)
+        if raw.get("format") == "bgi-touch-macro/1":
+            print("提示：.touch.json 是预览格式；回放请直接使用原始宏 JSON")
+            return 2
+        MacroPlayer(ctx.input, sleep=ctx.sleep).play(raw)
+        return 0
+    finally:
+        ctx.close()
 
 
 def cmd_run(args) -> int:
-    from .engine.context import GameContext
     from .engine.js_runtime import JsScriptRuntime
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     overrides = {}
     for kv in args.set or []:
         k, _, v = kv.partition("=")
@@ -131,14 +151,13 @@ def cmd_run(args) -> int:
 
 
 def cmd_pathing(args) -> int:
-    from .engine.context import GameContext
     from .pathing.executor import PathingExecutor
     from .pathing.model import PathingTask
     task = PathingTask.load(args.file)
     print(json.dumps(task.summary(), ensure_ascii=False, indent=2))
     if args.dry_run:
         return 0
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     PathingExecutor(ctx, party_slots=_load_party()).run(task)
     ctx.close()
     return 0
@@ -146,8 +165,7 @@ def cmd_pathing(args) -> int:
 
 def cmd_trigger(args) -> int:
     """长驻运行实时触发器（Ctrl-C 停止）。"""
-    from .engine.context import GameContext
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     if args.pick:
         ctx.enable_trigger("AutoPick")
     if args.skip:
@@ -166,8 +184,7 @@ def cmd_trigger(args) -> int:
 
 
 def cmd_reconnect(args) -> int:
-    from .engine.context import GameContext
-    ctx = GameContext(mcp_url=args.url)
+    ctx = _context(args)
     ctx.device.reconnect_device()
     print("设备通道已重建")
     ctx.close()
@@ -184,12 +201,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="bgi-touch",
                                      description="BetterGI 跨平台移植：经 devicehub-mask MCP 自动化 iPhone 端原神")
     parser.add_argument("--url", default=None, help="MCP 地址（默认 http://127.0.0.1:8009/mcp）")
+    parser.add_argument("--keymap-profile", default=os.environ.get(
+        "BGI_KEYMAP_PROFILE", "Genshin-Impact-fixed-16by9"),
+                        help="DeviceHub profile 名称；传空值或 --no-keymap-profile 禁用")
+    parser.add_argument("--keymap-profile-file", default=os.environ.get("BGI_KEYMAP_PROFILE_FILE"),
+                        help="从本地 v2 JSON 读取 profile（优先于 MCP）")
+    parser.add_argument("--no-keymap-profile", action="store_true",
+                        help="禁用 DeviceHub 原生 game session，使用本地触控布局")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("status", help="设备与游戏状态")
     p = sub.add_parser("screenshot", help="截图保存")
     p.add_argument("-o", "--output", default="screenshot.png")
     sub.add_parser("launch", help="启动原神")
+    sub.add_parser("close-game", help="停止原神；App Store 包不允许强杀时退回 Home 挂起")
     p = sub.add_parser("calibrate", help="输出带布局标注的截图用于校准触控坐标")
     p.add_argument("-o", "--output", default="calibrate.png")
     p = sub.add_parser("convert", help="转换 bettergi-scripts-list 脚本")
@@ -215,9 +240,9 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.url is None:
-        import os
         args.url = os.environ.get("BGI_MCP_URL", "http://127.0.0.1:8009/mcp")
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
+                "close-game": cmd_close_game,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
                 "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web,
                 "trigger": cmd_trigger, "reconnect": cmd_reconnect}

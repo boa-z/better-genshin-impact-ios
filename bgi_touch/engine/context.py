@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -9,17 +10,21 @@ import cv2
 import numpy as np
 
 from ..device.client import DEFAULT_URL, DeviceClient
-from ..input.layout import DEFAULT_LAYOUT, ControlLayout
+from ..input.layout import DEFAULT_LAYOUT, DeviceHubProfile, ControlLayout
 from ..input.simulator import InputSimulator
 from ..vision.coordinate import ScreenTransform
 from .recognition import ImageRegion
 
 GENSHIN_BUNDLE_ID = "com.miHoYo.Yuanshen"
+DEFAULT_KEYMAP_PROFILE = os.environ.get("BGI_KEYMAP_PROFILE", "Genshin-Impact-fixed-16by9")
 
 
 class GameContext:
-    def __init__(self, mcp_url: str = DEFAULT_URL, layout_path: str | Path = DEFAULT_LAYOUT):
+    def __init__(self, mcp_url: str = DEFAULT_URL, layout_path: str | Path = DEFAULT_LAYOUT,
+                 keymap_profile: str | None = DEFAULT_KEYMAP_PROFILE,
+                 keymap_profile_path: str | Path | None = None):
         self.device = DeviceClient(mcp_url)
+        self.device.connect_device()
         status = self.device.status()
         if status.get("status") != "connected":
             raise RuntimeError(f"设备未连接（status={status.get('status')}），请检查 DeviceHub Mask")
@@ -27,10 +32,34 @@ class GameContext:
         if h > w:
             w, h = h, w
         self.transform = ScreenTransform(int(w), int(h))
-        self.layout = ControlLayout.load(layout_path)
+        profile = self._load_keymap_profile(keymap_profile, keymap_profile_path)
+        self.keymap_profile_name = profile.name if profile else None
+        self.layout = ControlLayout.load(layout_path, devicehub_profile=profile)
         self.refresh_orientation(status)
         self.input = InputSimulator(self.device, self.layout, self.transform)
+        # status.screen_size may be a low-resolution stream size. A native frame
+        # is the authoritative coordinate space for tap/swipe and profile matching.
+        try:
+            self.capture_bgr()
+        except Exception as e:
+            print(f"[context] 初始截图尺寸同步失败（后续重试）：{e}")
         self._start_orientation_watch()
+
+    def _load_keymap_profile(self, name: str | None,
+                             path: str | Path | None) -> DeviceHubProfile | None:
+        if path is not None:
+            profile = DeviceHubProfile.from_path(path)
+            if name and profile.name and profile.name != name:
+                raise ValueError(f"keymap profile 名称不匹配：期望 {name}，实际 {profile.name}")
+            return profile
+        if not name:
+            return None
+        try:
+            return DeviceHubProfile.from_dict(self.device.get_keymap_profile(name))
+        except Exception as e:
+            # profile 是增强路径；服务器版本不支持时继续使用本地触控布局。
+            print(f"[context] 无法读取 DeviceHub profile {name}，回退手势泵：{e}")
+            return None
 
     def _start_orientation_watch(self) -> None:
         """朝向看门狗：应用切换（游戏↔其他 App/重登）会改变服务器 tap 坐标空间，
@@ -71,7 +100,15 @@ class GameContext:
             self.device.set_coord_mapper(None)
         else:
             pw, ph = int(w), int(h)
-            self.device.set_coord_mapper(lambda x, y: (pw - y, x, pw, ph))
+
+            def portrait_mapper(x, y, iw=None, ih=None):
+                # iw/ih are the logical landscape screenshot dimensions. The
+                # portrait output dimensions are therefore ih/iw.
+                if iw and ih:
+                    return ih - y, x, ih, iw
+                return pw - y, x, pw, ph
+
+            self.device.set_coord_mapper(portrait_mapper)
 
     def sleep(self, ms: float) -> None:
         time.sleep(ms / 1000)
@@ -83,6 +120,11 @@ class GameContext:
             raise RuntimeError("截图解码失败")
         if img.shape[0] > img.shape[1]:
             img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        frame_w, frame_h = img.shape[1], img.shape[0]
+        if (frame_w, frame_h) != (self.transform.device_width, self.transform.device_height):
+            self.transform = ScreenTransform(frame_w, frame_h)
+            if hasattr(self, "input"):
+                self.input.set_transform(self.transform)
         t = self.transform
         if (img.shape[1], img.shape[0]) != (t.device_width, t.device_height):
             img = cv2.resize(img, (t.device_width, t.device_height))
@@ -125,5 +167,7 @@ class GameContext:
         self.triggers.start()
 
     def close(self) -> None:
+        if self._trigger_loop is not None:
+            self._trigger_loop.stop()
         self.input.release_all()
         self.device.close()

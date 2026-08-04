@@ -96,6 +96,74 @@ def test_key_normalization():
     assert normalize_key("LeftShift") == "LSHIFT"
     assert normalize_key(" ") == "SPACE"
     assert normalize_key("esc") == "ESCAPE"
+    assert normalize_key("KeyE") == "E"
+    assert normalize_key("Digit4") == "4"
+
+
+def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
+    from bgi_touch.input.layout import ControlLayout, DeviceHubProfile
+
+    profile = {
+        "version": 2,
+        "name": "test-profile",
+        "mappings": [
+            {"type": "Press", "bind": ["Space"], "position": {"x": 0.88, "y": 0.66}},
+            {"type": "Press", "bind": ["ShiftLeft"], "position": {"x": 0.88, "y": 0.86}},
+            {"type": "Press", "bind": ["KeyE"], "position": {"x": 0.72, "y": 0.89}},
+            {"type": "Press", "bind": ["KeyR"], "position": {"x": 0.697, "y": 0.746}},
+            {"type": "Press", "bind": ["KeyX"], "position": {"x": 0.795, "y": 0.778}},
+            {
+                "type": "DirectionPad",
+                "bind": {"up": ["KeyW"], "down": ["KeyS"],
+                         "left": ["KeyA"], "right": ["KeyD"]},
+                "position": {"x": 0.18, "y": 0.75},
+            },
+        ],
+    }
+    layout = ControlLayout.load(devicehub_profile=profile)
+
+    assert isinstance(layout.devicehub_profile, DeviceHubProfile)
+    assert layout.profile_key("W") == "KeyW"
+    assert layout.profile_key("E") == "KeyE"
+    # The supplied profile deliberately places Space on sprint and ShiftLeft on jump.
+    assert layout.profile_key("SPACE") == "ShiftLeft"
+    assert layout.profile_key("LSHIFT") == "Space"
+    assert layout.profile_key_for_button("aim") == "KeyR"
+    assert layout.profile_key_for_button("attack") == "KeyX"
+
+    class FakeDevice:
+        def __init__(self):
+            self.inputs = []
+            self.stopped = []
+
+        def start_game_session(self, profile_name, **kwargs):
+            assert profile_name == "test-profile"
+            return "session-1"
+
+        def set_game_input(self, session_id, keys, **kwargs):
+            self.inputs.append((session_id, list(keys)))
+
+        def stop_game_session(self, session_id):
+            self.stopped.append(session_id)
+
+    from bgi_touch.input.simulator import InputSimulator
+    from bgi_touch.vision.coordinate import ScreenTransform
+    device = FakeDevice()
+    simulator = InputSimulator(device, layout, ScreenTransform(1920, 1080))
+    simulator.key_down("W")
+    simulator.key_down("LSHIFT")
+    simulator.key_up("W")
+    simulator.key_press("E", hold_ms=25)
+    simulator.key_press("X", hold_ms=25)
+    simulator.release_all()
+    assert device.inputs[:3] == [
+        ("session-1", ["KeyW"]),
+        ("session-1", ["KeyW", "Space"]),
+        ("session-1", ["Space"]),
+    ]
+    assert ("session-1", ["Space", "KeyE"]) in device.inputs
+    assert ("session-1", ["Space", "KeyX"]) in device.inputs
+    assert device.stopped == ["session-1"]
 
 
 # ---- 地图定位（需要资产与夹具，缺则跳过）----

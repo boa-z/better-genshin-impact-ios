@@ -1,10 +1,10 @@
 """键鼠 → 触控输入模拟。
 
-devicehub-mask 的触控手势是原子的且最长 5 秒，无法无限期按住。因此：
-- 按住状态（WASD/冲刺/蓄力）由后台"手势泵"线程维持：只要有按住的键，
-  就连续下发 multi_touch 手势——一个触点承载合成摇杆方向，每个按住的
-  按钮各占一个固定触点，待发的视角增量再占一个拖动触点。W+Shift 这类
-  组合因此落在同一个 HID 手势内，游戏视为同时输入。
+可用 DeviceHub v2 profile 时，按住状态（WASD/冲刺/蓄力）由持久化 game
+session 以 60Hz 在设备侧输出，并由本地线程按决策周期续租；旧服务器或 profile
+不可用时回退到手势泵。手势泵中：
+- 一个触点承载合成摇杆方向，每个按住的按钮各占一个固定触点，待发的视角增量
+  再占一个拖动触点。W+Shift 这类组合因此落在同一个 HID 手势内。
 - 点按类按键直接 tap 对应按钮坐标。
 - 相机转动（原版 moveMouseBy）映射为屏幕右侧视角区域的滑动。
 """
@@ -21,6 +21,8 @@ from .layout import ControlLayout, normalize_key
 
 MOVE_CYCLE_MS = 1400
 JOYSTICK_OVERSHOOT = 2.2  # 终点超出摇杆半径，让大部分时长处于满偏移（跑步阈值以上）
+PROFILE_LEASE_MS = 3000
+PROFILE_REFRESH_INTERVAL_S = 1.0
 
 
 class InputSimulator:
@@ -32,6 +34,10 @@ class InputSimulator:
         self._held_lock = threading.Lock()
         self._pending_camera: list[float] | None = None
         self._pump: threading.Thread | None = None
+        self._profile_session_id: str | None = None
+        self._profile_failed = False
+        self._profile_lock = threading.RLock()
+        self._profile_heartbeat: threading.Thread | None = None
         # 移动端队伍列表只显示 3 个非当前角色的行，切人需按当前活跃槽位换算行号
         self._active_slot = 1
 
@@ -44,6 +50,129 @@ class InputSimulator:
     def _button_pos(self, name: str) -> tuple[float, float]:
         nx, ny = self.layout.buttons[name]
         return nx * self.t.device_width, ny * self.t.device_height
+
+    def set_transform(self, transform: ScreenTransform) -> None:
+        """截图分辨率变化（例如从状态缩略图切到原生帧）时热更新坐标。"""
+        self.t = transform
+
+    def _ensure_profile_session(self) -> bool:
+        profile = self.layout.devicehub_profile
+        if profile is None or self._profile_failed:
+            return False
+        with self._profile_lock:
+            if self._profile_session_id is not None:
+                return True
+            try:
+                self._profile_session_id = self.device.start_game_session(
+                    profile.name,
+                    lease_ms=PROFILE_LEASE_MS,
+                    require_resolution_match=False,
+                )
+                self._profile_heartbeat = threading.Thread(
+                    target=self._profile_heartbeat_loop,
+                    args=(self._profile_session_id,),
+                    daemon=True,
+                    name="devicehub-game-lease",
+                )
+                self._profile_heartbeat.start()
+                return True
+            except Exception as e:
+                self._profile_failed = True
+                print(f"[input] DeviceHub game session 不可用，回退手势泵：{e}")
+                return False
+
+    def _profile_heartbeat_loop(self, session_id: str) -> None:
+        """Refresh the game lease at the MCP decision rate while the session is live."""
+        while True:
+            time.sleep(PROFILE_REFRESH_INTERVAL_S)
+            failed = False
+            with self._profile_lock:
+                if self._profile_session_id != session_id or self._profile_failed:
+                    return
+                try:
+                    self.device.set_game_input(
+                        session_id,
+                        self._held_profile_keys(),
+                        lease_ms=PROFILE_LEASE_MS,
+                    )
+                except Exception as e:
+                    self._profile_failed = True
+                    self._profile_session_id = None
+                    failed = True
+                    print(f"[input] DeviceHub game session 租约刷新失败，回退触控：{e}")
+                    try:
+                        self.device.stop_game_session(session_id)
+                    except Exception:
+                        pass
+            if failed:
+                self._ensure_pump()
+                return
+
+    def _profile_raw_keys(self, canonical_keys: list[str]) -> list[str]:
+        keys: list[str] = []
+        for key in canonical_keys:
+            raw = self.layout.profile_key(key)
+            if raw is not None and raw not in keys:
+                keys.append(raw)
+        return keys
+
+    def _held_profile_keys(self) -> list[str]:
+        with self._held_lock:
+            return self._profile_raw_keys(list(self._held))
+
+    def _sync_profile_keys(self, keys: list[str] | None = None) -> bool:
+        if not self._ensure_profile_session():
+            return False
+        with self._profile_lock:
+            session_id = self._profile_session_id
+            if session_id is None:
+                return False
+            try:
+                self.device.set_game_input(
+                    session_id,
+                    keys if keys is not None else self._held_profile_keys(),
+                    lease_ms=PROFILE_LEASE_MS,
+                )
+                return True
+            except Exception as e:
+                print(f"[input] DeviceHub game session 输入失败，回退手势泵：{e}")
+                self._profile_failed = True
+                try:
+                    self.device.stop_game_session(session_id)
+                except Exception:
+                    pass
+                self._profile_session_id = None
+                return False
+
+    def _profile_press_raw(self, raw_key: str, hold_ms: int = 80) -> bool:
+        if not self._ensure_profile_session():
+            return False
+        with self._profile_lock:
+            session_id = self._profile_session_id
+            if session_id is None:
+                return False
+            try:
+                held = self._held_profile_keys()
+                if raw_key not in held:
+                    held.append(raw_key)
+                self.device.set_game_input(session_id, held, lease_ms=PROFILE_LEASE_MS)
+                time.sleep(max(25, hold_ms) / 1000)
+                self.device.set_game_input(session_id, self._held_profile_keys(),
+                                           lease_ms=PROFILE_LEASE_MS)
+                return True
+            except Exception as e:
+                print(f"[input] DeviceHub profile 按键失败，回退触控：{e}")
+                self._profile_failed = True
+                try:
+                    self.device.stop_game_session(session_id)
+                except Exception:
+                    pass
+                self._profile_session_id = None
+                return False
+
+    def _profile_press(self, key: str, hold_ms: int = 80) -> bool:
+        raw = self.layout.profile_key(key)
+        return self._profile_press_raw(raw, hold_ms) if raw is not None else False
 
     def _joystick_contact(self, bindings: list[dict]) -> dict | None:
         vx = vy = 0.0
@@ -77,6 +206,9 @@ class InputSimulator:
         others = [s for s in (1, 2, 3, 4) if s != self._active_slot]
         if slot not in others:
             return
+        if self._profile_press(str(slot)):
+            self._active_slot = slot
+            return
         row = others.index(slot) + 1
         x, y = self._button_pos(f"partyRow{row}")
         self.device.tap(x, y, **self._wh)
@@ -85,9 +217,13 @@ class InputSimulator:
     def key_press(self, key: str, hold_ms: int = 80) -> None:
         b = self.layout.binding(key)
         if b is None:
+            if self._profile_press(key, hold_ms):
+                return
             return  # 未映射按键在触控端为空操作
         if b["type"] == "party":
             self.switch_party_slot(int(b["slot"]))
+        elif self._profile_press(key, hold_ms):
+            return
         elif b["type"] == "button":
             x, y = self._button_pos(b["button"])
             self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
@@ -105,16 +241,31 @@ class InputSimulator:
             return
         with self._held_lock:
             self._held[normalize_key(key)] = b
-        self._ensure_pump()
+        if not self._sync_profile_keys():
+            self._ensure_pump()
 
     def key_up(self, key: str) -> None:
         with self._held_lock:
             self._held.pop(normalize_key(key), None)
+        if self._profile_session_id is not None:
+            self._sync_profile_keys()
 
     def release_all(self) -> None:
         with self._held_lock:
             self._held.clear()
             self._pending_camera = None
+        session_id = self._profile_session_id
+        if session_id is not None:
+            with self._profile_lock:
+                try:
+                    self.device.set_game_input(session_id, [], lease_ms=PROFILE_LEASE_MS)
+                except Exception:
+                    pass
+                try:
+                    self.device.stop_game_session(session_id)
+                except Exception:
+                    pass
+                self._profile_session_id = None
 
     # ---- mouse API（BetterGI 语义）----
 
@@ -123,26 +274,47 @@ class InputSimulator:
         self.device.tap(x, y, **self._wh)
 
     def attack(self, hold_ms: int = 80) -> None:
+        if self._profile_press("X", hold_ms):
+            return
         x, y = self._button_pos("attack")
         self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
 
     def charged_attack(self, hold_ms: int = 800) -> None:
+        if self._profile_press("X", hold_ms):
+            return
         x, y = self._button_pos("attack")
         self.device.multi_touch([{"x1": x, "y1": y, "x2": x, "y2": y}], duration_ms=hold_ms, **self._wh)
 
     def move_camera_by(self, dx: float, dy: float) -> None:
-        """相机转动。泵激活时并入下一个手势周期，否则立即滑动。"""
+        """相机转动。泵激活时并入下一个手势周期，否则立即滑动。
+
+        大幅转角拆成多段，保证每段起止点都在安全视角区内——区外起点会被
+        队伍头像等 UI 吃掉手势（实测教训：向左滑起点落在头像列上即失效）。
+        """
         with self._held_lock:
-            if self._held:
+            if self._held and self._profile_session_id is None:
                 p = self._pending_camera or [0.0, 0.0]
                 self._pending_camera = [p[0] + dx, p[1] + dy]
                 return
-        c = self._camera_contact(dx, dy)
-        dist = math.hypot(c["x2"] - c["x1"], c["y2"] - c["y1"])
-        self.device.swipe(c["x1"], c["y1"], c["x2"], c["y2"],
-                          duration_ms=int(min(1000, max(120, dist * 0.8))), **self._wh)
+        nx, ny, nw, nh = self.layout.camera_region
+        max_dx = 0.9 * nw * self.t.device_width / self.t.scale   # ref 像素语义
+        max_dy = 0.9 * nh * self.t.device_height / self.t.scale
+        while abs(dx) > 1 or abs(dy) > 1:
+            sx = max(-max_dx, min(max_dx, dx))
+            sy = max(-max_dy, min(max_dy, dy))
+            c = self._camera_contact(sx, sy)
+            dist = math.hypot(c["x2"] - c["x1"], c["y2"] - c["y1"])
+            self.device.swipe(c["x1"], c["y1"], c["x2"], c["y2"],
+                              duration_ms=int(min(900, max(150, dist * 0.8))), **self._wh)
+            dx -= sx
+            dy -= sy
+            if abs(dx) > 1 or abs(dy) > 1:
+                time.sleep(0.35)
 
     def tap_button(self, name: str, hold_ms: int = 80) -> None:
+        raw = self.layout.profile_key_for_button(name)
+        if raw is not None and self._profile_press_raw(raw, hold_ms):
+            return
         x, y = self._button_pos(name)
         self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
 
