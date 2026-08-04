@@ -28,7 +28,15 @@ class GameContext:
         status = self.device.status()
         if status.get("status") != "connected":
             raise RuntimeError(f"设备未连接（status={status.get('status')}），请检查 DeviceHub Mask")
-        w, h = status["screen_size"]
+        screen_size = status.get("screen_size")
+        if isinstance(screen_size, (list, tuple)) and len(screen_size) == 2:
+            w, h = screen_size
+        else:
+            # A reconnect can briefly expose a connected device before the
+            # first video frame has populated screen_size. capture_bgr() below
+            # replaces this provisional transform with the native frame size.
+            print("[context] 初始 status 暂无 screen_size，先使用 1920x1080 基准等待首帧")
+            w, h = 1920, 1080
         if h > w:
             w, h = h, w
         self.transform = ScreenTransform(int(w), int(h))
@@ -41,6 +49,7 @@ class GameContext:
         # is the authoritative coordinate space for tap/swipe and profile matching.
         try:
             self.capture_bgr()
+            self.refresh_orientation()
         except Exception as e:
             print(f"[context] 初始截图尺寸同步失败（后续重试）：{e}")
         self._start_orientation_watch()
