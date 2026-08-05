@@ -40,6 +40,11 @@ bettergi-scripts-list 脚本 ──bgi-touch convert──▶ 可运行脚本 + 
 `status.screen_size` 可能是视频流缩略尺寸，坐标变换以原生 screenshot 帧为准；
 iPhone 13 Pro Max 横屏逻辑空间约为 `2778x1284`。
 
+DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
+`headless.executable` 改为 `devicehub-headless` 的绝对路径后，MCP 不可用时程序会
+按配置自动启动 headless；可同时设置 `workingDirectory`、`args`、启动超时和
+`shutdownOnExit`。相对路径以该配置文件所在目录为基准。
+
 ## 安装
 
 ```bash

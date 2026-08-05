@@ -47,7 +47,33 @@ bgi-touch --url http://192.168.1.10:8009/mcp status   # 命令行参数
 export BGI_MCP_URL=http://127.0.0.1:8009/mcp          # 环境变量
 ```
 
-### 1.4 DeviceHub 键位 profile
+### 1.4 配置 DeviceHub headless
+
+项目默认读取 `config/devicehub.json`。配置 headless 可执行文件后，CLI、WebUI 和
+脚本运行入口在 MCP 尚未启动时会自动启动它：
+
+```json
+{
+  "mcpUrl": "http://127.0.0.1:8009/mcp",
+  "headless": {
+    "executable": "/opt/devicehub/devicehub-headless",
+    "workingDirectory": "/opt/devicehub",
+    "args": [],
+    "autoStart": true,
+    "startupTimeoutSeconds": 20,
+    "shutdownOnExit": true
+  }
+}
+```
+
+`executable` 也可以写为相对于 `config/devicehub.json` 的路径；省略
+`--mcp-listen` 时程序会根据 `mcpUrl` 自动补上对应监听地址。命令行
+`--url`、环境变量 `BGI_MCP_URL` 的优先级高于配置文件；配置文件路径可由
+`--devicehub-config` 或 `BGI_DEVICEHUB_CONFIG` 覆盖。headless 归档中的
+`devicehub-headless`、`dist/` 和 sidecar 应保持原有相对位置，工作目录通常设为
+归档顶层目录。配置完成后不再需要手工先启动 headless。
+
+### 1.5 DeviceHub 键位 profile
 
 默认读取 DeviceHub Mask 的 `Genshin-Impact-fixed-16by9` profile。程序启动时会先建立
 active device session，再读取 profile；WASD、技能和切人等按键优先通过

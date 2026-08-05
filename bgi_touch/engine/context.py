@@ -9,7 +9,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..device.client import DEFAULT_URL, DeviceClient
+from ..device.client import DeviceClient
+from ..device.config import DeviceHubConfig
 from ..input.layout import DEFAULT_LAYOUT, DeviceHubProfile, ControlLayout
 from ..input.simulator import InputSimulator
 from ..vision.coordinate import ScreenTransform
@@ -20,10 +21,15 @@ DEFAULT_KEYMAP_PROFILE = os.environ.get("BGI_KEYMAP_PROFILE", "Genshin-Impact-fi
 
 
 class GameContext:
-    def __init__(self, mcp_url: str = DEFAULT_URL, layout_path: str | Path = DEFAULT_LAYOUT,
+    def __init__(self, mcp_url: str | None = None, layout_path: str | Path = DEFAULT_LAYOUT,
                  keymap_profile: str | None = DEFAULT_KEYMAP_PROFILE,
-                 keymap_profile_path: str | Path | None = None):
-        self.device = DeviceClient(mcp_url)
+                 keymap_profile_path: str | Path | None = None,
+                 devicehub_config_path: str | Path | None = None):
+        self.devicehub_config = DeviceHubConfig.load(devicehub_config_path)
+        self.device = DeviceClient(
+            mcp_url or self.devicehub_config.mcp_url,
+            headless=self.devicehub_config.headless,
+        )
         self.device.connect_device()
         status = self.device.status()
         if status.get("status") != "connected":

@@ -19,6 +19,7 @@ def _context(args):
         layout_path=args.layout or DEFAULT_LAYOUT,
         keymap_profile=None if args.no_keymap_profile else args.keymap_profile,
         keymap_profile_path=args.keymap_profile_file,
+        devicehub_config_path=args.devicehub_config,
     )
 
 
@@ -215,14 +216,17 @@ def cmd_reconnect(args) -> int:
 
 def cmd_web(args) -> int:
     from .webui.server import serve
-    serve(host=args.host, port=args.port)
+    serve(host=args.host, port=args.port, mcp_url=args.url,
+          devicehub_config_path=args.devicehub_config)
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="bgi-touch",
                                      description="BetterGI 跨平台移植：经 devicehub-mask MCP 自动化 iPhone 端原神")
-    parser.add_argument("--url", default=None, help="MCP 地址（默认 http://127.0.0.1:8009/mcp）")
+    parser.add_argument("--url", default=None, help="MCP 地址（优先于配置文件）")
+    parser.add_argument("--devicehub-config", default=os.environ.get("BGI_DEVICEHUB_CONFIG"),
+                        help="DeviceHub 配置文件（默认 config/devicehub.json）")
     parser.add_argument("--layout", default=os.environ.get("BGI_LAYOUT_PATH"),
                         help="本地触控布局 JSON；支持 config/controls 下的 extends 覆盖")
     parser.add_argument("--keymap-profile", default=os.environ.get(
@@ -267,8 +271,6 @@ def main() -> int:
     p.add_argument("--skip", action="store_true", help="自动剧情推进")
 
     args = parser.parse_args()
-    if args.url is None:
-        args.url = os.environ.get("BGI_MCP_URL", "http://127.0.0.1:8009/mcp")
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
                 "close-game": cmd_close_game,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,

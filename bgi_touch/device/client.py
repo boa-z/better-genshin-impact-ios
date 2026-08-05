@@ -9,7 +9,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
+import subprocess
 import threading
+import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +20,9 @@ from typing import Any
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-DEFAULT_URL = "http://127.0.0.1:8009/mcp"
+from .config import DEFAULT_MCP_URL, HeadlessConfig
+
+DEFAULT_URL = DEFAULT_MCP_URL
 CALL_TIMEOUT_S = 120
 
 
@@ -31,8 +36,9 @@ class ToolResult:
 class DeviceClient:
     """所有坐标均为截图像素坐标；动作调用附带 image_width/height 保证确定性缩放。"""
 
-    def __init__(self, url: str = DEFAULT_URL):
+    def __init__(self, url: str = DEFAULT_URL, headless: HeadlessConfig | None = None):
         self.url = url
+        self.headless = headless
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True, name="mcp-loop")
         self._thread.start()
@@ -43,7 +49,18 @@ class DeviceClient:
         self._mapper = None
         self._last_image_size: tuple[int, int] | None = None
         self._game_session_id: str | None = None
-        self._start_session()
+        self._headless_process: subprocess.Popen | None = None
+        try:
+            self._start_session()
+        except Exception:
+            if headless is None or not headless.auto_start or headless.executable is None:
+                raise
+            self._start_headless()
+            try:
+                self._start_session_until_ready(headless.startup_timeout_s)
+            except Exception:
+                self._stop_headless()
+                raise
 
     # ---- plumbing ----
     # anyio 的 task group 必须在进入它的同一协程内退出，因此把整个会话生命
@@ -77,6 +94,49 @@ class DeviceClient:
         self._session_task = asyncio.run_coroutine_threadsafe(runner(), self._loop)
         ready.result(timeout=CALL_TIMEOUT_S)
 
+    def _start_session_until_ready(self, timeout_s: float) -> None:
+        deadline = time.monotonic() + timeout_s
+        last_error: Exception | None = None
+        while True:
+            try:
+                self._start_session()
+                return
+            except Exception as error:
+                last_error = error
+                self._end_session()
+                if time.monotonic() >= deadline:
+                    raise last_error
+                time.sleep(0.25)
+
+    def _start_headless(self) -> None:
+        assert self.headless is not None
+        executable = self.headless.executable
+        assert executable is not None
+        if executable.is_dir():
+            candidates = (executable / "devicehub-headless", executable / "devicehub-headless.exe")
+            executable = next((candidate for candidate in candidates if candidate.is_file()), executable)
+        if not executable.is_file():
+            raise FileNotFoundError(f"devicehub-mask headless 程序不存在：{executable}")
+        if os.name != "nt" and not os.access(executable, os.X_OK):
+            raise PermissionError(f"devicehub-mask headless 程序不可执行：{executable}")
+        cwd = self.headless.working_directory or executable.parent
+        if not cwd.is_dir():
+            raise NotADirectoryError(f"headless 工作目录不存在：{cwd}")
+        command = HeadlessConfig(
+            executable=executable,
+            working_directory=cwd,
+            args=self.headless.args,
+            auto_start=self.headless.auto_start,
+            startup_timeout_s=self.headless.startup_timeout_s,
+            shutdown_on_exit=self.headless.shutdown_on_exit,
+        ).command(self.url)
+        print(f"[device] MCP 不可用，启动 headless：{' '.join(command)}")
+        self._headless_process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+        )
+
     def _end_session(self) -> None:
         if self._close_event is not None:
             self._loop.call_soon_threadsafe(self._close_event.set)
@@ -93,8 +153,25 @@ class DeviceClient:
             self.stop_game_session()
         except Exception:
             pass
-        self._end_session()
-        self._loop.call_soon_threadsafe(self._loop.stop)
+        finally:
+            self._end_session()
+            self._stop_headless()
+            self._loop.call_soon_threadsafe(self._loop.stop)
+
+    def _stop_headless(self) -> None:
+        process = self._headless_process
+        self._headless_process = None
+        if process is None or process.poll() is not None:
+            return
+        if self.headless is not None and not self.headless.shutdown_on_exit:
+            self._headless_process = process
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
 
     def _reconnect(self) -> None:
         """会话被服务器终止后重建（Streamable HTTP 会话可能因闲置被回收）。"""
