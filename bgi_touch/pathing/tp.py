@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -74,6 +75,19 @@ class TpTask:
 
     # ---- 步骤 ----
 
+    @contextmanager
+    def exclusive_triggers(self):
+        """让地图手势独占设备输入，结束后恢复之前的实时触发器。"""
+        loop = getattr(self.ctx, "_trigger_loop", None)
+        if loop is None or not loop.active:
+            yield
+            return
+        state = loop.pause()
+        try:
+            yield
+        finally:
+            loop.resume(state)
+
     def open_map(self) -> bool:
         for _ in range(3):
             frame = self.ctx.capture_bgr()
@@ -101,6 +115,10 @@ class TpTask:
             dy -= sy
 
     def move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+        with self.exclusive_triggers():
+            return self._move_map_to(wx, wy, timeout_s)
+
+    def _move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
         """Center the visible map on a world coordinate without selecting it."""
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
@@ -131,6 +149,10 @@ class TpTask:
         return float(self._zoom_level)
 
     def set_big_map_zoom_level(self, level: float) -> float:
+        with self.exclusive_triggers():
+            return self._set_big_map_zoom_level(level)
+
+    def _set_big_map_zoom_level(self, level: float) -> float:
         """Best-effort touch equivalent of BetterGI's 1.0..6.0 map zoom."""
         target = max(1.0, min(6.0, float(level)))
         if not self.open_map():
@@ -156,6 +178,10 @@ class TpTask:
         return self._zoom_level
 
     def tp_to_statue(self, timeout_s: float = 30) -> bool:
+        with self.exclusive_triggers():
+            return self._tp_to_statue(timeout_s)
+
+    def _tp_to_statue(self, timeout_s: float = 30) -> bool:
         """Teleport through a visible Statue of the Seven icon."""
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
@@ -230,6 +256,10 @@ class TpTask:
         )
 
     def tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+        with self.exclusive_triggers():
+            return self._tp(wx, wy, timeout_s)
+
+    def _tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
         """传送到世界坐标 (wx, wy) 附近的锚点。"""
         self.log(f"[tp] 目标世界坐标 ({wx:.1f}, {wy:.1f})")
         if not self.open_map():
@@ -242,6 +272,9 @@ class TpTask:
         tol = 0.05 * t.device_width
 
         confirmed = False
+        last_view: tuple[float, float] | None = None
+        stagnant_iterations = 0
+        reverse_attempted = False
         for it in range(20):
             if time.monotonic() > deadline:
                 break
@@ -255,6 +288,11 @@ class TpTask:
             dy_screen = (ty - vy) * px_per_map
             dist = math.hypot(dx_screen, dy_screen)
             self.log(f"[tp] 迭代{it}: 视野中心 256图({vx:.0f},{vy:.0f}) 比例{px_per_map:.2f} 目标偏移 {dist:.0f}px")
+            if last_view is not None and math.hypot(vx - last_view[0], vy - last_view[1]) < 1.0:
+                stagnant_iterations += 1
+            else:
+                stagnant_iterations = 0
+            last_view = (vx, vy)
             if dist <= tol:
                 tap_x = t.device_width / 2 + dx_screen
                 tap_y = t.device_height / 2 + dy_screen
@@ -280,6 +318,14 @@ class TpTask:
                         break
                 self.log("[tp] 未弹出传送确认，微调后重试")
                 self.ctx.sleep(500)
+                continue
+            if stagnant_iterations >= 2:
+                if reverse_attempted:
+                    raise RuntimeError("大地图移动失败：地图拖动未生效")
+                self.log("[tp] 地图拖动无位移，尝试反向校准")
+                self._drag_map(dx_screen, dy_screen)
+                reverse_attempted = True
+                stagnant_iterations = 0
                 continue
             # 拖动地图：目标向中心移动 = 内容朝反方向平移
             self._drag_map(-dx_screen, -dy_screen)

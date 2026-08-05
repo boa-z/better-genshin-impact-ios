@@ -467,7 +467,7 @@ def api_triggers_set(body: dict):
             if body[name]:
                 ctx.enable_trigger(name)
             else:
-                ctx.triggers.triggers = [t for t in ctx.triggers.triggers if t.name != name]
+                ctx.triggers.remove(name)
                 weblog(f"[trigger] 停用 {name}")
         if not ctx.triggers.triggers:
             ctx.triggers.stop()

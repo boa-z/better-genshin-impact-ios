@@ -21,6 +21,43 @@ def test_game_context_cached_frame_returns_copy_without_device_access():
     assert not ctx._last_frame[0, 0].any()
 
 
+def test_trigger_loop_pause_waits_for_frame_and_resume_restores_trigger():
+    from bgi_touch.triggers.loop import TriggerLoop
+
+    frame_seen = threading.Event()
+    calls = []
+
+    class Context:
+        def capture_region(self):
+            return object()
+
+    class Trigger:
+        name = "AutoPick"
+        enabled = True
+
+        def on_frame(self, region):
+            calls.append(region)
+            frame_seen.set()
+
+    loop = TriggerLoop(Context(), interval_s=0.01, log=lambda _: None)
+    trigger = Trigger()
+    loop.add(trigger)
+    loop.start()
+    assert frame_seen.wait(1.0)
+
+    state = loop.pause()
+    assert state[0] == [trigger]
+    assert state[1] is True
+    count = len(calls)
+    time.sleep(0.05)
+    assert len(calls) == count
+
+    loop.resume(state)
+    assert loop.active
+    loop.pause()
+    assert not loop.active
+
+
 def test_dispatcher_passes_bettergi_force_interaction_config():
     from bgi_touch.tasks.dispatcher import TaskDispatcher
 

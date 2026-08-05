@@ -118,7 +118,7 @@ class PathingExecutor:
         if previous is None:
             loop.clear()
         else:
-            loop.triggers = previous
+            loop.replace(previous)
             if previous:
                 loop.start()
 

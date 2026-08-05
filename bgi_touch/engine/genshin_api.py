@@ -128,18 +128,22 @@ class GenshinApi:
             from ..pathing.tp import TpTask
             self._tp_task = TpTask(self.ctx, log=self.log)
         last_error = None
-        for attempt in range(3):
-            try:
-                result = self._tp_task.tp(float(x), float(y))
-                if result and self._positioner is not None:
-                    self._positioner.set_prior(float(x), float(y))
-                return result
-            except RuntimeError as error:
-                last_error = error
-                if attempt >= 2:
-                    raise
-                self.log(f"[tp] 传送确认失败，重试 {attempt + 1}/2：{error}")
-                self.ctx.sleep(1000)
+        # Keep AutoPick/AutoSkip paused across retries as well. Restoring a
+        # trigger during the one-second retry gap can press F on the map and
+        # leave the next attempt with an already disturbed touch state.
+        with self._tp_task.exclusive_triggers():
+            for attempt in range(3):
+                try:
+                    result = self._tp_task.tp(float(x), float(y))
+                    if result and self._positioner is not None:
+                        self._positioner.set_prior(float(x), float(y))
+                    return result
+                except RuntimeError as error:
+                    last_error = error
+                    if attempt >= 2:
+                        raise
+                    self.log(f"[tp] 传送确认失败，重试 {attempt + 1}/2：{error}")
+                    self.ctx.sleep(1000)
         if last_error is not None:
             raise last_error
         raise RuntimeError("传送失败：未知原因")
