@@ -174,13 +174,15 @@ def cmd_pathing(args) -> int:
     from .pathing.executor import PathingExecutor
     from .pathing.model import PathingTask
     task = PathingTask.load(args.file)
+    task.validate()
     print(json.dumps(task.summary(), ensure_ascii=False, indent=2))
     if args.dry_run:
         return 0
     ctx = _context(args)
-    PathingExecutor(ctx, party_slots=_load_party()).run(task)
-    ctx.close()
-    return 0
+    try:
+        return 0 if PathingExecutor(ctx, party_slots=_load_party()).run(task) else 1
+    finally:
+        ctx.close()
 
 
 def cmd_trigger(args) -> int:

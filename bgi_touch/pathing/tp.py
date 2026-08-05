@@ -169,14 +169,29 @@ class TpTask:
         self.ctx.sleep(max(1000, int(timeout_s * 1000 / 10)))
         return True
 
+    # 候选列表里可点的传送目标类型（点位重叠时弹出）
+    _ANCHOR_ENTRIES = ("传送锚点", "七天神像", "秘境", "浪船锚点", "壶中洞天")
+
     def _find_and_tap_confirm(self) -> bool:
-        """在弹出卡片中找「传送」并点击。"""
-        region = self.ctx.capture_region()
-        hits = region.find_multi(RecognitionObject.ocr(960, 200, 960, 880), limit=20)
-        for h in hits:
-            if "传送" in h.text and "锚点" not in h.text and "追踪" not in h.text:
-                h.click()
-                return True
+        """两段式确认：①候选列表选「传送锚点/七天神像/…」②点最终「传送」按钮。"""
+        for _ in range(3):
+            region = self.ctx.capture_region()
+            hits = region.find_multi(RecognitionObject.ocr(900, 100, 1020, 980), limit=25)
+            # 最终确认按钮：短文本「传送」
+            for h in hits:
+                t = h.text.strip().replace(" ", "")
+                if t == "传送" or (t.endswith("传送") and len(t) <= 4):
+                    self.log(f"[tp] 点击确认「{h.text.strip()}」")
+                    h.click()
+                    return True
+            # 候选列表条目
+            entry = next((h for h in hits
+                          if any(k in h.text for k in self._ANCHOR_ENTRIES)), None)
+            if entry is None:
+                return False
+            self.log(f"[tp] 选择候选「{entry.text.strip()}」")
+            entry.click()
+            self.ctx.sleep(1200)
         return False
 
     def _tap_anchor_icon_near_center(self) -> bool:
@@ -208,6 +223,7 @@ class TpTask:
         t = self.ctx.transform
         tol = 0.05 * t.device_width
 
+        confirmed = False
         for it in range(14):
             if time.monotonic() > deadline:
                 break
@@ -229,18 +245,20 @@ class TpTask:
                                     image_height=t.device_height)
                 self.ctx.sleep(1200)
                 if self._find_and_tap_confirm():
+                    confirmed = True
                     break
                 if self._tap_anchor_icon_near_center():
                     self.ctx.sleep(1200)
                     if self._find_and_tap_confirm():
+                        confirmed = True
                         break
                 self.log("[tp] 未弹出传送确认，微调后重试")
                 self.ctx.sleep(500)
                 continue
             # 拖动地图：目标向中心移动 = 内容朝反方向平移
             self._drag_map(-dx_screen, -dy_screen)
-        else:
-            raise RuntimeError("传送失败：迭代耗尽仍未点到锚点")
+        if not confirmed:
+            raise RuntimeError("传送失败：未能完成锚点确认（迭代/超时耗尽）")
 
         # 等待传送加载完成（回到主界面）
         self.log("[tp] 已确认传送，等待加载…")

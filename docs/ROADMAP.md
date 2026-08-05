@@ -9,17 +9,28 @@
 - AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）和
   AutoOpenChest 的可测试 Python 实现。
 
+## 已完成 — 地图追踪离线核心
+
+- 对齐 BetterGI pathing JSON 的 `moveMode`/`pointExtParams`/异常处理和实时触发器配置。
+- 小地图定位支持短缓存、局部优先、全局回退和异常跳点过滤；连续丢失时会重置匹配状态。
+- 地图追踪支持传送、方位点、走点反馈、卡死脱困、失败重试和常用采集/战斗动作。
+- CLI/WebUI/JS 入口共用 `PathingExecutor`，样例路线可以直接 `--dry-run` 校验。
+
 ## P0 — pathing 真机稳定性
 
 离线链路已可用，剩余工作是不同地图/设备上的真机调参：
 
-1. **小地图定位**（`bgi_touch/pathing/executor.py` 的 `Positioner` 协议）
+1. **小地图定位**（`bgi_touch/pathing/positioner.py`）
    - 小地图裁剪 → SIFT/模板匹配到大地图，特征数据来自原版地图资产。
-   - 当前支持上次位置附近的局部搜索，失败后回退全局搜索；相机朝向检测为简化实现。
+   - 当前支持短缓存、上次位置附近的局部搜索、全局回退和跳点过滤；相机朝向检测仍为简化实现。
 2. **大地图传送**（`PathingExecutor._teleport`）
    - 打开地图 → 按世界坐标拖动地图 → 点传送锚点 → OCR/模板确认。
    - `genshin.moveMapTo`、`set/getBigMapZoomLevel` 和可见七天神像传送已接入；
      pinch 缩放仍需在真机上校准等级与手势增益。
+
+3. **真机路线回归**
+   - 优先验证短路线和包含 `teleport`、`target`、`combat_script`、`nahida_collect`、
+     `mining` 的路线；确认完成后执行 `bgi-touch close-game` 挂起原神。
 
 ## P1 — 实时触发器与任务视觉回归
 

@@ -65,7 +65,8 @@ bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼�
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
 bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
-bgi-touch pathing 路线.json --dry-run   # 解析 pathing 文件
+bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
+bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
 bgi-touch web                          # WebUI 控制台（实况画面/点按/脚本管理）
 ```
 
@@ -91,10 +92,10 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |
 | WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
-| 小地图 SIFT 定位（官方特征库，全局1s/追踪0.05s） | ✅ 真机验证 |
+| 小地图 SIFT 定位（官方特征库、局部/全局回退、跳点过滤） | ✅ 离线验证 |
 | 大地图传送 genshin.tp（SIFT 比例自适应拖动+OCR确认） | ⚠️ 已实现，待真机回归验证 |
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
-| pathing 执行（定位+走点+动作） | ⚠️ 全链路就绪，待真机路线实测 |
+| pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路，待真机路线实测 |
 | 实时触发器（AutoPick OCR拾取 / AutoSkip 剧情推进） | ⚠️ 已实现，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |

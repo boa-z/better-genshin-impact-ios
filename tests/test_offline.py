@@ -221,6 +221,124 @@ def test_task_dispatcher_declares_migrated_core_tasks():
         TaskDispatcher(object()).run_task({"name": "AutoBoss", "config": {}})
 
 
+def test_pathing_model_preserves_bettergi_extensions():
+    from bgi_touch.pathing.model import PathingTask
+
+    task = PathingTask.parse({
+        "info": {
+            "name": "兼容路线",
+            "mapName": "Teyvat",
+            "mapMatchMethod": "SIFT",
+        },
+        "config": {"realtimeTriggers": {"AutoPick": False, "AutoSkip": True}},
+        "positions": [{
+            "id": 7,
+            "x": 10,
+            "y": 20,
+            "type": "target",
+            "moveMode": "run",
+            "action": "log_output",
+            "actionParams": "arrived",
+            "pointExtParams": {
+                "monsterTag": "elite",
+                "enableMonsterLootSplit": True,
+                "misidentification": {
+                    "type": ["unrecognized", "pathTooFar"],
+                    "handlingMode": "previousDetectedPoint",
+                    "arrivalTime": 1200,
+                },
+            },
+        }],
+    })
+
+    task.validate()
+    assert task.map_name == "Teyvat"
+    assert task.realtime_triggers == {"AutoPick": False, "AutoSkip": True}
+    point = task.positions[0]
+    assert point.move_mode == "run"
+    assert point.monster_tag == "elite"
+    assert point.enable_monster_loot_split
+    assert point.misidentification.types == ["unrecognized", "pathTooFar"]
+    assert point.misidentification.arrival_time == 1200
+
+
+def test_minimap_stable_position_rejects_jump_after_global_retry():
+    from bgi_touch.pathing.positioner import MinimapPositioner
+
+    positioner = object.__new__(MinimapPositioner)
+    positioner._last_position = (0.0, 0.0)
+    positioner._last_fix_at = 0.0
+
+    class Locator:
+        def __init__(self):
+            self.reset_count = 0
+
+        def reset(self):
+            self.reset_count += 1
+
+    positioner.locator = Locator()
+    positions = iter([(1000.0, 1000.0), (1000.0, 1000.0)])
+    positioner.get_position = lambda frame: next(positions)
+
+    assert positioner.get_position_stable(object(), cache_time_ms=0, max_jump=100) is None
+    assert positioner.locator.reset_count == 1
+
+
+def test_pathing_executor_reaches_waypoint_and_runs_action():
+    from unittest.mock import MagicMock
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import PathingTask
+
+    ctx = MagicMock()
+    ctx.input = MagicMock()
+    ctx.sleep = lambda ms: None
+    positioner = MagicMock()
+    positioner.get_position_stable.return_value = (10.0, 20.0)
+    task = PathingTask.parse({
+        "info": {"name": "offline", "map_name": "Teyvat"},
+        "config": {"realtime_triggers": {}},
+        "positions": [{
+            "id": 1, "x": 10, "y": 20, "type": "target",
+            "action": "log_output", "action_params": "done",
+        }],
+    })
+    logs = []
+
+    assert PathingExecutor(ctx, positioner=positioner, log=logs.append).run(task)
+    assert any("done" in line for line in logs)
+    ctx.input.release_all.assert_called_once()
+
+
+def test_pathing_executor_handles_four_leaf_before_movement():
+    from unittest.mock import MagicMock
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import PathingTask
+
+    ctx = MagicMock()
+    ctx.input = MagicMock()
+    ctx.sleep = lambda ms: None
+    positioner = MagicMock()
+    executor = PathingExecutor(ctx, positioner=positioner, log=lambda _: None)
+    executor._face_to = MagicMock()
+    executor._do_action = MagicMock()
+    executor._move_to = MagicMock()
+    task = PathingTask.parse({
+        "info": {"name": "leaf", "map_name": "Teyvat"},
+        "config": {"realtime_triggers": {}},
+        "positions": [{
+            "id": 1, "x": 10, "y": 20, "type": "path",
+            "action": "up_down_grab_leaf",
+        }],
+    })
+
+    assert executor.run(task)
+    executor._face_to.assert_called_once_with(task.positions[0])
+    executor._do_action.assert_called_once_with(task.positions[0])
+    executor._move_to.assert_not_called()
+
+
 # ---- 地图定位（需要资产与夹具，缺则跳过）----
 
 @pytest.mark.skipif(not (ASSETS / "Teyvat" / "Teyvat_0_2048_SIFT.kp.bin").exists(),
