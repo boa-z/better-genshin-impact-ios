@@ -149,7 +149,16 @@ class TaskDispatcher:
     def add_timer(self, timer: Any) -> None:
         name = str(_value(timer, "name", timer))
         self.ctx.triggers.clear()
-        self.ctx.enable_trigger(name)
+        if name == "AutoPick":
+            config = _value(timer, "config", {}) or {}
+            force_interaction = _value(
+                config,
+                "forceInteraction",
+                _value(config, "force_interaction", False),
+            )
+            self.ctx.enable_trigger(name, force_interaction=bool(force_interaction))
+        else:
+            self.ctx.enable_trigger(name)
 
     def add_trigger(self, trigger: Any) -> None:
         self.ctx.enable_trigger(str(_value(trigger, "name", trigger)))

@@ -127,10 +127,22 @@ class GenshinApi:
         if self._tp_task is None:
             from ..pathing.tp import TpTask
             self._tp_task = TpTask(self.ctx, log=self.log)
-        result = self._tp_task.tp(float(x), float(y))
-        if result and self._positioner is not None:
-            self._positioner.set_prior(float(x), float(y))
-        return result
+        last_error = None
+        for attempt in range(3):
+            try:
+                result = self._tp_task.tp(float(x), float(y))
+                if result and self._positioner is not None:
+                    self._positioner.set_prior(float(x), float(y))
+                return result
+            except RuntimeError as error:
+                last_error = error
+                if attempt >= 2:
+                    raise
+                self.log(f"[tp] 传送确认失败，重试 {attempt + 1}/2：{error}")
+                self.ctx.sleep(1000)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("传送失败：未知原因")
 
     def moveMapTo(self, x, y, country=None):
         if self._tp_task is None:

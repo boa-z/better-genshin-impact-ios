@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.request
 from pathlib import Path
@@ -42,6 +43,54 @@ CASE_PROXY = """
   });
 })
 """
+
+_SCRIPT_ERROR_MARKER = "__BGI_SCRIPT_ERROR__"
+
+
+def _repair_js_text(text: str) -> str:
+    """Repair PythonMonkey's UTF-8 text decoded as Latin-1."""
+    value = str(text)
+    if not value or any(ord(char) > 255 for char in value):
+        return value
+    try:
+        repaired = value.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        return value
+    mojibake = "ÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß" \
+                "äåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
+    old_score = sum(value.count(char) for char in mojibake)
+    new_score = sum(repaired.count(char) for char in mojibake)
+    return repaired if new_score < old_score else value
+
+
+def _script_error_message(value: str) -> str:
+    text = _repair_js_text(value)
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), text)
+    if "Python RuntimeError: " in first_line:
+        return first_line.split("Python RuntimeError: ", 1)[1]
+    if first_line.startswith("Error: "):
+        return first_line.removeprefix("Error: ")
+    return first_line
+
+
+def _unwrap_async_iife(source: str) -> str:
+    """Await the common BetterGI ``(async function () { ... })();`` form."""
+    stripped = source.strip()
+    start = stripped.find("(async function")
+    if start < 0:
+        start = stripped.find("(async () =>")
+    if start < 0:
+        return source
+    prefix = stripped[:start]
+    if not re.fullmatch(r"(?:\s|//[^\n]*(?:\n|$)|/\*.*?\*/)*", prefix, re.S):
+        return source
+    end_marker = "})();"
+    if not stripped.endswith(end_marker):
+        return source
+    open_brace = stripped.find("{", start)
+    if open_brace < 0 or open_brace >= len(stripped) - len(end_marker):
+        return source
+    return stripped[open_brace + 1:-len(end_marker)]
 
 
 class ScriptCancelled(Exception):
@@ -325,13 +374,35 @@ class JsScriptRuntime:
 
     def run(self, entry: str | None = None) -> Any:
         main = entry or self.manifest.get("main") or "main.js"
-        code = (self.script_dir / main).read_text(encoding="utf-8")
+        code = _unwrap_async_iife((self.script_dir / main).read_text(encoding="utf-8"))
         import asyncio
 
         async def _drive():
             # pythonmonkey 的 Promise/await 机制要求存在运行中的 asyncio 循环
-            promise = self.pm.eval(f"(async () => {{ {code} \n }})()")
-            return await promise
+            wrapper = (
+                "(async () => {"
+                "try {"
+                f"{code}\n"
+                "} catch (error) {"
+                f"return {json.dumps(_SCRIPT_ERROR_MARKER)} + JSON.stringify({{"
+                "message: String(error),"
+                "stack: error && error.stack ? String(error.stack) : ''"
+                "});"
+                "}"
+                "})()"
+            )
+            result = await self.pm.eval(wrapper)
+            if isinstance(result, str) and result.startswith(_SCRIPT_ERROR_MARKER):
+                raw = result[len(_SCRIPT_ERROR_MARKER):]
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    raise RuntimeError(_script_error_message(raw)) from None
+                raw_message = str(payload.get("message", raw))
+                if "ScriptCancelled" in raw_message:
+                    raise ScriptCancelled() from None
+                raise RuntimeError(_script_error_message(raw_message)) from None
+            return result
 
         try:
             return asyncio.run(_drive())

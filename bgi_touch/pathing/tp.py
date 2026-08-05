@@ -67,6 +67,10 @@ class TpTask:
         # Touch zoom has no reliable semantic level from DeviceHub. Keep the
         # BetterGI 1..6 scale in-process and use pinch gestures for changes.
         self._zoom_level = 3.0
+        self._go_teleport = RecognitionObject.template_match(
+            Mat.from_file(str(TEMPLATES / "GoTeleport.png")), 1440, 960, 100, 120
+        )
+        self._go_teleport.threshold = 0.7
 
     # ---- 步骤 ----
 
@@ -174,8 +178,15 @@ class TpTask:
 
     def _find_and_tap_confirm(self) -> bool:
         """两段式确认：①候选列表选「传送锚点/七天神像/…」②点最终「传送」按钮。"""
-        for _ in range(3):
+        for _ in range(4):
             region = self.ctx.capture_region()
+            # The confirmation control is a stable icon and is faster/more
+            # reliable than OCR on the small iOS panel.
+            button = region.find(self._go_teleport)
+            if button.is_exist():
+                self.log("[tp] 点击确认传送按钮")
+                button.click()
+                return True
             hits = region.find_multi(RecognitionObject.ocr(900, 100, 1020, 980), limit=25)
             # 最终确认按钮：短文本「传送」
             for h in hits:
@@ -194,22 +205,29 @@ class TpTask:
             self.ctx.sleep(1200)
         return False
 
-    def _tap_anchor_icon_near_center(self) -> bool:
-        """回退：模板匹配屏幕中央附近的传送锚点/神像图标并点击最近者。"""
+    def _tap_anchor_icon_near(self, x: float, y: float, max_distance: float) -> bool:
+        """模板匹配目标附近的传送锚点/神像图标并点击最近者。"""
         region = self.ctx.capture_region()
-        t = self.ctx.transform
-        cx, cy = t.device_width / 2, t.device_height / 2
         best = None
         for name in ("TeleportWaypoint", "StatueOfTheSeven", "Domain"):
             tpl = Mat.from_file(str(TEMPLATES / f"{name}.png"))
             for h in region.find_multi(RecognitionObject.template_match(tpl), limit=5):
-                d = math.hypot(h.dx + h.dw / 2 - cx, h.dy + h.dh / 2 - cy)
+                d = math.hypot(h.dx + h.dw / 2 - x, h.dy + h.dh / 2 - y)
                 if best is None or d < best[0]:
                     best = (d, h)
-        if best and best[0] < 0.25 * t.device_width:
+        if best and best[0] <= max_distance:
             best[1].click()
             return True
         return False
+
+    def _tap_anchor_icon_near_center(self) -> bool:
+        """回退：模板匹配屏幕中央附近的传送锚点/神像图标并点击最近者。"""
+        t = self.ctx.transform
+        return self._tap_anchor_icon_near(
+            t.device_width / 2,
+            t.device_height / 2,
+            0.25 * t.device_width,
+        )
 
     def tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
         """传送到世界坐标 (wx, wy) 附近的锚点。"""
@@ -224,7 +242,7 @@ class TpTask:
         tol = 0.05 * t.device_width
 
         confirmed = False
-        for it in range(14):
+        for it in range(20):
             if time.monotonic() > deadline:
                 break
             view = self.big.locate_view(self.ctx.capture_bgr())
@@ -238,11 +256,19 @@ class TpTask:
             dist = math.hypot(dx_screen, dy_screen)
             self.log(f"[tp] 迭代{it}: 视野中心 256图({vx:.0f},{vy:.0f}) 比例{px_per_map:.2f} 目标偏移 {dist:.0f}px")
             if dist <= tol:
-                # 目标已接近中心：点它
                 tap_x = t.device_width / 2 + dx_screen
                 tap_y = t.device_height / 2 + dy_screen
-                self.ctx.device.tap(tap_x, tap_y, image_width=t.device_width,
-                                    image_height=t.device_height)
+                # BetterGI first resolves the nearest teleport-point icon. A
+                # route coordinate is often close to, but not exactly on, the
+                # interactive icon, especially for resource collection routes.
+                selected_icon = self._tap_anchor_icon_near(
+                    tap_x,
+                    tap_y,
+                    max(0.10 * t.device_width, 1.8 * tol),
+                )
+                if not selected_icon:
+                    self.ctx.device.tap(tap_x, tap_y, image_width=t.device_width,
+                                        image_height=t.device_height)
                 self.ctx.sleep(1200)
                 if self._find_and_tap_confirm():
                     confirmed = True

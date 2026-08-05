@@ -49,6 +49,11 @@ class TriggerLoop:
     def stop(self) -> None:
         self._stop.set()
 
+    @property
+    def active(self) -> bool:
+        return bool(self.triggers and self._thread and self._thread.is_alive()
+                    and not self._stop.is_set())
+
     def _run(self) -> None:
         self.log(f"[trigger] 帧循环启动（{1/self.interval:.1f} fps）")
         while not self._stop.is_set():

@@ -173,7 +173,9 @@ async function refreshShot() {
     const blob = await r.blob();
     const old = img.src; img.src = URL.createObjectURL(blob);
     if (old) URL.revokeObjectURL(old);
-    $('#shotinfo').textContent = `${Math.round(performance.now()-t0)} ms · ${(blob.size/1024)|0} KB`;
+    const age = r.headers.get('x-screenshot-frame-age-ms');
+    $('#shotinfo').textContent = `${Math.round(performance.now()-t0)} ms · ${(blob.size/1024)|0} KB` +
+      (age ? ` · 帧龄 ${age} ms` : '');
   } catch (e) { $('#shotinfo').textContent = `截图失败: ${e.message}`; }
   schedule();
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -25,6 +26,9 @@ class GameContext:
                  keymap_profile: str | None = DEFAULT_KEYMAP_PROFILE,
                  keymap_profile_path: str | Path | None = None,
                  devicehub_config_path: str | Path | None = None):
+        self._frame_lock = threading.Lock()
+        self._last_frame: np.ndarray | None = None
+        self._last_frame_at = 0.0
         self.devicehub_config = DeviceHubConfig.load(devicehub_config_path)
         self.device = DeviceClient(
             mcp_url or self.devicehub_config.mcp_url,
@@ -155,7 +159,22 @@ class GameContext:
         t = self.transform
         if (img.shape[1], img.shape[0]) != (t.device_width, t.device_height):
             img = cv2.resize(img, (t.device_width, t.device_height))
+        with self._frame_lock:
+            self._last_frame = img
+            self._last_frame_at = time.monotonic()
         return img
+
+    def cached_frame(self) -> tuple[np.ndarray | None, float]:
+        """Return a copy of the latest frame without requesting a device screenshot.
+
+        Web preview callers use this path so their polling cannot add MCP screenshot
+        requests while a task or a realtime trigger is consuming the capture stream.
+        """
+        with self._frame_lock:
+            if self._last_frame is None:
+                return None, float("inf")
+            age = max(0.0, time.monotonic() - self._last_frame_at)
+            return self._last_frame.copy(), age
 
     def capture_region(self) -> ImageRegion:
         return ImageRegion(self, self.capture_bgr())

@@ -48,6 +48,9 @@ _ctx: GameContext | None = None
 _ctx_lock = threading.Lock()
 _mcp_url: str | None = None
 _devicehub_config_path: str | Path | None = None
+_preview_refresh_lock = threading.Lock()
+_preview_refresh_thread: threading.Thread | None = None
+_PREVIEW_STALE_S = 1.25
 
 
 def get_ctx() -> GameContext:
@@ -85,6 +88,10 @@ class TaskRunner:
 
     def status(self) -> dict:
         return dict(self.info)
+
+    def is_running(self) -> bool:
+        with self.lock:
+            return bool(self.thread and self.thread.is_alive())
 
     def start(self, kind: str, path: str, settings: dict | None = None) -> None:
         with self.lock:
@@ -160,6 +167,53 @@ class TaskRunner:
 runner = TaskRunner()
 
 
+def _capture_is_busy(ctx: GameContext) -> bool:
+    """Do not create a competing screenshot producer during automation."""
+    loop = getattr(ctx, "_trigger_loop", None)
+    return runner.is_running() or bool(loop and loop.active)
+
+
+def _refresh_preview_in_background(ctx: GameContext) -> None:
+    global _preview_refresh_thread
+    try:
+        if not _capture_is_busy(ctx):
+            ctx.capture_bgr()
+    except Exception:
+        # Preview refresh is opportunistic; the next request can use the last frame
+        # or retry once the device is idle.
+        pass
+    finally:
+        with _preview_refresh_lock:
+            _preview_refresh_thread = None
+
+
+def _schedule_preview_refresh(ctx: GameContext) -> None:
+    global _preview_refresh_thread
+    if _capture_is_busy(ctx):
+        return
+    with _preview_refresh_lock:
+        if _preview_refresh_thread and _preview_refresh_thread.is_alive():
+            return
+        _preview_refresh_thread = threading.Thread(
+            target=_refresh_preview_in_background,
+            args=(ctx,),
+            daemon=True,
+            name="web-preview-refresh",
+        )
+        _preview_refresh_thread.start()
+
+
+def _preview_frame(ctx: GameContext) -> tuple[object, float]:
+    frame, age = ctx.cached_frame()
+    if frame is None:
+        # GameContext normally seeds the cache during initialization. Keep a
+        # synchronous fallback for direct/test construction.
+        return ctx.capture_bgr().copy(), 0.0
+    if age > _PREVIEW_STALE_S:
+        _schedule_preview_refresh(ctx)
+    return frame, age
+
+
 # ---- 页面与状态 ----
 
 @app.get("/")
@@ -187,7 +241,7 @@ def api_status():
 def api_screenshot(annotate: int = 0, w: int = 1408, q: int = 70):
     try:
         ctx = get_ctx()
-        img = ctx.capture_bgr()
+        img, frame_age = _preview_frame(ctx)
         if annotate:
             _draw_layout(ctx, img)
         if 0 < w < img.shape[1]:
@@ -197,7 +251,11 @@ def api_screenshot(annotate: int = 0, w: int = 1408, q: int = 70):
         if not ok:
             raise RuntimeError("JPEG 编码失败")
         return Response(buf.tobytes(), media_type="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+                        headers={
+                            "Cache-Control": "no-store",
+                            "X-Screenshot-Frame-Age-Ms": str(round(frame_age * 1000)),
+                            "X-Screenshot-Cached": "1",
+                        })
     except Exception as e:
         return _err(e)
 
