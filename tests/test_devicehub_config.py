@@ -66,3 +66,37 @@ def test_headless_start_uses_configured_executable_and_working_directory(tmp_pat
     ]
     assert popen.call_args.kwargs["cwd"] == str(tmp_path)
     assert client._headless_process is process
+
+
+def test_device_client_uses_exact_selection_id_and_tracks_frame_versions():
+    from bgi_touch.device.client import DeviceClient, ToolResult
+
+    client = DeviceClient.__new__(DeviceClient)
+    calls = []
+
+    def fake_call(name, **kwargs):
+        calls.append((name, kwargs))
+        if name == "status":
+            return ToolResult({
+                "device_id": "udid::usb",
+                "screen_size": [1296, 2816],
+            }, None, None)
+        if name == "connect_device":
+            return ToolResult({"connected": True}, None, None)
+        if name == "wait_for_frame":
+            return ToolResult({"frame_version": 42, "ready": True}, None, None)
+        raise AssertionError(name)
+
+    client.call = fake_call
+    client._last_frame_version = None
+    assert client.connect_device() == {"connected": True}
+    assert calls[1] == ("connect_device", {"udid": "udid::usb"})
+    assert client.wait_for_frame(after_version=41, timeout_ms=500)["frame_version"] == 42
+
+
+def test_device_client_portrait_mapper_preserves_landscape_dimensions():
+    from bgi_touch.device.client import DeviceClient
+
+    client = DeviceClient.__new__(DeviceClient)
+    client._mapper = lambda x, y, iw=None, ih=None: (ih - y, x, ih, iw)
+    assert client._map(100, 200, 2778, 1284) == (1084, 100, 1284, 2778)

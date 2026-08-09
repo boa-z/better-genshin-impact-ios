@@ -203,7 +203,11 @@ class JsScriptRuntime:
         expose("getAvatars", lambda: list(self.party_slots.keys()))
         expose("inputText", lambda text: ctx.device.paste_text(str(text)))
         expose("setGameMetrics", lambda w, h, dpi=1: None)
-        expose("getGameMetrics", lambda: [1920, 1080, 1.0])
+        expose("getGameMetrics", lambda: [
+            ctx.transform.device_width,
+            ctx.transform.device_height,
+            ctx.transform.scale,
+        ])
 
         # 键鼠
         expose("keyDown", lambda k: ctx.input.key_down(str(k)))
@@ -347,6 +351,21 @@ class JsScriptRuntime:
             def runAutoCookTask(self, param=None): return task_dispatcher.run_auto_cook_task(param)
             def runAutoFishingTask(self, param=None): return task_dispatcher.run_auto_fishing_task(param)
             def runAutoOpenChestTask(self, param=None): return task_dispatcher.run_auto_open_chest_task(param)
+            def runAutoEatTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_eat_task(param, ct)
+            def runAutoMusicGameTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_music_game_task(param, ct)
+            def runAutoAlbumTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_album_task(param, ct)
+            def runAutoAlbum(self, param=None, ct=None):
+                return task_dispatcher.run_auto_album_task(param, ct)
+            def runAutoGeniusInvokationTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_genius_invokation_task(param, ct)
+            def runAutoStygianOnslaughtTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_stygian_onslaught_task(param, ct)
+            def runAutoBossTask(self, param=None): return task_dispatcher.run_auto_boss_task(param)
+            def runAutoLeyLineTask(self, param=None): return task_dispatcher.run_auto_leyline_task(param)
+            def runAutoLeyLineOutcropTask(self, param=None): return task_dispatcher.run_auto_leyline_task(param)
             def runCombatScript(self, script, avatar=None):
                 return task_dispatcher.run_combat_script(str(script), avatar)
             def addTimer(self, timer):

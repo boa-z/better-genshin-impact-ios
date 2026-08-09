@@ -94,7 +94,15 @@ class TpTask:
             if self.big.locate_view(frame) is not None:
                 return True
             self.ctx.input.tap_button("map")
-            self.ctx.sleep(1800)
+            self.ctx.sleep(900)
+            try:
+                frame = self.ctx.capture_bgr_after_frame(
+                    self.ctx.device.last_frame_version, timeout_ms=1800
+                )
+            except Exception:
+                frame = self.ctx.capture_bgr()
+            if self.big.locate_view(frame) is not None:
+                return True
         return self.big.locate_view(self.ctx.capture_bgr()) is not None
 
     def _drag_map(self, dx: float, dy: float) -> None:
@@ -108,9 +116,17 @@ class TpTask:
             # 起点选屏幕中央偏移，避开左上返回键与右下 UI
             x0 = W * 0.5 - sx / 2
             y0 = H * 0.5 - sy / 2
+            before = self.ctx.device.last_frame_version
             self.ctx.device.swipe(x0, y0, x0 + sx, y0 + sy, duration_ms=650,
                                   image_width=W, image_height=H)
-            self.ctx.sleep(900)  # 等惯性衰减
+            if before is not None:
+                try:
+                    self.ctx.device.wait_for_frame(before, timeout_ms=1800)
+                except Exception:
+                    # Older headless builds do not expose frame cursors; the
+                    # settle delay below remains the compatibility fallback.
+                    pass
+            self.ctx.sleep(700)  # 等惯性衰减
             dx -= sx
             dy -= sy
 
@@ -130,7 +146,17 @@ class TpTask:
         for it in range(14):
             if time.monotonic() > deadline:
                 break
-            view = self.big.locate_view(self.ctx.capture_bgr())
+            # DeviceHub's legacy screenshot endpoint can legally return the
+            # last decoded frame while its capture worker is busy. Waiting on
+            # the frame cursor keeps map feedback tied to the swipe we just
+            # issued and also avoids competing with the WebUI preview poller.
+            try:
+                frame = self.ctx.capture_bgr_after_frame(
+                    self.ctx.device.last_frame_version, timeout_ms=2200
+                )
+            except Exception:
+                frame = self.ctx.capture_bgr()
+            view = self.big.locate_view(frame)
             if view is None:
                 self.log("[tp] 大地图视野匹配失败，重试")
                 self.ctx.sleep(800)
@@ -176,6 +202,43 @@ class TpTask:
                 self.ctx.sleep(350)
         self._zoom_level = target
         return self._zoom_level
+
+    def click_map_point(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+        """Center a world coordinate and click the nearest map point once."""
+        with self.exclusive_triggers():
+            if not self.open_map():
+                raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
+            self._move_map_to(wx, wy, timeout_s)
+            frame = self.ctx.capture_bgr()
+            view = self.big.locate_view(frame)
+            if view is None:
+                raise RuntimeError("点击地图点前视野匹配失败")
+            t = self.ctx.transform
+            tx2048, ty2048 = self.config.world_to_image(wx, wy)
+            tx, ty = tx2048 / 8, ty2048 / 8
+            tap_x = t.device_width / 2 + (tx - view[0]) * view[2]
+            tap_y = t.device_height / 2 + (ty - view[1]) * view[2]
+            selected = self._tap_anchor_icon_near(
+                tap_x, tap_y, max(0.10 * t.device_width, 0.12 * t.device_width)
+            )
+            if not selected:
+                self.ctx.device.tap(
+                    tap_x,
+                    tap_y,
+                    image_width=t.device_width,
+                    image_height=t.device_height,
+                )
+            self.ctx.sleep(1000)
+            return True
+
+    def move_independent_map_to(self, wx: float, wy: float, map_name: str,
+                                timeout_s: float = 90) -> bool:
+        """Move a named map when its local feature assets are available."""
+        if map_name != "Teyvat":
+            raise NotImplementedError(
+                f"独立地图 {map_name} 缺少 iOS 地图特征资产（当前仅支持 Teyvat）"
+            )
+        return self.move_map_to(wx, wy, timeout_s)
 
     def tp_to_statue(self, timeout_s: float = 30) -> bool:
         with self.exclusive_triggers():
@@ -278,7 +341,13 @@ class TpTask:
         for it in range(20):
             if time.monotonic() > deadline:
                 break
-            view = self.big.locate_view(self.ctx.capture_bgr())
+            try:
+                frame = self.ctx.capture_bgr_after_frame(
+                    self.ctx.device.last_frame_version, timeout_ms=2200
+                )
+            except Exception:
+                frame = self.ctx.capture_bgr()
+            view = self.big.locate_view(frame)
             if view is None:
                 self.log("[tp] 大地图视野匹配失败，重试")
                 self.ctx.sleep(800)

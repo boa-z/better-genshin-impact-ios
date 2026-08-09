@@ -189,19 +189,23 @@ def cmd_pathing(args) -> int:
 def cmd_trigger(args) -> int:
     """长驻运行实时触发器（Ctrl-C 停止）。"""
     ctx = _context(args)
-    if args.pick:
-        ctx.enable_trigger("AutoPick")
-    if args.skip:
-        ctx.enable_trigger("AutoSkip")
-    if not (args.pick or args.skip):
-        print("未指定触发器（--pick / --skip）")
+    if not (args.pick or args.skip or args.eat):
+        print("未指定触发器（--pick / --skip / --eat）")
+        ctx.close()
         return 2
     try:
+        if args.pick:
+            ctx.enable_trigger("AutoPick")
+        if args.skip:
+            ctx.enable_trigger("AutoSkip")
+        if args.eat:
+            ctx.enable_trigger("AutoEat")
         import time
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         ctx.triggers.stop()
+    finally:
         ctx.close()
     return 0
 
@@ -250,7 +254,7 @@ def main() -> int:
     p.add_argument("-o", "--output", default="scripts")
     p = sub.add_parser("combat", help="执行战斗策略 .txt")
     p.add_argument("file")
-    p = sub.add_parser("task", help="执行 BetterGI SoloTask（AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest）")
+    p = sub.add_parser("task", help="执行 BetterGI SoloTask（含自动吃药/音游/七圣召唤/幽境）")
     p.add_argument("name", help="SoloTask 名称")
     p.add_argument("--config", default="{}", help="内联 JSON 参数")
     p.add_argument("--config-file", help="从 JSON 文件读取参数")
@@ -266,9 +270,10 @@ def main() -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8899)
     sub.add_parser("reconnect", help="重建设备通道（触控失效时使用）")
-    p = sub.add_parser("trigger", help="长驻实时触发器（自动拾取/自动剧情）")
+    p = sub.add_parser("trigger", help="长驻实时触发器（自动拾取/自动剧情/自动吃药）")
     p.add_argument("--pick", action="store_true", help="自动拾取")
     p.add_argument("--skip", action="store_true", help="自动剧情推进")
+    p.add_argument("--eat", action="store_true", help="自动吃药")
 
     args = parser.parse_args()
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,

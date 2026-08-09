@@ -48,6 +48,7 @@ class DeviceClient:
         self._lock = threading.Lock()
         self._mapper = None
         self._last_image_size: tuple[int, int] | None = None
+        self._last_frame_version: int | None = None
         self._game_session_id: str | None = None
         self._headless_process: subprocess.Popen | None = None
         try:
@@ -213,6 +214,10 @@ class DeviceClient:
                 image = base64.b64decode(block.data)
         if result.isError:
             raise DeviceError(f"{tool_name} 失败: {text or '未知错误'}")
+        if isinstance(parsed, dict):
+            version = parsed.get("frame_version")
+            if isinstance(version, int) and version >= 0:
+                self._last_frame_version = version
         return ToolResult(json=parsed, image=image, text=text)
 
     # ---- 坐标映射（横屏逻辑空间 → 设备截图空间）----
@@ -234,7 +239,16 @@ class DeviceClient:
     # ---- typed wrappers ----
 
     def status(self) -> dict:
-        return self.call("status").json
+        payload = self.call("status").json
+        if not isinstance(payload, dict):
+            raise DeviceError("status 未返回 JSON 对象")
+        return payload
+
+    def list_devices(self) -> dict:
+        payload = self.call("list_devices").json
+        if not isinstance(payload, dict):
+            raise DeviceError("list_devices 未返回 JSON 对象")
+        return payload
 
     def connect_device(self, selection_id: str | None = None) -> dict:
         """为当前 MCP 会话建立 active device session。"""
@@ -242,9 +256,17 @@ class DeviceClient:
             status = self.status()
             selection_id = status.get("device_id") or status.get("active_udid")
         if not selection_id:
+            devices = self.list_devices().get("devices", [])
+            active = next((item for item in devices
+                           if isinstance(item, dict) and item.get("active")), None)
+            if isinstance(active, dict):
+                selection_id = active.get("id") or active.get("udid")
+        if not selection_id:
             raise DeviceError("status 未返回可连接的设备 ID")
         result = self.call("connect_device", udid=selection_id)
-        return result.json if isinstance(result.json, dict) else {}
+        if isinstance(result.json, dict):
+            return result.json
+        return {"message": result.text or "设备连接请求已发送", "selection_id": selection_id}
 
     def screenshot_png(self) -> bytes:
         r = self.call("screenshot", grid=False, max_dim=0)
@@ -256,10 +278,65 @@ class DeviceClient:
                 self._last_image_size = (width, height)
         return r.image
 
+    def observe_game_png(self, *, after_version: int | None = None,
+                         timeout_ms: int = 250, max_dim: int = 0,
+                         region: dict | None = None) -> bytes:
+        """Capture an ungridded frame using DeviceHub 130's observation API.
+
+        The method deliberately does not replace ``screenshot_png``: callers that
+        depend on the exact legacy screenshot path can continue using it, while
+        frame-driven tasks can wait for a newer decoded frame without polling.
+        """
+        try:
+            result = self.call(
+                "observe_game",
+                after_version=after_version,
+                timeout_ms=timeout_ms,
+                max_dim=max_dim,
+                region=region,
+            )
+        except Exception as error:
+            if "unknown tool" not in str(error).lower() and "not found" not in str(error).lower():
+                raise
+            return self.screenshot_png()
+        if not result.image:
+            raise DeviceError("observe_game 未返回图像")
+        if isinstance(result.json, dict):
+            width = result.json.get("image_width")
+            height = result.json.get("image_height")
+            crop = result.json.get("crop")
+            # A region observation has a different coordinate origin. Only
+            # cache dimensions for full-screen frames.
+            full = not isinstance(crop, dict) or (
+                crop.get("x") == 0 and crop.get("y") == 0 and
+                crop.get("width") == result.json.get("screen_width") and
+                crop.get("height") == result.json.get("screen_height")
+            )
+            if full and isinstance(width, int) and isinstance(height, int):
+                self._last_image_size = (width, height)
+        return result.image
+
+    def wait_for_frame(self, after_version: int | None = None,
+                       timeout_ms: int = 2000) -> dict:
+        """Wait for a decoded frame newer than ``after_version`` when supported."""
+        result = self.call(
+            "wait_for_frame",
+            after_version=after_version,
+            timeout_ms=timeout_ms,
+        )
+        payload = result.json
+        if not isinstance(payload, dict):
+            raise DeviceError("wait_for_frame 未返回 JSON 对象")
+        return payload
+
     @property
     def last_image_size(self) -> tuple[int, int] | None:
         """最近一次原生截图尺寸（宽、高），不受状态接口缩略尺寸影响。"""
         return self._last_image_size
+
+    @property
+    def last_frame_version(self) -> int | None:
+        return self._last_frame_version
 
     def tap(self, x: float, y: float, *, hold_ms: int | None = None,
             image_width: int | None = None, image_height: int | None = None) -> None:
@@ -295,6 +372,15 @@ class DeviceClient:
     def press_button(self, button: str) -> None:
         self.call("press_button", button=button)
 
+    def press_key(self, key: str) -> None:
+        self.call("press_key", key=key)
+
+    def app_switcher(self) -> None:
+        self.call("app_switcher")
+
+    def lock_device(self) -> None:
+        self.call("lock_device")
+
     def launch_app(self, bundle_id: str, wait: bool = True) -> None:
         self.call("launch_app", bundle_id=bundle_id, wait_for_settle=wait)
 
@@ -311,7 +397,30 @@ class DeviceClient:
             return "backgrounded-home"
 
     def app_status(self, bundle_id: str) -> dict:
-        return self.call("app_status", bundle_id=bundle_id).json
+        result = self.call("app_status", bundle_id=bundle_id)
+        payload = result.json
+        if not isinstance(payload, dict):
+            raise DeviceError(f"app_status 未返回 JSON: {result.text or '未知错误'}")
+        return payload
+
+    def wait_for_app(self, bundle_id: str, state: str, *, timeout_ms: int = 5000) -> dict:
+        payload = self.call(
+            "wait_for_app", bundle_id=bundle_id, state=state, timeout_ms=timeout_ms
+        ).json
+        if not isinstance(payload, dict):
+            raise DeviceError("wait_for_app 未返回 JSON 对象")
+        return payload
+
+    def wait_for_device_event(self, *, after_sequence: int | None = None,
+                              timeout_ms: int = 10000) -> dict:
+        payload = self.call(
+            "wait_for_device_event",
+            after_sequence=after_sequence,
+            timeout_ms=timeout_ms,
+        ).json
+        if not isinstance(payload, dict):
+            raise DeviceError("wait_for_device_event 未返回 JSON 对象")
+        return payload
 
     def get_keymap_profile(self, name: str) -> dict:
         result = self.call("get_keymap_profile", name=name)
@@ -320,7 +429,42 @@ class DeviceClient:
         return result.json
 
     def list_keymap_profiles(self) -> dict:
-        return self.call("list_keymap_profiles").json
+        payload = self.call("list_keymap_profiles").json
+        if not isinstance(payload, dict):
+            raise DeviceError("list_keymap_profiles 未返回 JSON 对象")
+        return payload
+
+    def save_keymap_profile(self, profile: dict, *, overwrite: bool = False) -> dict:
+        """Persist a native v2 profile in the current DeviceHub repository."""
+        if not isinstance(profile, dict):
+            raise TypeError("profile 必须是 JSON 对象")
+        name = profile.get("name")
+        mappings = profile.get("mappings")
+        if not isinstance(name, str) or not name:
+            raise ValueError("profile 缺少 name")
+        if not isinstance(mappings, list):
+            raise ValueError("profile 缺少 mappings 数组")
+        target = profile.get("targetResolution")
+        if target is not None and not isinstance(target, dict):
+            raise ValueError("profile.targetResolution 必须是对象")
+        result = self.call(
+            "save_keymap_profile",
+            name=name,
+            mappings=mappings,
+            bundleIdentifiers=profile.get("bundleIdentifiers", []),
+            targetResolution=target,
+            hardwareBindings=profile.get("hardwareBindings"),
+            overwrite=overwrite,
+        )
+        payload = result.json
+        if not isinstance(payload, dict):
+            return {"message": result.text or "profile 已保存"}
+        return payload
+
+    def install_keymap_profile(self, path: str | os.PathLike[str], *, overwrite: bool = True) -> dict:
+        with open(path, "r", encoding="utf-8") as stream:
+            profile = json.load(stream)
+        return self.save_keymap_profile(profile, overwrite=overwrite)
 
     def run_keymap(self, profile_name: str, keys: list[str], *, hold_ms: int = 100,
                    allow_scripts: bool = False, wait_for_settle: bool = False) -> None:
@@ -373,6 +517,51 @@ class DeviceClient:
         udid = st.get("device_id") or st.get("active_udid")
         if udid:
             self.call("reconnect_device", udid=udid)
+
+    # ---- WDA semantic helpers (optional; HID remains the primary path) ----
+
+    def wda_device_state(self) -> dict:
+        payload = self.call("wda_device_state").json
+        if not isinstance(payload, dict):
+            raise DeviceError("wda_device_state 未返回 JSON 对象")
+        return payload
+
+    def wda_unlock(self) -> dict:
+        payload = self.call("wda_unlock").json
+        if not isinstance(payload, dict):
+            raise DeviceError("wda_unlock 未返回 JSON 对象")
+        return payload
+
+    def wda_ui_tree(self, *, max_characters: int | None = None) -> dict:
+        payload = self.call("wda_ui_tree", max_characters=max_characters).json
+        if not isinstance(payload, dict):
+            raise DeviceError("wda_ui_tree 未返回 JSON 对象")
+        return payload
+
+    def wda_find_elements(self, using: str, value: str, *, limit: int = 10) -> dict:
+        payload = self.call("wda_find_elements", using=using, value=value, limit=limit).json
+        if not isinstance(payload, dict):
+            raise DeviceError("wda_find_elements 未返回 JSON 对象")
+        return payload
+
+    def wda_wait_for_element(self, using: str, value: str, *, index: int = 0,
+                             state: str = "present", timeout_ms: int = 5000) -> dict:
+        payload = self.call(
+            "wda_wait_for_element", using=using, value=value, index=index,
+            state=state, timeout_ms=timeout_ms
+        ).json
+        if not isinstance(payload, dict):
+            raise DeviceError("wda_wait_for_element 未返回 JSON 对象")
+        return payload
+
+    def wda_click(self, using: str, value: str, *, index: int = 0) -> dict:
+        payload = self.call("wda_click", using=using, value=value, index=index).json
+        if not isinstance(payload, dict):
+            raise DeviceError("wda_click 未返回 JSON 对象")
+        return payload
+
+    def wda_type_text(self, text: str) -> None:
+        self.call("wda_type_text", text=text)
 
     def paste_text(self, text: str) -> None:
         self.call("paste_text", text=text)

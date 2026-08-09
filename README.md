@@ -69,6 +69,7 @@ bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/p
 bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼容）
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
 bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
+bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑页完成未演奏曲目
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
@@ -106,7 +107,8 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
 | SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现，待真机验证 |
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ 视觉逻辑已迁移，需在对应游戏状态真机回归 |
-| SoloTask：AutoLeyLine / AutoBoss / AutoStygian 等 Windows 任务 | ❌ 未迁移（docs/ROADMAP.md） |
+| SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
+| SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ 已迁移；Boss、地脉、幽境需路线，七圣召唤需策略 |
 
 ## 已知约束
 

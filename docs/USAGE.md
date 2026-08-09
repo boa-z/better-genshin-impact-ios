@@ -249,6 +249,8 @@ bgi-touch combat scripts/combat/万能战斗策略（萌新推荐）.txt
 # 原生 SoloTask：任务参数可用 --config 或 --config-file
 bgi-touch task AutoDomain --config '{"domainRoundNum":1}'
 bgi-touch task AutoOpenChest --config '{"timeoutSeconds":60}'
+# 在千音雅集的国家主题专辑页运行；musicLevel 也支持“所有”/normal/master 等别名
+bgi-touch task AutoAlbum --config '{"musicLevel":"传说","songCount":13}'
 
 # 键鼠宏：直接给原始宏 JSON，运行时自动翻译为触控
 bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹-塔拉塔海谷.json
@@ -272,6 +274,11 @@ Windows 专属的队伍自动识别、低血量回血、设置游戏时间和千
 侧自动模拟；遇到这些动作会写入日志并继续保留路线控制权。`exit_and_relogin`
 会复用 iOS 侧的重登流程，执行前应确认账号已登录且允许较长等待。真机长路线完成后
 请执行 `bgi-touch close-game`，App Store 版无法强杀时命令会退回 Home 挂起原神。
+
+`AutoAlbum` 需要提前打开千音雅集的国家主题专辑页，不能从“全部歌曲”页面启动。
+默认处理传说难度的 13 首曲目；`musicLevel` 可设为“普通”“困难”“大师”“传说”或
+“所有”，`mustCanorusLevel` 可改为只跳过已经获得“大音天籁”的曲目。每首歌结束后
+程序通过列表按钮回到专辑页，再点击原版相同的下一曲位置。
 
 战斗 DSL 语法速查（与原版一致）：
 

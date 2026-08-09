@@ -31,24 +31,30 @@ SUPPORTED = [
     "getPositionFromBigMap", "getPositionFromMap", "genshin.getBigMapZoomLevel",
     "pathingScript",
     "dispatcher.addTimer", "dispatcher.addTrigger",
+    "dispatcher.runAutoEatTask", "dispatcher.runAutoMusicGameTask",
+    "dispatcher.runAutoAlbumTask", "dispatcher.runAutoAlbum",
+    "dispatcher.runAutoGeniusInvokationTask", "dispatcher.runAutoStygianOnslaughtTask",
 ]
 PARTIAL = {
     "moveMouseTo": "触控无指针，移动为空操作（点击时直接给坐标即可）",
     "rightButton": "近似映射为 E 技能",
     "middleButton": "PC 重置视角，触控端为空操作",
     "verticalScroll": "触控端为空操作",
-    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest；其余 SoloTask 未移植",
+    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/AutoGeniusInvokation/AutoStygianOnslaught；Boss、地脉与幽境任务仍需提供路线",
     "runAutoFightTask": "支持 combatStrategyPath；掉落拾取等附加参数忽略",
+    "runAutoBossTask": "支持 BetterGI AutoBoss 路线资产；可用 routePath/pathingFile 覆盖路线",
+    "runAutoLeyLine": "支持提供 routePath/pathingFile 的通用地脉战斗循环",
     "genshin.switchParty": "iOS 端按 config/party.json 切换当前角色槽位，不重组完整队伍",
     "genshin.setBigMapZoomLevel": "使用触控 pinch 近似 BetterGI 的 1.0-6.0 缩放等级",
     "genshin.autoFishing": "已迁移鱼条视觉控制；鱼塘/鱼饵 YOLO 选择仍需预先进入钓鱼状态",
+    "dispatcher.runAutoMusicGameTask": "已迁移六轨像素检测；需要先进入千音雅集曲目界面",
+    "dispatcher.runAutoAlbumTask": "已迁移专辑导航、完成标志跳过和难度循环；需要先进入主题专辑界面",
+    "dispatcher.runAutoGeniusInvokationTask": "已迁移策略解析和触控执行；卡牌/骰子识别以 OCR 和可配置触控点为后备",
+    "dispatcher.runAutoStygianOnslaughtTask": "复用路线、战斗和领奖循环；活动入口与树脂状态需由路线或当前界面准备",
 }
 UNSUPPORTED = {
     "PostMessage": "后台按键为 Windows 专有",
     "KeyMouseHook": "全局键鼠钩子为 Windows 专有",
-    "runAutoLeyLine": "自动地脉未移植",
-    "runAutoStygian": "自动幽境危战未移植",
-    "runAutoBossTask": "自动打本未移植",
 }
 
 

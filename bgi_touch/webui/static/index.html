@@ -97,6 +97,7 @@
       <div class="keys">
         触发器：<label><input type="checkbox" id="trigPick" onchange="setTrigger()"> 自动拾取</label>
         <label><input type="checkbox" id="trigSkip" onchange="setTrigger()"> 自动剧情</label>
+        <label><input type="checkbox" id="trigEat" onchange="setTrigger()"> 自动吃药</label>
       </div>
     </section>
 
@@ -229,13 +230,15 @@ async function convert() {
 
 // ---- 触发器 ----
 async function setTrigger() {
-  await post('/api/triggers', {AutoPick: $('#trigPick').checked, AutoSkip: $('#trigSkip').checked});
+  await post('/api/triggers', {AutoPick: $('#trigPick').checked, AutoSkip: $('#trigSkip').checked,
+                                AutoEat: $('#trigEat').checked});
 }
 (async () => {
   try {
     const d = await (await fetch('/api/triggers')).json();
     $('#trigPick').checked = (d.active||[]).includes('AutoPick');
     $('#trigSkip').checked = (d.active||[]).includes('AutoSkip');
+    $('#trigEat').checked = (d.active||[]).includes('AutoEat');
   } catch {}
 })();
 

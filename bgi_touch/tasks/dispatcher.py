@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from ..combat.dsl import CombatExecutor
@@ -11,11 +12,23 @@ from ..engine.context import GameContext
 
 def _value(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
-        return obj.get(key, default)
+        if key in obj:
+            return obj[key]
+        wanted = key.replace("_", "").lower()
+        for candidate, value in obj.items():
+            if str(candidate).replace("_", "").lower() == wanted:
+                return value
+        return default
     try:
         value = getattr(obj, key)
     except (AttributeError, TypeError):
-        return default
+        wanted = key.replace("_", "").lower()
+        for candidate in dir(obj):
+            if candidate.replace("_", "").lower() == wanted:
+                value = getattr(obj, candidate)
+                break
+        else:
+            return default
     return default if value is None else value
 
 
@@ -36,11 +49,36 @@ def _requested(token: Any) -> bool:
     return False
 
 
+def _tuple4(value: Any, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    if isinstance(value, (list, tuple)) and len(value) == 4:
+        try:
+            return tuple(int(part) for part in value)  # type: ignore[return-value]
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def _points(value: Any) -> dict[int, tuple[float, float]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[int, tuple[float, float]] = {}
+    for raw_key, raw_point in value.items():
+        if not isinstance(raw_point, (list, tuple)) or len(raw_point) != 2:
+            raise ValueError("触控点配置必须是 [x, y] 数组")
+        try:
+            result[int(raw_key)] = (float(raw_point[0]), float(raw_point[1]))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"触控点配置无效：{raw_key}") from error
+    return result
+
+
 class TaskDispatcher:
     """Run migrated BetterGI tasks with a single cancellation contract."""
 
     IMPLEMENTED = frozenset({
         "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest",
+        "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat", "AutoMusicGame", "AutoAlbum",
+        "AutoGeniusInvokation", "AutoStygianOnslaught",
     })
 
     def __init__(
@@ -83,6 +121,20 @@ class TaskDispatcher:
             return self.run_auto_fishing_task(cfg, ct)
         if name in ("AutoOpenChest", "OpenChest"):
             return self.run_auto_open_chest_task(cfg, ct)
+        if name == "AutoEat":
+            return self.run_auto_eat_task(cfg, ct)
+        if name in ("AutoMusicGame", "AutoMusic"):
+            return self.run_auto_music_game_task(cfg, ct)
+        if name in ("AutoAlbum", "AutoMusicAlbum"):
+            return self.run_auto_album_task(cfg, ct)
+        if name == "AutoGeniusInvokation":
+            return self.run_auto_genius_invokation_task(cfg, ct)
+        if name == "AutoStygianOnslaught":
+            return self.run_auto_stygian_onslaught_task(cfg, ct)
+        if name == "AutoBoss":
+            return self.run_auto_boss_task(cfg, ct)
+        if name in ("AutoLeyLine", "AutoLeyLineOutcrop"):
+            return self.run_auto_leyline_task(cfg, ct)
         raise NotImplementedError(
             f"SoloTask {name} 尚未移植；当前已支持 {', '.join(sorted(self.IMPLEMENTED))}"
         )
@@ -141,6 +193,201 @@ class TaskDispatcher:
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
+    def run_auto_eat_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_eat import AutoEatTask
+
+        food_name = _value(param, "foodName", None)
+        food_effect = _value(param, "foodEffectType", None)
+        if food_name is not None:
+            food_name = str(food_name).strip() or None
+        if food_name is not None and food_effect is not None:
+            raise ValueError("不能同时指定 foodName 和 foodEffectType")
+        if food_effect is not None:
+            defaults = _value(param, "defaultFoodNames", _value(param, "foodNames", {}))
+            if not isinstance(defaults, Mapping):
+                defaults = {}
+            effect_names = {
+                1: "ATKBoostingDish",
+                2: "AdventurersDish",
+                3: "DEFBoostingDish",
+            }
+            effect_key = effect_names.get(food_effect, str(food_effect))
+            food_name = defaults.get(effect_key, defaults.get(str(food_effect)))
+            if food_name is None:
+                raise ValueError(
+                    "foodEffectType 需要 defaultFoodNames/foodNames 配置，"
+                    "且只支持攻击、冒险、防御类料理"
+                )
+            food_name = str(food_name).strip() or None
+            if food_name is None:
+                raise ValueError("foodEffectType 对应的料理名称为空")
+
+        check_interval = _value(
+            param,
+            "checkIntervalMs",
+            _value(param, "checkInterval", 150),
+        )
+        eat_interval_ms = _value(
+            param,
+            "eatIntervalMs",
+            _value(param, "eatInterval", 1000),
+        )
+        return AutoEatTask(
+            self.ctx,
+            food_name=food_name,
+            check_interval_ms=int(check_interval or 150),
+            eat_interval_s=float(eat_interval_ms or 1000) / 1000.0,
+            duration_s=float(_value(param, "durationSeconds", 0) or 0),
+            health_roi=_tuple4(
+                _value(param, "healthRoi", None),
+                (720, 900, 480, 140),
+            ),
+            min_width_ref=int(_value(param, "minWidthRef", 55) or 55),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_music_game_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_music import AutoMusicGameTask
+
+        lane_x = _value(param, "laneX", None)
+        keys = _value(param, "keys", None)
+        return AutoMusicGameTask(
+            self.ctx,
+            lane_x=lane_x if lane_x is not None else (417, 628, 844, 1061, 1277, 1493),
+            lane_y=int(_value(param, "laneY", 921) or 921),
+            keys=keys if keys is not None else ("A", "S", "D", "J", "K", "L"),
+            threshold=int(_value(param, "threshold", 220) or 220),
+            poll_interval_ms=int(_value(param, "pollIntervalMs", 35) or 35),
+            timeout_s=float(_value(param, "timeoutSeconds", 900) or 900),
+            idle_timeout_s=float(_value(param, "idleTimeoutSeconds", 8) or 8),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_album_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_album import AutoAlbumTask
+
+        music_level = _value(
+            param,
+            "musicLevel",
+            _value(param, "difficulty", _value(param, "difficulties", "传说")),
+        )
+        return AutoAlbumTask(
+            self.ctx,
+            music_level=music_level,
+            must_canorus_level=bool(
+                _value(param, "mustCanorusLevel", _value(param, "onlyGrandOde", False))
+            ),
+            song_count=int(_value(param, "songCount", 13) or 13),
+            track_timeout_s=float(_value(param, "trackTimeoutSeconds", 900) or 900),
+            timeout_s=float(_value(param, "timeoutSeconds", 7200) or 7200),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_genius_invokation_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_tcg import AutoGeniusInvokationTask
+
+        strategy = _value(param, "strategy", None)
+        if strategy is None:
+            strategy_path = _value(param, "strategyPath", None)
+            if strategy_path:
+                path = Path(str(strategy_path)).expanduser()
+                if not path.is_file():
+                    project_root = Path(__file__).resolve().parents[2]
+                    path = project_root / "scripts" / "tcg" / path.name
+                if path.is_file():
+                    strategy = path.read_text(encoding="utf-8")
+        if not strategy:
+            raise ValueError("AutoGeniusInvokation 需要 strategy 或 strategyPath")
+        return AutoGeniusInvokationTask(
+            self.ctx,
+            str(strategy),
+            character_points=_points(_value(param, "characterPoints", None)),
+            skill_points=_points(_value(param, "skillPoints", None)),
+            max_commands=_value(param, "maxCommands", None),
+            timeout_s=float(_value(param, "timeoutSeconds", 900) or 900),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_stygian_onslaught_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_stygian import AutoStygianOnslaughtTask
+
+        route = self._resolve_route(param, kind="stygian")
+        if route is None:
+            raise FileNotFoundError(
+                "AutoStygianOnslaught 未配置 routePath/pathingFile；请提供活动入口路线"
+            )
+        strategy = _value(
+            param,
+            "combatScriptBagPath",
+            _value(param, "combatStrategyPath", None),
+        )
+        return AutoStygianOnslaughtTask(
+            self.ctx,
+            route_path=route,
+            boss_num=int(_value(param, "bossNum", 1) or 1),
+            rounds=_value(param, "rounds", None),
+            combat_strategy_path=str(strategy) if strategy else None,
+            timeout_s=float(_value(param, "timeoutSeconds", 360) or 360),
+            party_slots=self.party_slots,
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def _resolve_route(self, param: Any, *, kind: str, name: str = "") -> str | None:
+        from pathlib import Path
+
+        explicit = _value(param, "routePath", _value(param, "pathingFile", None))
+        if explicit:
+            path = Path(str(explicit)).expanduser()
+            if path.is_file():
+                return str(path)
+            project_root = Path(__file__).resolve().parents[2]
+            candidate = project_root / "assets" / "pathing" / kind / path.name
+            if candidate.is_file():
+                return str(candidate)
+        if kind == "boss" and name:
+            root = Path(__file__).resolve().parents[2] / "assets" / "pathing" / "boss"
+            for candidate in (root / f"{name}前往.json", root / f"{name}.json"):
+                if candidate.is_file():
+                    return str(candidate)
+            matches = sorted(root.glob(f"*{name}*前往.json"))
+            if matches:
+                return str(matches[0])
+        return None
+
+    def run_auto_boss_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_encounter import AutoBossTask
+
+        boss_name = str(_value(param, "bossName", "") or "")
+        route = self._resolve_route(param, kind="boss", name=boss_name)
+        strategy = _value(param, "combatStrategyPath", None)
+        timeout = _value(param, "timeout", 240)
+        return AutoBossTask(
+            self.ctx,
+            boss_name=boss_name,
+            route_path=route,
+            rounds=int(_value(param, "runCount", _value(param, "rounds", 1)) or 1),
+            combat_strategy_path=str(strategy) if strategy else None,
+            timeout_s=float(timeout),
+            party_slots=self.party_slots,
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_leyline_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_encounter import AutoLeyLineTask
+
+        route = self._resolve_route(param, kind="leyline")
+        strategy = _value(param, "combatStrategyPath", None)
+        timeout = _value(param, "timeout", 240)
+        return AutoLeyLineTask(
+            self.ctx,
+            route_path=route,
+            rounds=int(_value(param, "count", _value(param, "rounds", 1)) or 1),
+            combat_strategy_path=str(strategy) if strategy else None,
+            timeout_s=float(timeout),
+            party_slots=self.party_slots,
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
     def run_combat_script(self, script: str, avatar: str | None = None) -> Any:
         return CombatExecutor.for_context(
             self.ctx, party_slots=self.party_slots, log=self.log
@@ -149,14 +396,28 @@ class TaskDispatcher:
     def add_timer(self, timer: Any) -> None:
         name = str(_value(timer, "name", timer))
         self.ctx.triggers.clear()
+        config = _value(timer, "config", {}) or {}
         if name == "AutoPick":
-            config = _value(timer, "config", {}) or {}
             force_interaction = _value(
                 config,
                 "forceInteraction",
                 _value(config, "force_interaction", False),
             )
             self.ctx.enable_trigger(name, force_interaction=bool(force_interaction))
+        elif name in ("AutoEat", "自动吃药"):
+            self.ctx.enable_trigger(
+                "AutoEat",
+                check_interval_ms=int(
+                    _value(config, "checkIntervalMs", _value(config, "checkInterval", 150))
+                    or 150
+                ),
+                eat_interval_ms=int(
+                    _value(config, "eatIntervalMs", _value(config, "eatInterval", 8000))
+                    or 8000
+                ),
+                health_roi=_tuple4(_value(config, "healthRoi", None), (720, 900, 480, 140)),
+                min_width_ref=int(_value(config, "minWidthRef", 55) or 55),
+            )
         else:
             self.ctx.enable_trigger(name)
 

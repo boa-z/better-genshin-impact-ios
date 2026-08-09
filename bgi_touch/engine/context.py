@@ -67,18 +67,41 @@ class GameContext:
     def _load_keymap_profile(self, name: str | None,
                              path: str | Path | None) -> DeviceHubProfile | None:
         if path is not None:
-            profile = DeviceHubProfile.from_path(path)
+            local_path = Path(path).expanduser()
+            profile = DeviceHubProfile.from_path(local_path)
             if name and profile.name and profile.name != name:
                 raise ValueError(f"keymap profile 名称不匹配：期望 {name}，实际 {profile.name}")
+            self._sync_local_profile(local_path, profile)
             return profile
         if not name:
             return None
         try:
             return DeviceHubProfile.from_dict(self.device.get_keymap_profile(name))
         except Exception as e:
+            # The desktop app stores profiles outside the repository. When an
+            # older headless server has not imported the profile yet, load the
+            # canonical local file and best-effort install it through MCP 130.
+            local_path = Path.home() / "Library" / "Application Support" / \
+                "com.devicehub.mask" / "profiles" / f"{name}.json"
+            if local_path.is_file():
+                try:
+                    profile = DeviceHubProfile.from_path(local_path)
+                    self._sync_local_profile(local_path, profile)
+                    return profile
+                except Exception as local_error:
+                    print(f"[context] 本地 DeviceHub profile 读取失败：{local_error}")
             # profile 是增强路径；服务器版本不支持时继续使用本地触控布局。
             print(f"[context] 无法读取 DeviceHub profile {name}，回退手势泵：{e}")
             return None
+
+    def _sync_local_profile(self, path: Path, profile: DeviceHubProfile) -> None:
+        """Import an explicitly selected local profile when the server supports it."""
+        try:
+            self.device.install_keymap_profile(path, overwrite=False)
+        except Exception as error:
+            # Existing profiles and older servers both legitimately fail here;
+            # the local profile remains usable by the touch fallback.
+            print(f"[context] DeviceHub profile 未同步（继续使用本地副本）：{error}")
 
     def _start_orientation_watch(self) -> None:
         """朝向看门狗：应用切换（游戏↔其他 App/重登）会改变服务器 tap 坐标空间，
@@ -144,8 +167,16 @@ class GameContext:
     def sleep(self, ms: float) -> None:
         time.sleep(ms / 1000)
 
-    def capture_bgr(self) -> np.ndarray:
-        png = self.device.screenshot_png()
+    def capture_bgr(self, *, after_version: int | None = None,
+                    timeout_ms: int = 250) -> np.ndarray:
+        if after_version is None:
+            png = self.device.screenshot_png()
+        else:
+            png = self.device.observe_game_png(
+                after_version=after_version,
+                timeout_ms=timeout_ms,
+                max_dim=0,
+            )
         img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             raise RuntimeError("截图解码失败")
@@ -163,6 +194,11 @@ class GameContext:
             self._last_frame = img
             self._last_frame_at = time.monotonic()
         return img
+
+    def capture_bgr_after_frame(self, after_version: int | None = None,
+                                timeout_ms: int = 250) -> np.ndarray:
+        """Capture an ungridded frame after a low-latency input action."""
+        return self.capture_bgr(after_version=after_version, timeout_ms=timeout_ms)
 
     def cached_frame(self) -> tuple[np.ndarray | None, float]:
         """Return a copy of the latest frame without requesting a device screenshot.
@@ -208,8 +244,11 @@ class GameContext:
         elif name == "AutoSkip":
             from ..triggers.autoskip import AutoSkipTrigger
             self.triggers.add(AutoSkipTrigger(self, log=self.triggers.log, **kwargs))
+        elif name in ("AutoEat", "自动吃药"):
+            from ..tasks.auto_eat import AutoEatTrigger
+            self.triggers.add(AutoEatTrigger(self, log=self.triggers.log, **kwargs))
         else:
-            raise ValueError(f"未知触发器 {name}（支持 AutoPick/AutoSkip）")
+            raise ValueError(f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat）")
         self.triggers.start()
 
     def close(self) -> None:

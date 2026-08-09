@@ -377,7 +377,12 @@ def api_release():
 @app.get("/api/scripts")
 def api_scripts():
     out = {"js": [], "combat": [], "keymouse": [], "pathing": [], "task": []}
-    for name in ("AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest"):
+    for name in (
+        "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing",
+        "AutoOpenChest", "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat",
+        "AutoMusicGame", "AutoAlbum",
+        "AutoGeniusInvokation", "AutoStygianOnslaught",
+    ):
         out["task"].append({"path": name, "name": name})
     js_dir = SCRIPTS_DIR / "js"
     if js_dir.is_dir():
@@ -458,10 +463,10 @@ def api_triggers():
 
 @app.post("/api/triggers")
 def api_triggers_set(body: dict):
-    """body: {"AutoPick": true, "AutoSkip": false}"""
+    """body: {"AutoPick": true, "AutoSkip": false, "AutoEat": false}"""
     try:
         ctx = get_ctx()
-        for name in ("AutoPick", "AutoSkip"):
+        for name in ("AutoPick", "AutoSkip", "AutoEat"):
             if name not in body:
                 continue
             if body[name]:

@@ -7,7 +7,9 @@
   `config/controls/genshin-native-ui.json` 的小游戏键位覆盖。
 - BetterGI 兼容 JS 运行时、统一 `TaskDispatcher`、战斗 DSL、宏和 WebUI/CLI 任务入口。
 - AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）和
-  AutoOpenChest 的可测试 Python 实现。
+-  AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
+- AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught 和 AutoGeniusInvokation 的
+  路线/策略驱动迁移，以及 `dispatcher.runTask` / `runAuto*Task` 入口兼容。
 
 ## 已完成 — 地图追踪离线核心
 
@@ -46,9 +48,13 @@ AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼条轮廓控制和 Aut
 
 ## P2 — 原生 SoloTask 扩展
 
-AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught、AutoGeniusInvokation、
-完整 AutoCook 菜单流、鱼塘 YOLO 选鱼和奖励领取流程仍需继续移植；多数由
-“识别 + 战斗 DSL + 点击流”组合而成，识别层/输入层/DSL 地基已就绪。
+已完成路线/策略驱动的 AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught、
+AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
+策略、七圣召唤策略和主题专辑界面。
+
+下一批未迁移的上游独立任务是 AutoArtifactSalvage、QuickSereniteaPot、
+CharacterDevelopment、GetGridIcons 和 UseRedemptionCode。它们依赖复杂的网格识别、
+桌面窗口或账号外部服务，不应由通用 OCR 点击流伪装成已支持。
 
 ## 工程
 

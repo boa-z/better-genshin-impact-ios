@@ -211,14 +211,149 @@ def test_auto_fishing_bar_detector_and_controller():
     assert fish_bar_action(rects) == "hold"
 
 
+def test_auto_eat_red_bar_detector_scales_from_full_frame():
+    import numpy as np
+
+    from bgi_touch.tasks.auto_eat import current_avatar_is_low_hp, red_bar_components
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    frame[950:965, 800:1000] = (0, 0, 255)
+    assert current_avatar_is_low_hp(frame)
+    assert red_bar_components(frame)[0][2] >= 190
+
+    narrow = np.zeros_like(frame)
+    narrow[950:965, 800:840] = (0, 0, 255)
+    assert not current_avatar_is_low_hp(narrow)
+
+
+def test_auto_music_lane_detector_uses_device_points():
+    import numpy as np
+
+    from bgi_touch.tasks.auto_music import detect_music_lanes
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    transform = ScreenTransform(2816, 1296)
+    points = [transform.to_device(x, 921) for x in (417, 628, 844, 1061, 1277, 1493)]
+    frame = np.full((1296, 2816, 3), 255, dtype=np.uint8)
+    for index in (0, 2, 5):
+        x, y = (round(value) for value in points[index])
+        frame[y - 3:y + 4, x - 3:x + 4, 0] = 0
+    assert detect_music_lanes(
+        frame,
+        [round(x) for x, _ in points],
+        round(points[0][1]),
+    ) == (True, False, True, False, False, True)
+
+
+def test_auto_album_normalizes_upstream_music_levels():
+    from bgi_touch.tasks.auto_album import resolve_album_difficulties
+
+    assert [level.name for level in resolve_album_difficulties(None)] == ["传说"]
+    assert [level.name for level in resolve_album_difficulties("all")] == [
+        "普通", "困难", "大师", "传说"
+    ]
+    assert [level.name for level in resolve_album_difficulties(["困难", "normal", "困难"])] == [
+        "普通", "困难"
+    ]
+    with pytest.raises(ValueError, match="难度无效"):
+        resolve_album_difficulties("不存在")
+
+
+def test_auto_album_dispatcher_maps_bettergi_parameters():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_album.AutoAlbumTask") as task:
+        task.return_value.run.return_value = True
+        assert TaskDispatcher(object()).run_task({
+            "name": "AutoAlbum",
+            "config": {
+                "musicLevel": "all",
+                "mustCanorusLevel": True,
+                "songCount": 2,
+                "trackTimeoutSeconds": 30,
+            },
+        })
+    kwargs = task.call_args.kwargs
+    assert kwargs["music_level"] == "all"
+    assert kwargs["must_canorus_level"] is True
+    assert kwargs["song_count"] == 2
+    assert kwargs["track_timeout_s"] == 30
+
+
+def test_tcg_strategy_parser_matches_bettergi_format():
+    from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
+
+    characters, commands = parse_tcg_strategy(
+        """角色定义:
+角色1=刻晴|雷{技能1消耗=4雷骰子}
+角色2=雷神|雷{技能3消耗=1雷骰子+2任意}
+角色3=甘雨|冰{技能2消耗=5冰骰子}
+---
+策略定义:
+刻晴 使用 技能1
+雷神 使用 技能3 骰子减少1
+甘雨 使用 技能2 骰子增加2
+"""
+    )
+    assert characters[1].name == "刻晴"
+    assert [command.skill for command in commands] == [1, 3, 2]
+    assert [command.dice_delta for command in commands] == [0, -1, 2]
+
+
 def test_task_dispatcher_declares_migrated_core_tasks():
     from bgi_touch.tasks.dispatcher import TaskDispatcher
 
     assert TaskDispatcher.IMPLEMENTED >= {
-        "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest"
+        "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest",
+        "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop",
+        "AutoEat", "AutoMusicGame", "AutoGeniusInvokation", "AutoStygianOnslaught",
+        "AutoAlbum",
     }
     with pytest.raises(NotImplementedError, match="尚未移植"):
-        TaskDispatcher(object()).run_task({"name": "AutoBoss", "config": {}})
+        TaskDispatcher(object()).run_task({"name": "UnknownSoloTask", "config": {}})
+
+
+def test_new_task_dispatcher_validates_upstream_parameter_contracts():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    dispatcher = TaskDispatcher(object())
+    with pytest.raises(ValueError, match="不能同时指定"):
+        dispatcher.run_auto_eat_task({"foodName": "甜甜花酿鸡", "foodEffectType": 1})
+    with pytest.raises(ValueError, match="需要 strategy"):
+        dispatcher.run_auto_genius_invokation_task({})
+    with pytest.raises(FileNotFoundError, match="routePath"):
+        dispatcher.run_auto_stygian_onslaught_task({})
+
+
+def test_genshin_map_local_match_overload_keeps_world_hint_separate_from_cache():
+    from unittest.mock import Mock
+
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    api = GenshinApi.__new__(GenshinApi)
+    positioner = Mock()
+    positioner.get_position_stable.return_value = (1.0, 2.0)
+    api._positioner_for = Mock(return_value=positioner)
+    api.ctx = Mock()
+    api.ctx.capture_bgr.return_value = object()
+    result = api.getPositionFromMap("Teyvat", 4328.0, 3960.0)
+    assert (result.x, result.y) == (1.0, 2.0)
+    positioner.set_prior.assert_called_once_with(4328.0, 3960.0)
+    positioner.get_position_stable.assert_called_once_with(
+        api.ctx.capture_bgr.return_value, cache_time_ms=900
+    )
+
+
+def test_time_dial_gesture_is_a_real_circular_drag():
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    taps, (start, end) = GenshinApi._time_dial_gestures(6, 30)
+    assert len(taps) == 3
+    assert start != end
+    assert start[0] > 1000
+    assert end[1] != start[1]
 
 
 def test_pathing_model_preserves_bettergi_extensions():
