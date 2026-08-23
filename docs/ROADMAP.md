@@ -73,7 +73,9 @@
 
 ## P1 — 实时触发器与任务视觉回归
 
-AutoPick、AutoSkip 已有后台截图循环；需要在更多 iOS HUD 缩放下校准模板阈值。
+AutoPick、AutoSkip 已有后台截图循环；AutoSkip 已对齐自定义选项优先级、黑屏推进、
+普通剧情页关闭、底部三角道具页与初见角色横幅，并保护主界面、大地图、引导札记、
+聊天记录和且试身手。需要在更多 iOS HUD 缩放下校准模板与颜色阈值。
 AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼类 YOLO、鱼饵 ItemV2 识别、
 HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest 的模板导航已经迁移；
 真机需要分别从烹饪点、钓鱼点和宝箱附近启动回归。

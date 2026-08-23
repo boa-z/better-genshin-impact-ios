@@ -113,7 +113,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | MapMask 地图遮罩（小地图坐标/大地图视野/多楼层/WebUI 本地底图） | ✅ 离线链路，待真机视觉回归 |
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
 | pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路；已接入锄地日上限与统计，待真机路线实测 |
-| 实时触发器（AutoPick OCR拾取 / AutoSkip 剧情推进） | ⚠️ 已实现，待真机调阈值 |
+| 实时触发器（AutoPick / AutoSkip 选项、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
 | SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |

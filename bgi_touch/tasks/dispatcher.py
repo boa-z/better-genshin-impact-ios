@@ -832,6 +832,7 @@ class TaskDispatcher:
                 before_confirm_delay_ms=max(
                     0, int(_value(config, "beforeClickConfirmDelay", 0) or 0)
                 ),
+                close_popup_pages=bool(_value(config, "closePopupPagedEnabled", True)),
             )
         elif name in ("MapMask", "地图遮罩"):
             self.ctx.enable_trigger(

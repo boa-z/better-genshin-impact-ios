@@ -741,6 +741,7 @@ def test_dispatcher_maps_bettergi_auto_skip_config():
         skip_built_in_options=True,
         after_choose_delay_ms=120,
         before_confirm_delay_ms=80,
+        close_popup_pages=True,
     )
 
 
