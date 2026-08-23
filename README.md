@@ -51,7 +51,7 @@ DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
 python3 -m venv .venv
 .venv/bin/pip install -e .                       # 核心：mcp + opencv + numpy
 .venv/bin/pip install -e '.[ocr,js,models]'      # 推荐：OCR + JS + BetterGI ONNX 模型运行时
-.venv/bin/python tools/fetch_map_assets.py --models --tcg  # 地图、模型、奖励与七圣召唤识别资产
+.venv/bin/python tools/fetch_map_assets.py --models --tcg --quick-buy  # 地图、模型与任务识别资产
 ```
 
 前置：macOS/Linux 上运行 DeviceHub Mask 并连接 iPhone（**建议 USB**，Wi-Fi 通道输入注入不稳定），iPhone 已安装原神。
@@ -118,7 +118,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ AutoFishing 已含找鱼、选饵、HutaoFisher 抛竿、提竿与拉条闭环；需真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ 已迁移；Boss、地脉、幽境需路线，七圣召唤需策略 |
-| 快捷任务：尘歌壶 / 一键领取 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
+| 快捷任务：尘歌壶 / 一键领取 / 快速购买 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
 | SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |

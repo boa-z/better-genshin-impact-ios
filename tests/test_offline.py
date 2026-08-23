@@ -415,10 +415,61 @@ def test_new_quick_tasks_are_declared_and_validate_redeem_codes():
     from bgi_touch.tasks.dispatcher import TaskDispatcher
 
     assert TaskDispatcher.IMPLEMENTED >= {
-        "QuickSereniteaPot", "QuickClaimReward", "UseRedemptionCode"
+        "QuickSereniteaPot", "QuickClaimReward", "QuickBuy", "UseRedemptionCode"
     }
     with pytest.raises(ValueError, match="至少一个"):
         TaskDispatcher(object()).run_use_redemption_code_task({"codes": []})
+
+
+def test_quick_buy_uses_touch_slider_for_both_upstream_shop_layouts():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.tasks.quick_buy import QuickBuyTask
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    def context():
+        return SimpleNamespace(
+            transform=ScreenTransform(2816, 1296),
+            device=SimpleNamespace(swipe=Mock()),
+            input=SimpleNamespace(click_ref=Mock()),
+            sleep=Mock(),
+        )
+
+    serenitea_ctx = context()
+    assert QuickBuyTask(
+        serenitea_ctx, serenitea=True, log=lambda _message: None
+    ).run()
+    serenitea_swipe = serenitea_ctx.device.swipe.call_args.args
+    assert serenitea_swipe[2] > serenitea_swipe[0]
+    assert [call.args for call in serenitea_ctx.input.click_ref.call_args_list] == [
+        (1600, 1020), (960, 850)
+    ]
+
+    generic_ctx = context()
+    assert QuickBuyTask(
+        generic_ctx, serenitea=False, log=lambda _message: None
+    ).run()
+    generic_swipe = generic_ctx.device.swipe.call_args.args
+    assert generic_swipe[2] > generic_swipe[0]
+    assert [call.args for call in generic_ctx.input.click_ref.call_args_list] == [
+        (1695, 1020), (1100, 780), (1695, 1020)
+    ]
+
+
+def test_quick_buy_requires_asset_or_explicit_shop_type():
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.quick_buy import QuickBuyTask
+
+    task = QuickBuyTask.__new__(QuickBuyTask)
+    task.serenitea = None
+    task._coin = None
+    task.ctx = SimpleNamespace(
+        capture_region=lambda: SimpleNamespace(find_multi=lambda *_args, **_kwargs: [])
+    )
+    with pytest.raises(FileNotFoundError, match="显式配置"):
+        task._is_serenitea_shop()
 
 
 def test_artifact_stat_parser_preserves_bettergi_contract():

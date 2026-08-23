@@ -79,7 +79,7 @@ class TaskDispatcher:
         "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest",
         "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat", "AutoMusicGame", "AutoAlbum",
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
-        "QuickClaimReward", "UseRedemptionCode", "AutoArtifactSalvage",
+        "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment", "OneDragon",
     })
@@ -142,6 +142,8 @@ class TaskDispatcher:
             return self.run_quick_serenitea_pot_task(cfg, ct)
         if name in ("QuickClaimReward", "OneKeyClaimReward"):
             return self.run_quick_claim_reward_task(cfg, ct)
+        if name in ("QuickBuy", "BuyMax"):
+            return self.run_quick_buy_task(cfg, ct)
         if name in ("UseRedemptionCode", "UseRedeemCode", "AutoRedeemCode"):
             return self.run_use_redemption_code_task(cfg, ct)
         if name in ("AutoArtifactSalvage", "ArtifactSalvage"):
@@ -471,6 +473,16 @@ class TaskDispatcher:
             scroll_down=scroll or mode in ("按住持续", "hold", "continuous"),
             max_scrolls=int(_value(param, "maxScrolls", 3) or 3),
             timeout_s=float(_value(param, "timeoutSeconds", 30) or 30),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_quick_buy_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .quick_buy import QuickBuyTask
+
+        shop = _value(param, "serenitea", _value(param, "isSereniteaPot", None))
+        return QuickBuyTask(
+            self.ctx,
+            serenitea=None if shop is None else bool(shop),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

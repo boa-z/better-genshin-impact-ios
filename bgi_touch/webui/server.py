@@ -382,7 +382,7 @@ def api_scripts():
         "AutoOpenChest", "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat",
         "AutoMusicGame", "AutoAlbum",
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
-        "QuickClaimReward", "UseRedemptionCode",
+        "QuickClaimReward", "QuickBuy", "UseRedemptionCode",
         "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment",

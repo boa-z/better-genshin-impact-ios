@@ -53,6 +53,9 @@ TCG_WANTED = [*TCG_DICE, *TCG_OTHER, "tcg_character_card.json"]
 TCG_EXTRA = {
     "combat_avatar.json": "BetterGenshinImpact/GameTask/AutoFight/Assets/combat_avatar.json",
 }
+QUICK_BUY_SOURCE = (
+    "BetterGenshinImpact/GameTask/QuickBuy/Assets/1920x1080/SereniteaPotCoin.png"
+)
 
 
 def fetch_tcg_assets(ref: str) -> None:
@@ -78,6 +81,19 @@ def fetch_tcg_assets(ref: str) -> None:
     print(f"七圣召唤资产完成：{destination}")
 
 
+def fetch_quick_buy_asset(ref: str) -> None:
+    destination = PROJECT_ROOT / "assets" / "quickbuy" / "SereniteaPotCoin.png"
+    if destination.is_file():
+        print(f"快速购买资产已就绪：{destination.parent}")
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    url = f"{TCG_REPOSITORY}/{quote(ref, safe='')}/{quote(QUICK_BUY_SOURCE, safe='/')}"
+    partial = destination.with_suffix(".png.part")
+    urllib.request.urlretrieve(url, partial)
+    partial.replace(destination)
+    print(f"快速购买资产完成：{destination.parent}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.0.19")
@@ -85,10 +101,12 @@ def main() -> None:
     ap.add_argument("--models", action="store_true", help="同时下载 YOLO 模型资产（BetterGI.Assets.Model）")
     ap.add_argument("--tcg", action="store_true", help="同时下载七圣召唤模板与角色卡配置")
     ap.add_argument(
-        "--tcg-ref",
+        "--bettergi-ref", "--tcg-ref",
+        dest="bettergi_ref",
         default="c3c22507c1e9ae95b8673ab3046f5ad4806c3b72",
-        help="BetterGI Git ref（默认是本移植版本审计对应提交）",
+        help="BetterGI Git ref（用于七圣召唤和快捷任务资产）",
     )
+    ap.add_argument("--quick-buy", action="store_true", help="同时下载快速购买识别模板")
     args = ap.parse_args()
 
     DEST.mkdir(parents=True, exist_ok=True)
@@ -147,7 +165,9 @@ def main() -> None:
         print(f"模型完成：{mdl_dest}")
 
     if args.tcg:
-        fetch_tcg_assets(args.tcg_ref)
+        fetch_tcg_assets(args.bettergi_ref)
+    if args.quick_buy:
+        fetch_quick_buy_asset(args.bettergi_ref)
 
 
 if __name__ == "__main__":

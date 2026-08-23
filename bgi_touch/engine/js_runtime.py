@@ -477,6 +477,8 @@ class JsScriptRuntime:
                 return task_dispatcher.run_quick_serenitea_pot_task(param, ct)
             def runQuickClaimRewardTask(self, param=None, ct=None):
                 return task_dispatcher.run_quick_claim_reward_task(param, ct)
+            def runQuickBuyTask(self, param=None, ct=None):
+                return task_dispatcher.run_quick_buy_task(param, ct)
             def runUseRedemptionCodeTask(self, param=None, ct=None):
                 return task_dispatcher.run_use_redemption_code_task(param, ct)
             def runAutoArtifactSalvageTask(self, param=None, ct=None):

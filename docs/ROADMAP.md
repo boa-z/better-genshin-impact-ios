@@ -28,6 +28,8 @@
   清理 07:00 与 19:00 两个鱼塘阶段。
 - JavaScript 参数对象、取消令牌、ServerTime、PostMessage 前台触控近似，以及
   file 文本回调、图片缩放/写入等 bettergi.d.ts 宿主契约。
+- QuickBuy 的普通商店与尘歌壶商店数量滑块、购买确认分支；货币模板由资产下载器
+  固定版本获取，缺少模板时要求显式指定商店类型以避免误购。
 
 ## 已完成 — 地图追踪离线核心
 
@@ -71,8 +73,8 @@ HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest �
 AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批迁移重点是 QuickBuy、QuickForge、FarmingPlan 等尚未接入统一调度器的页面
-任务，以及 AutoBoss/地脉/幽境的内置导航和树脂分支；需要继续移植专用识别器，
+下一批迁移重点是 FarmingPlan 等尚未接入统一调度器的页面任务，以及
+AutoBoss/地脉/幽境的内置导航和树脂分支；QuickForge 上游当前仍为空类。需要继续移植专用识别器，
 不能只用通用 OCR 点击流代替。
 
 ## 工程
