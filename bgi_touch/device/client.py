@@ -348,14 +348,38 @@ class DeviceClient:
     def last_frame_version(self) -> int | None:
         return self._last_frame_version
 
+    @property
+    def game_session_id(self) -> str | None:
+        """Locally cached persistent game-session ID, if it is still usable."""
+        return self._game_session_id
+
+    def _release_game_session_for_direct_input(self) -> None:
+        """Cleanly end exclusive profile input before a legacy HID action.
+
+        DeviceHub 140 invalidates a persistent game-control session whenever a
+        direct tap/swipe/multi-touch action is sent.  Stopping it explicitly
+        keeps the local cache in sync and avoids a later, misleading
+        ``game control session not found`` heartbeat failure.
+        """
+        if self._game_session_id is None:
+            return
+        try:
+            self.stop_game_session()
+        except Exception:
+            # The server may already have invalidated it; stop_game_session's
+            # finally block still clears the local ID.
+            pass
+
     def tap(self, x: float, y: float, *, hold_ms: int | None = None,
             image_width: int | None = None, image_height: int | None = None) -> None:
+        self._release_game_session_for_direct_input()
         x, y, image_width, image_height = self._map(x, y, image_width, image_height)
         self.call("tap", x=x, y=y, hold_ms=hold_ms, wait_for_settle=False,
                   image_width=image_width, image_height=image_height)
 
     def swipe(self, x1: float, y1: float, x2: float, y2: float, *, duration_ms: int = 300,
               image_width: int | None = None, image_height: int | None = None) -> None:
+        self._release_game_session_for_direct_input()
         source_width, source_height = image_width, image_height
         x1, y1, mapped_width, mapped_height = self._map(
             x1, y1, source_width, source_height
@@ -366,6 +390,7 @@ class DeviceClient:
 
     def multi_touch(self, contacts: list[dict], *, duration_ms: int = 250,
                     image_width: int | None = None, image_height: int | None = None) -> None:
+        self._release_game_session_for_direct_input()
         mapped = []
         source_width, source_height = image_width, image_height
         mapped_width, mapped_height = source_width, source_height
@@ -380,9 +405,11 @@ class DeviceClient:
                   image_height=mapped_height if contacts else source_height)
 
     def press_button(self, button: str) -> None:
+        self._release_game_session_for_direct_input()
         self.call("press_button", button=button)
 
     def press_key(self, key: str) -> None:
+        self._release_game_session_for_direct_input()
         self.call("press_key", key=key)
 
     def app_switcher(self) -> None:
@@ -478,6 +505,7 @@ class DeviceClient:
 
     def run_keymap(self, profile_name: str, keys: list[str], *, hold_ms: int = 100,
                    allow_scripts: bool = False, wait_for_settle: bool = False) -> None:
+        self._release_game_session_for_direct_input()
         self.call("run_keymap", profile_name=profile_name, keys=keys, hold_ms=hold_ms,
                   allow_scripts=allow_scripts, wait_for_settle=wait_for_settle)
 

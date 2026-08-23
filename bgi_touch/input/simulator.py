@@ -69,7 +69,14 @@ class InputSimulator:
             return False
         with self._profile_lock:
             if self._profile_session_id is not None:
-                return True
+                device_session = getattr(
+                    self.device, "game_session_id", self._profile_session_id
+                )
+                if device_session == self._profile_session_id:
+                    return True
+                # A direct DeviceHub HID action invalidates the exclusive game
+                # session. DeviceClient clears its cache before sending it.
+                self._profile_session_id = None
             try:
                 self._profile_session_id = self.device.start_game_session(
                     profile.name,
@@ -96,6 +103,14 @@ class InputSimulator:
             failed = False
             with self._profile_lock:
                 if self._profile_session_id != session_id or self._profile_failed:
+                    return
+                device_session = getattr(self.device, "game_session_id", session_id)
+                if device_session != session_id:
+                    self._profile_session_id = None
+                    with self._held_lock:
+                        has_held_input = bool(self._held)
+                    if has_held_input:
+                        self._ensure_pump()
                     return
                 try:
                     self.device.set_game_input(
@@ -204,6 +219,26 @@ class InputSimulator:
         ddx, ddy = dx * self.t.scale, dy * self.t.scale
         return {"x1": cx - ddx / 2, "y1": cy - ddy / 2, "x2": cx + ddx / 2, "y2": cy + ddy / 2}
 
+    def _after_direct_input(self) -> None:
+        """Reconcile a DeviceHub session invalidated by direct touch input."""
+        if not hasattr(self.device, "game_session_id"):
+            return
+        with self._profile_lock:
+            device_session = self.device.game_session_id
+            if self._profile_session_id == device_session:
+                return
+            self._profile_session_id = device_session
+        with self._held_lock:
+            has_held_input = bool(self._held)
+        if has_held_input:
+            self._sync_profile_keys()
+
+    def _direct_input(self, action) -> None:
+        try:
+            action()
+        finally:
+            self._after_direct_input()
+
     # ---- key API（BetterGI 语义）----
 
     def switch_party_slot(self, slot: int) -> None:
@@ -218,7 +253,7 @@ class InputSimulator:
             return
         row = others.index(slot) + 1
         x, y = self._button_pos(f"partyRow{row}")
-        self.device.tap(x, y, **self._wh)
+        self._direct_input(lambda: self.device.tap(x, y, **self._wh))
         self._active_slot = slot
 
     def key_press(self, key: str, hold_ms: int = 80) -> None:
@@ -233,11 +268,17 @@ class InputSimulator:
             return
         elif b["type"] == "button":
             x, y = self._button_pos(b["button"])
-            self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+            self._direct_input(
+                lambda: self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+            )
         else:
             contact = self._joystick_contact([b])
             if contact:
-                self.device.multi_touch([contact], duration_ms=max(150, hold_ms), **self._wh)
+                self._direct_input(
+                    lambda: self.device.multi_touch(
+                        [contact], duration_ms=max(150, hold_ms), **self._wh
+                    )
+                )
 
     def key_down(self, key: str) -> None:
         b = self.layout.binding(key)
@@ -279,13 +320,15 @@ class InputSimulator:
 
     def click_ref(self, ref_x: float, ref_y: float) -> None:
         x, y = self.t.to_device(ref_x, ref_y)
-        self.device.tap(x, y, **self._wh)
+        self._direct_input(lambda: self.device.tap(x, y, **self._wh))
 
     def attack(self, hold_ms: int = 80) -> None:
         if self._profile_press("X", hold_ms):
             return
         x, y = self._button_pos("attack")
-        self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+        self._direct_input(
+            lambda: self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+        )
 
     def button_down(self, name: str) -> None:
         """Hold a semantic HUD button until :meth:`button_up` is called."""
@@ -316,7 +359,13 @@ class InputSimulator:
         if self._profile_press("X", hold_ms):
             return
         x, y = self._button_pos("attack")
-        self.device.multi_touch([{"x1": x, "y1": y, "x2": x, "y2": y}], duration_ms=hold_ms, **self._wh)
+        self._direct_input(
+            lambda: self.device.multi_touch(
+                [{"x1": x, "y1": y, "x2": x, "y2": y}],
+                duration_ms=hold_ms,
+                **self._wh,
+            )
+        )
 
     def move_camera_by(self, dx: float, dy: float) -> None:
         """相机转动。泵激活时并入下一个手势周期，否则立即滑动。
@@ -332,24 +381,33 @@ class InputSimulator:
         nx, ny, nw, nh = self.layout.camera_region
         max_dx = 0.9 * nw * self.t.device_width / self.t.scale   # ref 像素语义
         max_dy = 0.9 * nh * self.t.device_height / self.t.scale
-        while abs(dx) > 1 or abs(dy) > 1:
-            sx = max(-max_dx, min(max_dx, dx))
-            sy = max(-max_dy, min(max_dy, dy))
-            c = self._camera_contact(sx, sy)
-            dist = math.hypot(c["x2"] - c["x1"], c["y2"] - c["y1"])
-            self.device.swipe(c["x1"], c["y1"], c["x2"], c["y2"],
-                              duration_ms=int(min(900, max(150, dist * 0.8))), **self._wh)
-            dx -= sx
-            dy -= sy
-            if abs(dx) > 1 or abs(dy) > 1:
-                time.sleep(0.35)
+        def swipe_all() -> None:
+            nonlocal dx, dy
+            while abs(dx) > 1 or abs(dy) > 1:
+                sx = max(-max_dx, min(max_dx, dx))
+                sy = max(-max_dy, min(max_dy, dy))
+                c = self._camera_contact(sx, sy)
+                dist = math.hypot(c["x2"] - c["x1"], c["y2"] - c["y1"])
+                self.device.swipe(
+                    c["x1"], c["y1"], c["x2"], c["y2"],
+                    duration_ms=int(min(900, max(150, dist * 0.8))),
+                    **self._wh,
+                )
+                dx -= sx
+                dy -= sy
+                if abs(dx) > 1 or abs(dy) > 1:
+                    time.sleep(0.35)
+
+        self._direct_input(swipe_all)
 
     def tap_button(self, name: str, hold_ms: int = 80) -> None:
         raw = self.layout.profile_key_for_button(name)
         if raw is not None and self._profile_press_raw(raw, hold_ms):
             return
         x, y = self._button_pos(name)
-        self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+        self._direct_input(
+            lambda: self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
+        )
 
     # ---- 手势泵 ----
 

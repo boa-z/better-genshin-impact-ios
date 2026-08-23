@@ -204,6 +204,88 @@ def test_expired_devicehub_game_session_can_be_rebuilt():
     assert simulator._profile_failed is True
 
 
+def test_device_client_stops_persistent_session_before_direct_touch():
+    from unittest.mock import Mock, call
+
+    from bgi_touch.device.client import DeviceClient
+
+    client = DeviceClient.__new__(DeviceClient)
+    client._game_session_id = "game-1"
+    client._mapper = None
+    client.call = Mock()
+
+    client.tap(100, 200, image_width=1920, image_height=1080)
+
+    assert client._game_session_id is None
+    assert client.call.call_args_list == [
+        call("stop_game_session", session_id="game-1"),
+        call(
+            "tap",
+            x=100,
+            y=200,
+            hold_ms=None,
+            wait_for_settle=False,
+            image_width=1920,
+            image_height=1080,
+        ),
+    ]
+
+
+def test_direct_camera_swipe_restarts_held_native_profile_session():
+    from bgi_touch.input.layout import ControlLayout, DeviceHubProfile
+    from bgi_touch.input.simulator import InputSimulator
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    profile = DeviceHubProfile.from_dict({
+        "name": "test-profile",
+        "mappings": [
+            {"type": "DirectionPad", "bind": {"up": ["KeyW"]}},
+        ],
+    })
+    layout = ControlLayout.load(
+        Path(__file__).parents[1] / "config" / "controls" / "genshin-default.json",
+        devicehub_profile=profile,
+    )
+
+    class Device:
+        def __init__(self):
+            self.game_session_id = None
+            self.started = []
+            self.inputs = []
+            self.stopped = []
+            self.swipes = []
+
+        def start_game_session(self, _profile_name, **_kwargs):
+            session_id = f"session-{len(self.started) + 1}"
+            self.started.append(session_id)
+            self.game_session_id = session_id
+            return session_id
+
+        def set_game_input(self, session_id, keys, **_kwargs):
+            self.inputs.append((session_id, list(keys)))
+
+        def stop_game_session(self, session_id):
+            self.stopped.append(session_id)
+            self.game_session_id = None
+
+        def swipe(self, *args, **kwargs):
+            if self.game_session_id is not None:
+                self.stop_game_session(self.game_session_id)
+            self.swipes.append((args, kwargs))
+
+    device = Device()
+    simulator = InputSimulator(device, layout, ScreenTransform(1920, 1080))
+    simulator.key_down("W")
+    simulator.move_camera_by(70, 0)
+
+    assert device.started == ["session-1", "session-2"]
+    assert device.stopped == ["session-1"]
+    assert len(device.swipes) == 1
+    assert simulator._profile_session_id == "session-2"
+    assert device.inputs[-1] == ("session-2", ["KeyW"])
+    simulator.release_all()
+
+
 def test_native_ui_layout_overlay_changes_space_semantics():
     from bgi_touch.input.layout import ControlLayout
 
