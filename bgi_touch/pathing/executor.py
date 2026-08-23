@@ -112,13 +112,24 @@ class PathingExecutor:
         return FarmingRouteInfo(group_name, project_name, folder_name)
 
     def _ensure_positioner(self, map_name: str) -> None:
+        from .map_locator import resolve_map_name
+
+        resolved_name = resolve_map_name(map_name)
+        previous_name = resolve_map_name(self._map_name)
+        self._map_name = resolved_name
+        if previous_name != resolved_name:
+            self._tp_task = None
         if self.positioner is not None:
-            return
+            current_name = getattr(self.positioner, "map_name", None)
+            # A caller-supplied Positioner without map metadata remains
+            # authoritative. Auto positioners advertise map_name and can be
+            # replaced safely when one executor runs routes across maps.
+            if not isinstance(current_name, str) or resolve_map_name(current_name) == resolved_name:
+                return
         try:
             from .positioner import MinimapPositioner
-            self.positioner = MinimapPositioner(self.ctx, map_name)
-            self._map_name = map_name
-            self.log(f"[pathing] 已加载 {map_name} 地图定位（SIFT）")
+            self.positioner = MinimapPositioner(self.ctx, resolved_name)
+            self.log(f"[pathing] 已加载 {resolved_name} 地图定位（SIFT）")
         except FileNotFoundError as e:
             self.log(f"[pathing] 无地图定位：{e}")
 
@@ -243,7 +254,7 @@ class PathingExecutor:
     def _teleport(self, wp: Waypoint) -> None:
         if self._tp_task is None:
             from .tp import TpTask
-            self._tp_task = TpTask(self.ctx, log=self.log)
+            self._tp_task = TpTask(self.ctx, log=self.log, map_name=self._map_name)
         self._tp_task.tp(wp.x, wp.y)
         if self.positioner is not None:
             # 传送落点≈目标锚点：直接设为局部搜索先验（白天/城内全局匹配不稳）

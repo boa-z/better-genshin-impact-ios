@@ -23,39 +23,66 @@ from ..engine.context import GameContext
 from ..engine.recognition import Mat, RecognitionObject
 from ..vision.ocr import get_ocr
 from .feature_store import SiftFeatureStore
-from .map_locator import ASSETS, MapConfig
+from .map_locator import ASSETS, MapConfig, get_map_definition, resolve_map_name
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
 
 
 class BigMapLocator:
-    """全屏大地图截图 → 256 尺度地图坐标与比例。"""
+    """全屏大地图截图 → 当前地图大地图特征坐标与比例。"""
 
     def __init__(self, map_name: str = "Teyvat"):
-        base = ASSETS / map_name
-        self.store = SiftFeatureStore(base / f"{map_name}_0_256_SIFT.kp.bin",
-                                      base / f"{map_name}_0_256_SIFT.mat.png")
+        self.definition = get_map_definition(map_name)
+        self.map_name = self.definition.name
+        self.config = MapConfig.for_map(self.map_name)
+        base = ASSETS / self.map_name
+        scale = self.definition.big_map_scale
+        stores = []
+        for keypoints in sorted(
+            base.glob(f"{self.map_name}_*_{scale}_SIFT.kp.bin"),
+            key=lambda path: ("_0_" not in path.name, path.name),
+        ):
+            descriptors = keypoints.with_name(
+                keypoints.name.removesuffix(".kp.bin") + ".mat.png"
+            )
+            if descriptors.is_file():
+                stores.append(SiftFeatureStore(keypoints, descriptors))
+        if not stores:
+            raise FileNotFoundError(f"缺少大地图特征资产: {base}")
+        self.stores = stores
+        self.store = stores[0]
         self._sift = cv2.SIFT_create()
 
-    def locate_view(self, bgr: np.ndarray) -> tuple[float, float, float] | None:
-        """返回 (视野中心在 256 图的 x, y, 屏幕像素/256图像素 比例)；失败 None。
+    def world_to_feature(self, wx: float, wy: float) -> tuple[float, float]:
+        x, y = self.config.world_to_image(wx, wy)
+        ratio = self.definition.big_map_scale / self.definition.feature_scale
+        return x * ratio, y * ratio
 
-        按原版流程：灰度 + 1/4 缩放后匹配 256 库。
+    def feature_to_world(self, x: float, y: float) -> tuple[float, float]:
+        ratio = self.definition.big_to_native_scale
+        return self.config.image_to_world(x * ratio, y * ratio)
+
+    def locate_view(self, bgr: np.ndarray) -> tuple[float, float, float] | None:
+        """返回 (特征图视野中心 x, y, 屏幕像素/特征图像素比例)；失败 None。
+
+        提瓦特按原版缩小到 1/4 后匹配 256 库，独立地图匹配原生 1024 库。
         """
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        small = cv2.resize(gray, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+        resize = self.definition.big_map_query_resize
+        small = (
+            cv2.resize(gray, None, fx=resize, fy=resize, interpolation=cv2.INTER_AREA)
+            if resize != 1.0 else gray
+        )
         kps, desc = self._sift.detectAndCompute(small, None)
         if desc is None or len(kps) < 10:
             return None
         pts = np.float32([k.pt for k in kps])
-        r = self.store.locate(desc, pts, (small.shape[1] / 2, small.shape[0] / 2))
-        if r is None:
-            return None
-        # r.scale = 256图px / 1/4屏幕px → 屏幕px/256图px = 0.25*4/scale…直接算：
-        # 1 个 256 图像素对应 (1/r.scale) 个 1/4 屏幕像素 = 4/r.scale 个屏幕像素
-        if r.scale <= 1e-6:
-            return None
-        return r.x, r.y, 4.0 / r.scale
+        center = (small.shape[1] / 2, small.shape[0] / 2)
+        for store in self.stores:
+            r = store.locate(desc, pts, center)
+            if r is not None and r.scale > 1e-6:
+                return r.x, r.y, 1.0 / (resize * r.scale)
+        return None
 
 
 class TpTask:
@@ -63,8 +90,9 @@ class TpTask:
                  map_name: str = "Teyvat"):
         self.ctx = ctx
         self.log = log
-        self.big = BigMapLocator(map_name)
-        self.config = MapConfig()
+        self.map_name = resolve_map_name(map_name)
+        self.big = BigMapLocator(self.map_name)
+        self.config = MapConfig.for_map(self.map_name)
         # Touch zoom has no reliable semantic level from DeviceHub. Keep the
         # BetterGI 1..6 scale in-process and use pinch gestures for changes.
         self._zoom_level = 3.0
@@ -72,6 +100,10 @@ class TpTask:
             Mat.from_file(str(TEMPLATES / "GoTeleport.png")), 1440, 960, 100, 120
         )
         self._go_teleport.threshold = 0.7
+        self._map_close = RecognitionObject.template_match(
+            Mat.from_file(str(TEMPLATES / "MapCloseButton.png")), 0, 0, 180, 140
+        )
+        self._map_close.threshold = 0.65
 
     # ---- 步骤 ----
 
@@ -93,6 +125,10 @@ class TpTask:
             frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
                 return True
+            if self._is_map_ui():
+                if self._switch_area():
+                    return self._wait_for_target_map()
+                return False
             self.ctx.input.tap_button("map")
             self.ctx.sleep(900)
             try:
@@ -103,7 +139,68 @@ class TpTask:
                 frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
                 return True
+            if self._is_map_ui() and self._switch_area():
+                return self._wait_for_target_map()
         return self.big.locate_view(self.ctx.capture_bgr()) is not None
+
+    def _is_map_ui(self) -> bool:
+        try:
+            return self.ctx.capture_region().find(self._map_close).is_exist()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _normalize_area_text(value: str) -> str:
+        return (
+            str(value).replace(" ", "").replace("\n", "")
+            .replace("·", "")
+            .replace('"', "").replace("“", "").replace("”", "")
+            .replace("「", "").replace("」", "")
+            .replace("渊下宮", "渊下宫").replace("蒙徳", "蒙德")
+            .replace("娜塔", "纳塔")
+        )
+
+    def _switch_area(self, timeout_s: float = 2.5) -> bool:
+        """Open the area list and select this locator's map by OCR."""
+        definition = get_map_definition(self.map_name)
+        wanted = [self._normalize_area_text(value) for value in (
+            definition.name, *definition.aliases,
+        )]
+        self.ctx.input.click_ref(1760, 1020)
+        self.ctx.sleep(250)
+        deadline = time.monotonic() + timeout_s
+        seen: list[str] = []
+        while time.monotonic() < deadline:
+            region = self.ctx.capture_region()
+            hits = region.find_multi(
+                RecognitionObject.ocr(1280, 0, 640, 1080), limit=30,
+            )
+            matches = []
+            for hit in hits:
+                text = self._normalize_area_text(hit.text)
+                if text:
+                    seen.append(text)
+                if any(value in text or text in value for value in wanted):
+                    matches.append(hit)
+            if matches:
+                target = max(matches, key=lambda hit: hit.y)
+                self.log(f"[tp] 切换地图区域：{target.text.strip()}")
+                target.click()
+                self.ctx.sleep(700)
+                return True
+            self.ctx.sleep(150)
+        candidates = " / ".join(dict.fromkeys(seen[:12])) or "无"
+        self.log(f"[tp] 切换地图区域失败：{self.map_name}，OCR候选：{candidates}")
+        return False
+
+    def _wait_for_target_map(self, timeout_s: float = 4.0) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.big.locate_view(self.ctx.capture_bgr()) is not None:
+                return True
+            self.ctx.sleep(250)
+        self.log(f"[tp] 已选择 {self.map_name}，但大地图特征匹配失败")
+        return False
 
     def _drag_map(self, dx: float, dy: float) -> None:
         """把地图内容平移 (dx, dy) 设备像素（正值=内容向右/下移动）。"""
@@ -138,8 +235,7 @@ class TpTask:
         """Center the visible map on a world coordinate without selecting it."""
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
-        tx2048, ty2048 = self.config.world_to_image(wx, wy)
-        tx, ty = tx2048 / 8, ty2048 / 8
+        tx, ty = self.big.world_to_feature(wx, wy)
         deadline = time.monotonic() + timeout_s
         t = self.ctx.transform
         tol = 0.05 * t.device_width
@@ -214,8 +310,7 @@ class TpTask:
             if view is None:
                 raise RuntimeError("点击地图点前视野匹配失败")
             t = self.ctx.transform
-            tx2048, ty2048 = self.config.world_to_image(wx, wy)
-            tx, ty = tx2048 / 8, ty2048 / 8
+            tx, ty = self.big.world_to_feature(wx, wy)
             tap_x = t.device_width / 2 + (tx - view[0]) * view[2]
             tap_y = t.device_height / 2 + (ty - view[1]) * view[2]
             selected = self._tap_anchor_icon_near(
@@ -234,9 +329,9 @@ class TpTask:
     def move_independent_map_to(self, wx: float, wy: float, map_name: str,
                                 timeout_s: float = 90) -> bool:
         """Move a named map when its local feature assets are available."""
-        if map_name != "Teyvat":
-            raise NotImplementedError(
-                f"独立地图 {map_name} 缺少 iOS 地图特征资产（当前仅支持 Teyvat）"
+        if resolve_map_name(map_name) != self.map_name:
+            return TpTask(self.ctx, self.log, map_name).move_map_to(
+                wx, wy, timeout_s,
             )
         return self.move_map_to(wx, wy, timeout_s)
 
@@ -347,8 +442,7 @@ class TpTask:
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
 
-        tx2048, ty2048 = self.config.world_to_image(wx, wy)
-        tx, ty = tx2048 / 8, ty2048 / 8  # 256 尺度
+        tx, ty = self.big.world_to_feature(wx, wy)
         deadline = time.monotonic() + timeout_s
         t = self.ctx.transform
         tol = 0.05 * t.device_width

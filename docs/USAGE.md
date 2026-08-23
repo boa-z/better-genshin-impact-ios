@@ -302,7 +302,7 @@ bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹
 # pathing：--dry-run 会校验 BetterGI 路线字段并输出统计
 bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json --dry-run
 
-# 地图追踪：需要 assets/map/Teyvat 下的官方 SIFT 特征库
+# 地图追踪：需要 tools/fetch_map_assets.py 安装的官方地图/SIFT 资产
 bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 ```
 
@@ -315,6 +315,11 @@ bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 `set_time`、`wonderland_cycle`、`log_output` 和 `exit_and_relogin`。`set_time` 的
 `action_params` 支持 `07:00`，也兼容上游的 `07:00:false` 动画开关格式；省略第三段
 时按 BetterGI 默认跳过时间拨盘动画。
+
+地图名称与 BetterGI 一致，支持 `Teyvat`、`TheChasm`、`Enkanomiya`、
+`SeaOfBygoneEras`、`AncientSacredMountain`、`TempleOfSpace` 和 `MoonCanon`，
+也接受对应中文名称。执行器会按路线的 `map_name` 自动切换区域、坐标系和多楼层
+SIFT 特征库；跨地图路线不需要手工重启任务。
 
 路线中的 `farming_info` 会按 BetterGI 语义写入每日锄地统计，日志位于
 `log/FarmingPlan/YYYYMMDD.json`，并以服务器时间凌晨 4 点切日。编辑

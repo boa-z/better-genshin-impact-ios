@@ -15,6 +15,9 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
+import cv2
+import numpy as np
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEST = PROJECT_ROOT / "assets" / "map"
 NUPKG_URL = "https://www.nuget.org/api/v2/package/BetterGI.Assets.Map/{version}"
@@ -28,7 +31,66 @@ WANTED = [
     "Teyvat/Teyvat_0_256_SIFT.mat.png",
     "Teyvat/Teyvat_0_256.png",
     "Teyvat/MapBack_gray.png",
+    "TheChasm/TheChasm_0_1024.png",
+    "Enkanomiya/Enkanomiya_0_1024.png",
+    "SeaOfBygoneEras/SeaOfBygoneEras_0_1024.png",
+    "SeaOfBygoneEras/SeaOfBygoneEras_-1_1024.webp",
+    "SeaOfBygoneEras/SeaOfBygoneEras_-2_1024.webp",
+    "AncientSacredMountain/AncientSacredMountain_0_1024.png",
+    "AncientSacredMountain/AncientSacredMountain_-1_1024.webp",
+    "TempleOfSpace/TempleOfSpace_0_1024.png",
+    "MoonCanon/MoonCanon_0_1024_SIFT.kp.bin",
+    "MoonCanon/MoonCanon_0_1024_SIFT.mat.png",
 ]
+
+FEATURE_SOURCES = [
+    relative for relative in WANTED
+    if relative.lower().endswith((".png", ".webp"))
+    and "Teyvat/" not in relative
+    and "_SIFT." not in relative
+]
+
+KP_DTYPE = np.dtype([
+    ("x", "<f4"), ("y", "<f4"), ("size", "<f4"), ("angle", "<f4"),
+    ("response", "<f4"), ("octave", "<i4"), ("class_id", "<i4"),
+])
+
+
+def build_map_features() -> None:
+    """Generate BetterGI-compatible SIFT stores for independent maps."""
+    sift = cv2.SIFT_create()
+    for relative in FEATURE_SOURCES:
+        source = DEST / relative
+        stem = source.with_suffix("")
+        keypoint_path = stem.with_name(stem.name + "_SIFT.kp.bin")
+        descriptor_path = stem.with_name(stem.name + "_SIFT.mat.png")
+        if keypoint_path.is_file() and descriptor_path.is_file():
+            continue
+        image = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise FileNotFoundError(f"无法读取地图图像: {source}")
+        print(f"生成 SIFT：{relative} …")
+        keypoints, descriptors = sift.detectAndCompute(image, None)
+        if descriptors is None or not keypoints:
+            raise RuntimeError(f"地图未提取到 SIFT 特征: {source}")
+        raw = np.empty(len(keypoints), dtype=KP_DTYPE)
+        for index, keypoint in enumerate(keypoints):
+            raw[index] = (
+                keypoint.pt[0], keypoint.pt[1], keypoint.size, keypoint.angle,
+                keypoint.response, keypoint.octave, keypoint.class_id,
+            )
+        keypoint_temp = keypoint_path.with_suffix(".bin.part")
+        descriptor_temp = descriptor_path.with_name(
+            descriptor_path.name.removesuffix(".png") + ".part.png"
+        )
+        raw.tofile(keypoint_temp)
+        descriptor_image = np.clip(descriptors, 0, 255).astype(np.uint8)
+        if not cv2.imwrite(str(descriptor_temp), descriptor_image):
+            keypoint_temp.unlink(missing_ok=True)
+            raise OSError(f"无法写入地图描述子: {descriptor_temp}")
+        keypoint_temp.replace(keypoint_path)
+        descriptor_temp.replace(descriptor_path)
+        print(f"  {len(keypoints)} 个关键点")
 
 TCG_REPOSITORY = "https://raw.githubusercontent.com/babalae/better-genshin-impact"
 TCG_ASSET_ROOT = "BetterGenshinImpact/GameTask/AutoGeniusInvokation/Assets"
@@ -123,7 +185,7 @@ def fetch_auto_boss_assets(ref: str) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.0.19")
+    ap.add_argument("--version", default="1.0.21")
     ap.add_argument("--nupkg", help="已下载的 .nupkg 路径（跳过下载）")
     ap.add_argument("--models", action="store_true", help="同时下载 YOLO 模型资产（BetterGI.Assets.Model）")
     ap.add_argument("--tcg", action="store_true", help="同时下载七圣召唤模板与角色卡配置")
@@ -163,6 +225,8 @@ def main() -> None:
                     shutil.copyfileobj(src, dst)
                 print(f"解出 {w}")
         print(f"完成：{DEST}")
+
+    build_map_features()
 
     if args.models:
         mdl_dest = PROJECT_ROOT / "assets" / "models"

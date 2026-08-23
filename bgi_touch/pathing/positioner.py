@@ -23,6 +23,7 @@ class MinimapPositioner:
     def __init__(self, ctx: GameContext, map_name: str = "Teyvat"):
         self.ctx = ctx
         self.locator = MapLocator(map_name)
+        self.map_name = self.locator.map_name
         self._last_position: tuple[float, float] | None = None
         self._last_fix_at = 0.0
 

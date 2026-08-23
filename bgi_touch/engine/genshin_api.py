@@ -42,8 +42,9 @@ class GenshinApi:
 
     def _tp_for(self, map_name: str | None = None):
         from ..pathing.tp import TpTask
+        from ..pathing.map_locator import resolve_map_name
 
-        name = str(map_name or "Teyvat")
+        name = resolve_map_name(map_name)
         if name == "Teyvat" and self._tp_task is not None:
             return self._tp_task
         task = TpTask(self.ctx, log=self.log, map_name=name)
@@ -52,6 +53,8 @@ class GenshinApi:
         return task
 
     def _positioner_for(self, map_name: str = "Teyvat"):
+        from ..pathing.map_locator import resolve_map_name
+        map_name = resolve_map_name(map_name)
         if map_name not in self._positioners:
             from ..pathing.positioner import MinimapPositioner
             self._positioners[map_name] = MinimapPositioner(self.ctx, map_name)
@@ -210,8 +213,7 @@ class GenshinApi:
         view = locator.locate_view(self.ctx.capture_bgr())
         if view is None:
             raise RuntimeError("大地图视野匹配失败（地图未打开？）")
-        from ..pathing.map_locator import MapConfig
-        wx, wy = MapConfig().image_to_world(view[0] * 8, view[1] * 8)
+        wx, wy = locator.feature_to_world(view[0], view[1])
         from .recognition import Point2f
         return Point2f(wx, wy)
 
