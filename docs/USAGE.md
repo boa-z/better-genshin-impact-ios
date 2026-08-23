@@ -260,6 +260,8 @@ bgi-touch task AutoArtifactSalvage --config '{"star":4}'
 # 单物品返回整数；itemNames 多物品模式返回名称到数量的对象
 bgi-touch task CountInventoryItem --config \
   '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
+bgi-touch task CharacterDevelopment --config \
+  '{"characterNames":["钟离","那维莱特"],"categories":"属性;武器;天赋"}'
 
 # 键鼠宏：直接给原始宏 JSON，运行时自动翻译为触控
 bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹-塔拉塔海谷.json
@@ -338,6 +340,17 @@ bgi-touch task AutoArtifactSalvage --config-file artifact-salvage.json
 `gridScreenName`、`starAsSuffix`、`maxNumToGet` 和 `outputDirectory`。
 `InventoryCountComparison` 会输出页面截图、常规/裁剪 OCR 的 CSV 以及异常数字标准化图；
 `target` 支持 `CharacterDevelopmentItems`、`Food`、`Materials` 和 `CurrentPage`。
+
+`CharacterDevelopment` 对齐上游 `characterDevelopmentTask.getCharacter(name, categories)`
+和 `getMultiCharacters(names, categories)`，也可通过 SoloTask 调用。返回对象保留
+`CharacterName`、`ElementType`、角色/武器当前等级与上限，以及普通攻击、元素战技、
+元素爆发的显示等级和命座 `+3` 标记。`categories` 使用分号分隔“属性”“武器”“天赋”，
+省略时读取全部。
+
+BetterGI 发布包使用未随源码提交的头像 ONNX 与 `avatar.csv` 选择角色；iOS 端改为移植
+同一固定尺寸角色卡检测器，逐卡选择后用右侧名称 OCR 确认目标。角色别名和武器类型来自
+上游 `combat_avatar.json`，元素元数据来自现有社区脚本资产。此实现速度较慢，但不要求
+缺失的发布包模型；多角色调用会复用角色界面并在任务结束后统一返回主界面。
 
 战斗 DSL 语法速查（与原版一致）：
 

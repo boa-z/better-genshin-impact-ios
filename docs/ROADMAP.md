@@ -16,6 +16,8 @@
   JavaScript `Output` 规则；最终分解默认关闭，选择完成后保留人工复查界面。
 - 通用背包网格轮廓检测、翻页、详情名称 OCR 和数量区域预处理，以及脚本所需的
   CountInventoryItem、常规分类 GetGridIcons、InventoryCountComparison。
+- characterDevelopmentTask 的单/多角色接口、固定尺寸角色卡选择，以及属性、武器、
+  普攻/战技/爆发天赋等级读取；角色别名和元素/武器元数据已随项目固定版本保存。
 
 ## 已完成 — 地图追踪离线核心
 
@@ -58,7 +60,8 @@ AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼条轮廓控制和 Aut
 AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批未迁移的上游独立任务是 CharacterDevelopment 和部分一条龙状态机。它们依赖复杂的网格识别
+下一批未迁移能力主要是部分一条龙状态机，以及 AutoFishing/七圣召唤中仍以简化流程
+代替的模型驱动分支。
 或大量页面状态，需要继续移植对应识别器，不能只用通用 OCR 点击流代替。
 
 ## 工程

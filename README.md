@@ -74,6 +74,7 @@ bgi-touch task QuickSereniteaPot       # 从背包部署并进入/离开尘歌�
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
 bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
+bgi-touch task CharacterDevelopment --config '{"characterName":"钟离","categories":"属性;武器;天赋"}'
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
@@ -116,6 +117,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 快捷任务：尘歌壶 / 一键领取 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
 | SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
+| characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |
 
 ## 已知约束
 

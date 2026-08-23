@@ -492,6 +492,69 @@ def test_count_inventory_dispatcher_preserves_single_and_multi_contract():
     assert kwargs["max_pages"] == 3
 
 
+def test_character_development_metadata_and_parsers():
+    from bgi_touch.tasks.character_development import (
+        CharacterDevelopmentResult,
+        apply_talent_result,
+        has_talent_bonus,
+        load_character_metadata,
+        normalize_character_name,
+        normalize_talent_type,
+        parse_character_categories,
+        try_parse_level_pair,
+        try_parse_talent_level,
+    )
+
+    assert normalize_character_name("岩王爷") == "钟离"
+    metadata = load_character_metadata()["钟离"]
+    assert metadata.element == "岩"
+    assert metadata.weapon_type == "长柄武器"
+    assert parse_character_categories(None) == ("属性", "武器", "天赋")
+    assert parse_character_categories("weapon;天赋") == ("武器", "天赋")
+    with pytest.raises(ValueError, match="未知"):
+        parse_character_categories("不存在")
+    assert try_parse_level_pair("Lv. 80 / 90") == (80, 90)
+    assert try_parse_talent_level("Lv. 13") == 13
+    assert normalize_talent_type("元素战技") == "元素战技"
+    assert has_talent_bonus("天赋等级 + 3")
+
+    result = CharacterDevelopmentResult("钟离")
+    apply_talent_result(result, "元素爆发", 13, True)
+    assert (result.BurstLevel, result.BurstHasBonus) == (13, True)
+
+
+def test_character_card_builder_corrects_noisy_bottom_regions():
+    from bgi_touch.tasks.character_development import build_character_cards
+
+    cards = build_character_cards(
+        [(15, 120, 100, 20), (139, 119, 100, 21), (14, 262, 101, 19)],
+        (641, 897),
+        1.0,
+    )
+    assert len(cards) == 3
+    assert [(card.x, card.y) for card in cards] == [(0, 0), (124, 0), (0, 141)]
+
+
+def test_character_development_dispatcher_maps_single_character():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.character_development.CharacterDevelopmentTask") as task:
+        task.return_value.run.return_value = [{"CharacterName": "钟离", "Level": 90}]
+        result = TaskDispatcher(object()).run_task({
+            "name": "CharacterDevelopment",
+            "config": {
+                "characterName": "钟离",
+                "categories": "属性;武器",
+                "maxPages": 4,
+            },
+        })
+    assert result == {"CharacterName": "钟离", "Level": 90}
+    assert task.call_args.kwargs["max_pages"] == 4
+    task.return_value.run.assert_called_once()
+
+
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
 

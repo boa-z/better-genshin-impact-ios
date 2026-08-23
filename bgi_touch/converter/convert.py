@@ -40,13 +40,14 @@ SUPPORTED = [
     "dispatcher.runUseRedemptionCodeTask",
     "dispatcher.runAutoArtifactSalvageTask",
     "dispatcher.runCountInventoryItemTask", "CountInventoryItemParam",
+    "characterDevelopmentTask.getCharacter", "characterDevelopmentTask.getMultiCharacters",
 ]
 PARTIAL = {
     "moveMouseTo": "触控无指针，移动为空操作（点击时直接给坐标即可）",
     "rightButton": "近似映射为 E 技能",
     "middleButton": "PC 重置视角，触控端为空操作",
     "verticalScroll": "触控端为空操作",
-    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison；Boss、地脉与幽境任务仍需提供路线",
+    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment；Boss、地脉与幽境任务仍需提供路线",
     "runAutoFightTask": "支持 combatStrategyPath；掉落拾取等附加参数忽略",
     "runAutoBossTask": "支持 BetterGI AutoBoss 路线资产；可用 routePath/pathingFile 覆盖路线",
     "runAutoLeyLine": "支持提供 routePath/pathingFile 的通用地脉战斗循环",

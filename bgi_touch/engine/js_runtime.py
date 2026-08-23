@@ -306,6 +306,13 @@ class JsScriptRuntime:
         from .genshin_api import GenshinApi
         expose("genshin", wrap(GenshinApi(ctx, log)), proxy=False)
 
+        from ..tasks.character_development import CharacterDevelopmentTask
+        expose(
+            "characterDevelopmentTask",
+            wrap(CharacterDevelopmentTask(ctx, log=log)),
+            proxy=False,
+        )
+
         # keyMouseScript / pathingScript
         player = MacroPlayer(ctx.input, sleep=ctx.sleep, log=log)
 

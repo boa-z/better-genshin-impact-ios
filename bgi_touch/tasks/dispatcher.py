@@ -81,6 +81,7 @@ class TaskDispatcher:
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
+        "CharacterDevelopment",
     })
 
     def __init__(
@@ -151,6 +152,8 @@ class TaskDispatcher:
             return self.run_get_grid_icons_task(cfg, ct)
         if name == "InventoryCountComparison":
             return self.run_inventory_count_comparison_task(cfg, ct)
+        if name in ("CharacterDevelopment", "CharacterDevelopmentTask"):
+            return self.run_character_development_task(cfg, ct)
         raise NotImplementedError(
             f"SoloTask {name} 尚未移植；当前已支持 {', '.join(sorted(self.IMPLEMENTED))}"
         )
@@ -507,6 +510,29 @@ class TaskDispatcher:
             output_dir=_value(param, "outputDirectory", _value(param, "outputDir", None)),
             log=self.log,
         ).run(cancelled=self._callback(ct))
+
+    def run_character_development_task(self, param: Any = None, ct: Any = None) -> Any:
+        from .character_development import CharacterDevelopmentTask
+
+        task = CharacterDevelopmentTask(
+            self.ctx,
+            max_pages=int(_value(param, "maxPages", 30) or 30),
+            timeout_s=float(_value(param, "timeoutSeconds", 900) or 900),
+            log=self.log,
+        )
+        categories = _value(param, "categories", None)
+        name = _value(param, "characterName", _value(param, "name", None))
+        names = _value(param, "characterNames", _value(param, "names", None))
+        if name is not None and names is not None:
+            raise ValueError("characterName 和 characterNames 不能同时使用")
+        if name is not None:
+            results = task.run([str(name)], categories, cancelled=self._callback(ct))
+            return results[0] if results else None
+        if names is None:
+            raise ValueError("CharacterDevelopment 需要 characterName 或 characterNames")
+        if isinstance(names, str):
+            raise ValueError("characterNames 必须是数组")
+        return task.run(names, categories, cancelled=self._callback(ct))
 
     def run_combat_script(self, script: str, avatar: str | None = None) -> Any:
         return CombatExecutor.for_context(
