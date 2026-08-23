@@ -358,7 +358,10 @@ class TaskDispatcher:
             character_points=_points(_value(param, "characterPoints", None)),
             skill_points=_points(_value(param, "skillPoints", None)),
             max_commands=_value(param, "maxCommands", None),
+            max_rounds=int(_value(param, "maxRounds", 20) or 20),
             timeout_s=float(_value(param, "timeoutSeconds", 900) or 900),
+            asset_dir=_value(param, "assetDir", None) or None,
+            card_config_path=_value(param, "cardConfigPath", None) or None,
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

@@ -705,6 +705,7 @@ def test_one_dragon_runner_dispatches_custom_task_configs_and_continues():
 
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
+    from bgi_touch.tasks.tcg_state import TcgElement
 
     characters, commands = parse_tcg_strategy(
         """角色定义:
@@ -719,8 +720,156 @@ def test_tcg_strategy_parser_matches_bettergi_format():
 """
     )
     assert characters[1].name == "刻晴"
+    assert characters[1].element == TcgElement.ELECTRO
+    assert characters[1].skills[1].specific_element_cost == 4
+    assert characters[2].skills[3].any_element_cost == 2
+    assert characters[2].skills[3].all_cost == 3
     assert [command.skill for command in commands] == [1, 3, 2]
     assert [command.dice_delta for command in commands] == [0, -1, 2]
+
+
+def test_tcg_strategy_parser_loads_default_character_metadata(tmp_path):
+    import json
+
+    from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
+    from bgi_touch.tasks.tcg_state import TcgElement
+
+    cards = [{
+        "name": "测试角色",
+        "element": "火元素",
+        "skills": [
+            {
+                "name": "普通攻击",
+                "skillTag": ["普通攻击"],
+                "cost": [
+                    {"type": "火元素", "count": 1},
+                    {"type": "无色元素", "count": 2},
+                ],
+            },
+            {
+                "name": "元素战技",
+                "skillTag": ["元素战技"],
+                "cost": [{"type": "火元素", "count": 3}],
+            },
+            {
+                "name": "元素爆发",
+                "skillTag": ["元素爆发"],
+                "cost": [
+                    {"type": "火元素", "count": 3},
+                    {"type": "充能", "count": 2},
+                ],
+            },
+        ],
+    }]
+    config = tmp_path / "tcg_character_card.json"
+    config.write_text(json.dumps(cards, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "combat_avatar.json").write_text(
+        json.dumps([{"name": "测试角色", "alias": ["测试别名"]}], ensure_ascii=False),
+        encoding="utf-8",
+    )
+    characters, commands = parse_tcg_strategy(
+        """角色定义:
+角色1=测试别名
+角色2=测试角色|火{技能1消耗=3火骰子}
+角色3=另一个角色|火{技能1消耗=3火骰子}
+策略定义:
+测试别名 使用 技能1
+""",
+        card_config_path=config,
+    )
+    assert characters[1].element == TcgElement.PYRO
+    assert characters[1].name == "测试别名"
+    assert characters[1].skills[1].name == "元素爆发"
+    assert characters[1].skills[3].any_element_cost == 2
+    assert commands[0].skill == 1
+
+
+def test_tcg_round_planning_reroll_tuning_and_defeat_order():
+    from bgi_touch.tasks.tcg_state import (
+        TcgCharacter,
+        TcgCommand,
+        TcgElement,
+        TcgSkill,
+        effective_skill_cost,
+        next_living_character,
+        reroll_indices,
+        tuning_card_count,
+        wanted_elements,
+    )
+
+    characters = {
+        1: TcgCharacter(1, "雷", TcgElement.ELECTRO, {
+            1: TcgSkill(1, TcgElement.ELECTRO, 1, 2),
+        }),
+        2: TcgCharacter(2, "冰", TcgElement.CRYO, {
+            1: TcgSkill(1, TcgElement.CRYO, 3),
+        }),
+        3: TcgCharacter(3, "水", TcgElement.HYDRO, {
+            1: TcgSkill(1, TcgElement.HYDRO, 3),
+        }),
+    }
+    commands = [
+        TcgCommand("雷", 1, -1),
+        TcgCommand("冰", 1),
+        TcgCommand("水", 1),
+    ]
+    assert wanted_elements(commands, characters, current_character=1) == {
+        TcgElement.OMNI,
+        TcgElement.ELECTRO,
+        TcgElement.CRYO,
+    }
+    dice = [
+        TcgElement.OMNI,
+        TcgElement.ELECTRO,
+        TcgElement.PYRO,
+        TcgElement.CRYO,
+    ]
+    assert reroll_indices(dice, {TcgElement.ELECTRO}) == [2, 3]
+    assert tuning_card_count(
+        {TcgElement.OMNI: 1, TcgElement.CRYO: 1}, characters[2].skills[1]
+    ) == 1
+    assert effective_skill_cost(characters[1].skills[1], -1) == 2
+    characters[1].defeated = True
+    assert next_living_character(commands, characters) is characters[2]
+
+
+def test_tcg_strategy_rejects_undefined_skill():
+    from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
+
+    with pytest.raises(ValueError, match="没有定义技能2"):
+        parse_tcg_strategy(
+            """角色定义:
+角色1=甲|火{技能1消耗=3火骰子}
+角色2=乙|水{技能1消耗=3水骰子}
+角色3=丙|冰{技能1消耗=3冰骰子}
+策略定义:
+甲 使用 技能2
+"""
+        )
+
+
+@pytest.mark.parametrize(
+    ("visible", "dice_count", "expected"),
+    [
+        ({"duel_end", "round_end"}, 0, "duel_end"),
+        ({"taken_out", "round_end"}, 0, "character_taken_out"),
+        ({"round_end", "opponent"}, 0, "my_action"),
+        ({"opponent"}, 0, "opponent_action"),
+        ({"end_phase"}, 0, "end_phase"),
+        ({"confirm"}, 8, "roll"),
+        ({"confirm"}, 6, "prepare"),
+        (set(), 0, "unknown"),
+    ],
+)
+def test_tcg_phase_transition_priority(visible, dice_count, expected):
+    import numpy as np
+
+    from bgi_touch.tasks.auto_tcg import TcgRecognizer
+
+    recognizer = object.__new__(TcgRecognizer)
+    recognizer.find = lambda _frame, key: key if key in visible else None
+    recognizer.roll_dice = lambda _frame: [(None, None)] * dice_count
+    assert recognizer.phase(np.zeros((1, 1, 3), dtype=np.uint8)).value == expected
 
 
 def test_task_dispatcher_declares_migrated_core_tasks():

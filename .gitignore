@@ -8,3 +8,4 @@ node_modules/
 !assets/**/*.png
 assets/map/
 assets/models/
+assets/tcg/

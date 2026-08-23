@@ -56,7 +56,7 @@ PARTIAL = {
     "genshin.autoFishing": "已迁移鱼条视觉控制；鱼塘/鱼饵 YOLO 选择仍需预先进入钓鱼状态",
     "dispatcher.runAutoMusicGameTask": "已迁移六轨像素检测；需要先进入千音雅集曲目界面",
     "dispatcher.runAutoAlbumTask": "已迁移专辑导航、完成标志跳过和难度循环；需要先进入主题专辑界面",
-    "dispatcher.runAutoGeniusInvokationTask": "已迁移策略解析和触控执行；卡牌/骰子识别以 OCR 和可配置触控点为后备",
+    "dispatcher.runAutoGeniusInvokationTask": "已迁移完整回合状态机、投骰/骰子识别、元素调和、异常状态与阵亡切换；需准备七圣召唤识别资产",
     "dispatcher.runAutoStygianOnslaughtTask": "复用路线、战斗和领奖循环；活动入口与树脂状态需由路线或当前界面准备",
     "dispatcher.runQuickSereniteaPotTask": "使用背包小道具页与原版模板快速进入/离开尘歌壶",
     "dispatcher.runQuickClaimRewardTask": "使用原版领取模板并将滚轮操作转换为触控上滑",

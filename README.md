@@ -51,7 +51,7 @@ DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
 python3 -m venv .venv
 .venv/bin/pip install -e .                       # 核心：mcp + opencv + numpy
 .venv/bin/pip install -e '.[ocr,js,models]'      # 推荐：OCR + JS + BetterGI ONNX 模型运行时
-.venv/bin/python tools/fetch_map_assets.py --models  # 地图、YOLO 与 ItemV2 奖励识别资产
+.venv/bin/python tools/fetch_map_assets.py --models --tcg  # 地图、模型、奖励与七圣召唤识别资产
 ```
 
 前置：macOS/Linux 上运行 DeviceHub Mask 并连接 iPhone（**建议 USB**，Wi-Fi 通道输入注入不稳定），iPhone 已安装原神。
