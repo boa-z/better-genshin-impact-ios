@@ -145,6 +145,18 @@ async function post(url, body) {
 const key = k => post('/api/key', {key:k, action:'press'});
 const party = s => post('/api/party', {slot:s});
 const cam = (dx,dy) => post('/api/camera', {dx, dy});
+const hookEvent = event => fetch('/api/key-mouse-hook/event', {
+  method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(event)
+}).catch(() => {});
+
+// WebUI 是 iOS 端的 KeyMouseHook 控制面；事件只进入脚本队列，不发送给游戏。
+function hookKey(type, event) {
+  hookEvent({type, key:event.key, code:event.code, repeat:event.repeat,
+             altKey:event.altKey, ctrlKey:event.ctrlKey,
+             shiftKey:event.shiftKey, metaKey:event.metaKey});
+}
+window.addEventListener('keydown', event => hookKey('keyDown', event), true);
+window.addEventListener('keyup', event => hookKey('keyUp', event), true);
 
 // ---- 按住式按键 ----
 document.querySelectorAll('button.hold').forEach(b => {
@@ -159,10 +171,22 @@ document.querySelectorAll('button.hold').forEach(b => {
 // ---- 屏幕预览：点按/拖拽 ----
 const img = $('#screen');
 let downPos = null;
-img.addEventListener('pointerdown', e => { downPos = [e.offsetX, e.offsetY, Date.now()]; });
+function hookPointer(type, event, extra={}) {
+  const rect = img.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  hookEvent({type, nx:event.offsetX/rect.width, ny:event.offsetY/rect.height,
+             button:event.button, ...extra});
+}
+img.addEventListener('pointerdown', e => {
+  hookPointer('mouseDown', e);
+  downPos = [e.offsetX, e.offsetY, Date.now(),
+             e.button !== 0 || e.altKey || e.ctrlKey || e.shiftKey || e.metaKey];
+});
 img.addEventListener('pointerup', e => {
+  hookPointer('mouseUp', e);
   if (!downPos) return;
-  const [x0, y0, t0] = downPos; downPos = null;
+  const [x0, y0, t0, suppressDevice] = downPos; downPos = null;
+  if (suppressDevice) return;
   const r = img.getBoundingClientRect();
   const n = (x,y) => [x/r.width, y/r.height];
   const [nx1, ny1] = n(x0, y0), [nx2, ny2] = n(e.offsetX, e.offsetY);
@@ -173,6 +197,16 @@ img.addEventListener('pointerup', e => {
     log('[ui] swipe');
   }
 });
+let lastHookMove = 0;
+img.addEventListener('pointermove', e => {
+  const now = performance.now();
+  if (now - lastHookMove < 16) return;
+  lastHookMove = now; hookPointer('mouseMove', e);
+});
+img.addEventListener('wheel', e => {
+  hookPointer('mouseWheel', e, {delta:Math.round(-e.deltaY)});
+}, {passive:true});
+img.addEventListener('contextmenu', e => e.preventDefault());
 
 // ---- 截图轮询 ----
 let shotTimer = null;
@@ -329,6 +363,9 @@ function syncMasks(windows) {
 window.addEventListener('message', event => {
   if (event.origin !== location.origin) return;
   const message = event.data || {};
+  if (message.type === 'bgi-key-mouse-hook') {
+    hookEvent(message.event || {}); return;
+  }
   if (message.type !== 'bgi-html-mask' || !maskFrames.has(message.windowId)) return;
   post(`/api/html-masks/${encodeURIComponent(message.windowId)}/message`, {
     url: message.url || '', data: message.data,

@@ -25,6 +25,7 @@ from ..macro.keymouse import MacroPlayer, load_keymouse
 from ..pathing.executor import PathingExecutor
 from ..pathing.model import PathingTask
 from .context import GameContext
+from .keymouse_hook import KeyMouseHookManager
 from .recognition import ImageRegion, Mat, Point2f, RecognitionObject, Region
 
 CASE_PROXY = """
@@ -128,6 +129,7 @@ class JsScriptRuntime:
             Path(value).expanduser().resolve()
             for value in (strategy_roots or [default_strategy_root])
         ]
+        self._key_mouse_hooks = KeyMouseHookManager(log=log)
         self._install_globals()
 
     # ---- manifest / settings ----
@@ -171,12 +173,31 @@ class JsScriptRuntime:
     def _sleep(self, ms: float) -> None:
         # 分片睡眠，保证 cancelled 置位后能在 ~100ms 内中断长 sleep
         remain = max(0.0, float(ms)) / 1000
+        self._drain_key_mouse_events()
         while remain > 0:
             self._check_cancel()
             step = min(0.1, remain)
             time.sleep(step)
             remain -= step
+            self._drain_key_mouse_events()
         self._check_cancel()
+
+    def _drain_key_mouse_events(self) -> int:
+        manager = getattr(self, "_key_mouse_hooks", None)
+        return manager.drain() if manager is not None else 0
+
+    def enqueue_key_mouse_event(self, event: dict[str, Any]) -> bool:
+        """Queue a WebUI control event without touching PythonMonkey threads."""
+        value = dict(event)
+        if "nx" in value and "ny" in value:
+            transform = self.ctx.transform
+            dev_x = float(value.pop("nx")) * transform.device_width
+            dev_y = float(value.pop("ny")) * transform.device_height
+            value["x"], value["y"] = transform.to_ref(dev_x, dev_y)
+        return self._key_mouse_hooks.enqueue(value)
+
+    def has_key_mouse_hooks(self) -> bool:
+        return self._key_mouse_hooks.has_hooks()
 
     def _capture(self) -> Any:
         self._check_cancel()
@@ -271,6 +292,13 @@ class JsScriptRuntime:
             cancelled=lambda: self.cancelled,
         )
         expose("htmlMask", wrap(self._html_mask_host), proxy=False)
+
+        def _create_key_mouse_hook():
+            return wrap(self._key_mouse_hooks.create())
+
+        g["KeyMouseHook"] = pm.eval(
+            "factory => function KeyMouseHook() { return factory(); }"
+        )(_create_key_mouse_hook)
 
         # file（沙箱）
         rt = self
@@ -909,6 +937,9 @@ class JsScriptRuntime:
             self.log("[runtime] 脚本已取消")
             return None
         finally:
+            key_mouse_hooks = getattr(self, "_key_mouse_hooks", None)
+            if key_mouse_hooks is not None:
+                key_mouse_hooks.close_all()
             html_mask_host = getattr(self, "_html_mask_host", None)
             if html_mask_host is not None:
                 html_mask_host.closeAll()

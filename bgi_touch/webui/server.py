@@ -113,6 +113,12 @@ class TaskRunner:
         if _ctx is not None:
             _ctx.input.release_all()
 
+    def enqueue_key_mouse_event(self, event: dict) -> bool:
+        runtime = self._js_runtime
+        if runtime is None:
+            return False
+        return bool(runtime.enqueue_key_mouse_event(event))
+
     def _party(self) -> dict[str, int]:
         p = PROJECT_ROOT / "config" / "party.json"
         if p.exists():
@@ -470,6 +476,15 @@ def api_stop():
     return {"ok": True}
 
 
+@app.post("/api/key-mouse-hook/event")
+def api_key_mouse_hook_event(body: dict):
+    """Forward WebUI controls to BetterGI KeyMouseHook without device I/O."""
+    try:
+        return {"ok": True, "accepted": runner.enqueue_key_mouse_event(body)}
+    except (TypeError, ValueError) as error:
+        return _err(error, 400)
+
+
 @app.post("/api/convert")
 def api_convert(body: dict):
     try:
@@ -532,6 +547,15 @@ def _mask_bridge(window_id: str) -> str:
   function post(url, data, requestId) {{
     parent.postMessage({{type:'bgi-html-mask', windowId, url, data, requestId}}, location.origin);
   }}
+  function postKey(type, event) {{
+    parent.postMessage({{type:'bgi-key-mouse-hook', event:{{
+      type, key:event.key, code:event.code, repeat:event.repeat,
+      altKey:event.altKey, ctrlKey:event.ctrlKey,
+      shiftKey:event.shiftKey, metaKey:event.metaKey
+    }}}}, location.origin);
+  }}
+  window.addEventListener('keydown', event => postKey('keyDown', event), true);
+  window.addEventListener('keyup', event => postKey('keyUp', event), true);
   window.htmlMask = {{
     onMessage: null,
     send(url, data) {{ post(url, data ?? {{}}, null); }},

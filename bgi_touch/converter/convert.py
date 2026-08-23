@@ -31,6 +31,8 @@ SUPPORTED = [
     "readImageMat", "settings.", "notification.",
     "htmlMask.show", "htmlMask.send", "htmlMask.request", "htmlMask.receive",
     "htmlMask.poll", "htmlMask.close", "htmlMask.exists",
+    "KeyMouseHook", "OnKeyDown", "OnKeyUp", "OnMouseDown", "OnMouseUp",
+    "OnMouseMove", "OnMouseWheel", "RemoveAllListeners",
     "moveMouseBy", "keyMouseScript", "inputText", "http.request", "genshin.returnMainUi",
     "genshin.relogin", "chooseTalkOption", "runCombatScript", "leftButtonClick",
     "genshin.tp", "genshin.moveMapTo", "genshin.tpToStatueOfTheSeven",
@@ -74,9 +76,7 @@ PARTIAL = {
     "Shell": "跨平台宿主命令已支持；必须先在 config/shell.json 显式启用，且应只运行可信脚本",
     "dispatcher.runCountInventoryItemTask": "遍历 iOS 背包网格，通过详情名称和数量区域 OCR 返回单项或多项计数",
 }
-UNSUPPORTED = {
-    "KeyMouseHook": "全局键鼠钩子为 Windows 专有",
-}
+UNSUPPORTED = {}
 
 
 def detect_kind(path: Path) -> str:
