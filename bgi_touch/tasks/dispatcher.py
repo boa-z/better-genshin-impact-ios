@@ -549,7 +549,31 @@ class TaskDispatcher:
                 "forceInteraction",
                 _value(config, "force_interaction", False),
             )
-            self.ctx.enable_trigger(name, force_interaction=bool(force_interaction))
+            self.ctx.enable_trigger(
+                name,
+                force_interaction=bool(force_interaction),
+                mode=_value(config, "mode", "Whitelist"),
+                whitelist=_value(
+                    config,
+                    "whitelist",
+                    _value(config, "whiteList", _value(config, "pickWhitelist", None)),
+                ),
+                blacklist=_value(
+                    config,
+                    "blacklist",
+                    _value(config, "blackList", _value(config, "pickBlacklist", None)),
+                ),
+                fuzzy_blacklist=_value(
+                    config,
+                    "fuzzyBlacklist",
+                    _value(config, "fuzzy_blacklist", None),
+                ),
+                whitelist_exclusions=_value(
+                    config,
+                    "whitelistExclusions",
+                    _value(config, "doNotPickList", None),
+                ),
+            )
         elif name in ("AutoEat", "自动吃药"):
             self.ctx.enable_trigger(
                 "AutoEat",

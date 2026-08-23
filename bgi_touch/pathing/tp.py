@@ -265,9 +265,17 @@ class TpTask:
     # 候选列表里可点的传送目标类型（点位重叠时弹出）
     _ANCHOR_ENTRIES = ("传送锚点", "七天神像", "秘境", "浪船锚点", "壶中洞天")
 
-    def _find_and_tap_confirm(self) -> bool:
-        """两段式确认：①候选列表选「传送锚点/七天神像/…」②点最终「传送」按钮。"""
-        for _ in range(4):
+    def _find_and_tap_confirm(
+        self,
+        timeout_s: float = 3.6,
+        initial_delay_ms: int = 200,
+    ) -> bool:
+        """Wait for the panel, choose at most one candidate, then confirm."""
+        if initial_delay_ms > 0:
+            self.ctx.sleep(initial_delay_ms)
+        deadline = time.monotonic() + max(0.2, timeout_s)
+        selected_entry = False
+        while time.monotonic() < deadline:
             region = self.ctx.capture_region()
             # The confirmation control is a stable icon and is faster/more
             # reliable than OCR on the small iOS panel.
@@ -285,27 +293,38 @@ class TpTask:
                     h.click()
                     return True
             # 候选列表条目
-            entry = next((h for h in hits
-                          if any(k in h.text for k in self._ANCHOR_ENTRIES)), None)
-            if entry is None:
-                return False
-            self.log(f"[tp] 选择候选「{entry.text.strip()}」")
-            entry.click()
-            self.ctx.sleep(1200)
+            entry = next((
+                h for h in hits
+                if 1 < len(h.text.strip()) < 10
+                and any(k in h.text for k in self._ANCHOR_ENTRIES)
+            ), None)
+            if entry is not None and not selected_entry:
+                self.log(f"[tp] 点击候选列表：「{entry.text.strip()}」")
+                entry.click()
+                selected_entry = True
+                self.ctx.sleep(600)
+                continue
+            self.ctx.sleep(250)
         return False
 
-    def _tap_anchor_icon_near(self, x: float, y: float, max_distance: float) -> bool:
-        """模板匹配目标附近的传送锚点/神像图标并点击最近者。"""
+    def _anchor_icons_near(self, x: float, y: float, max_distance: float):
+        """Return nearby teleport icons ordered by distance from the raw point."""
         region = self.ctx.capture_region()
-        best = None
+        candidates = []
         for name in ("TeleportWaypoint", "StatueOfTheSeven", "Domain"):
             tpl = Mat.from_file(str(TEMPLATES / f"{name}.png"))
             for h in region.find_multi(RecognitionObject.template_match(tpl), limit=5):
                 d = math.hypot(h.dx + h.dw / 2 - x, h.dy + h.dh / 2 - y)
-                if best is None or d < best[0]:
-                    best = (d, h)
-        if best and best[0] <= max_distance:
-            best[1].click()
+                if d <= max_distance:
+                    candidates.append((d, h))
+        candidates.sort(key=lambda item: item[0])
+        return candidates
+
+    def _tap_anchor_icon_near(self, x: float, y: float, max_distance: float) -> bool:
+        """模板匹配目标附近的传送锚点/神像图标并点击最近者。"""
+        candidates = self._anchor_icons_near(x, y, max_distance)
+        if candidates:
+            candidates[0][1].click()
             return True
         return False
 
@@ -334,10 +353,8 @@ class TpTask:
         t = self.ctx.transform
         tol = 0.05 * t.device_width
 
-        confirmed = False
         last_view: tuple[float, float] | None = None
         stagnant_iterations = 0
-        reverse_attempted = False
         for it in range(20):
             if time.monotonic() > deadline:
                 break
@@ -365,49 +382,87 @@ class TpTask:
             if dist <= tol:
                 tap_x = t.device_width / 2 + dx_screen
                 tap_y = t.device_height / 2 + dy_screen
-                # BetterGI first resolves the nearest teleport-point icon. A
-                # route coordinate is often close to, but not exactly on, the
-                # interactive icon, especially for resource collection routes.
-                selected_icon = self._tap_anchor_icon_near(
-                    tap_x,
-                    tap_y,
-                    max(0.10 * t.device_width, 1.8 * tol),
-                )
-                if not selected_icon:
-                    self.ctx.device.tap(tap_x, tap_y, image_width=t.device_width,
-                                        image_height=t.device_height)
-                self.ctx.sleep(1200)
-                if self._find_and_tap_confirm():
-                    confirmed = True
-                    break
-                if self._tap_anchor_icon_near_center():
-                    self.ctx.sleep(1200)
-                    if self._find_and_tap_confirm():
-                        confirmed = True
-                        break
-                self.log("[tp] 未弹出传送确认，微调后重试")
-                self.ctx.sleep(500)
-                continue
+                if not self._select_target_and_confirm(tap_x, tap_y, tol):
+                    raise RuntimeError(
+                        "传送失败：点击传送点后未出现交互面板，可能是传送点未激活"
+                    )
+                self.log("[tp] 已确认传送，等待加载…")
+                self._wait_for_teleport_completion()
+                return True
             if stagnant_iterations >= 2:
-                if reverse_attempted:
-                    raise RuntimeError("大地图移动失败：地图拖动未生效")
-                self.log("[tp] 地图拖动无位移，尝试反向校准")
-                self._drag_map(dx_screen, dy_screen)
-                reverse_attempted = True
-                stagnant_iterations = 0
-                continue
+                raise RuntimeError("大地图移动失败：连续拖动后地图视野未发生变化")
             # 拖动地图：目标向中心移动 = 内容朝反方向平移
             self._drag_map(-dx_screen, -dy_screen)
-        if not confirmed:
-            raise RuntimeError("传送失败：未能完成锚点确认（迭代/超时耗尽）")
+        raise RuntimeError("传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）")
 
-        # 等待传送加载完成（回到主界面）
-        self.log("[tp] 已确认传送，等待加载…")
-        self.ctx.sleep(3000)
-        for _ in range(20):
+    def _select_target_and_confirm(self, tap_x: float, tap_y: float, tol: float) -> bool:
+        """Click one resolved point and allow one precomputed fallback only."""
+        width = self.ctx.transform.device_width
+        candidates = self._anchor_icons_near(
+            tap_x,
+            tap_y,
+            max(0.10 * width, 1.8 * tol),
+        )
+        fallback = None
+        if candidates:
+            nearest_distance, nearest = candidates[0]
+            # Overlapping icons cannot be safely distinguished by template
+            # correction. Click the route's raw point first and preserve the
+            # already computed nearest icon as a single fallback.
+            ambiguous = len(candidates) > 1 and (
+                candidates[1][0] - nearest_distance < 0.035 * width
+            )
+            if ambiguous and nearest_distance > 6:
+                self.log("[tp] 邻近图标间距不足，先点击原始目标点")
+                self.ctx.device.tap(
+                    tap_x,
+                    tap_y,
+                    image_width=width,
+                    image_height=self.ctx.transform.device_height,
+                )
+                fallback = nearest
+            else:
+                self.log(f"[tp] 点击校正后的锚点（偏差 {nearest_distance:.0f}px）")
+                nearest.click()
+        else:
+            self.log("[tp] 未匹配到邻近锚点图标，点击原始目标点")
+            self.ctx.device.tap(
+                tap_x,
+                tap_y,
+                image_width=width,
+                image_height=self.ctx.transform.device_height,
+            )
+
+        if self._find_and_tap_confirm():
+            return True
+        if fallback is None:
+            return False
+
+        self.log("[tp] 原始点未弹出面板，回退一次校正锚点")
+        fallback.click()
+        return self._find_and_tap_confirm()
+
+    def _wait_for_teleport_completion(self, timeout_s: float = 60) -> None:
+        """Require a loading state followed by a stable gameplay minimap."""
+        from ..engine.genshin_api import GenshinApi
+
+        deadline = time.monotonic() + timeout_s
+        started_at = time.monotonic()
+        observed_loading = False
+        stable_main_ui = 0
+        api = GenshinApi(self.ctx, log=self.log)
+        while time.monotonic() < deadline:
             frame = self.ctx.capture_bgr()
-            if self.big.locate_view(frame) is None:  # 大地图已关闭
-                self.ctx.sleep(2000)
-                return True
-            self.ctx.sleep(1000)
-        return True
+            is_main_ui = api._is_main_ui(frame)
+            if is_main_ui:
+                if observed_loading and time.monotonic() - started_at >= 1.0:
+                    stable_main_ui += 1
+                    if stable_main_ui >= 3:
+                        self.log("[tp] 传送完成")
+                        return
+            else:
+                stable_main_ui = 0
+                if not observed_loading and self.big.locate_view(frame) is None:
+                    observed_loading = True
+            self.ctx.sleep(500)
+        self.log("[tp] 传送加载等待超时，继续执行后续任务")

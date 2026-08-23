@@ -1,30 +1,83 @@
 """自动拾取触发器（原版 AutoPick 的移动端适配）。
 
 PC 版检测 "F" 键图标 + SVTR 文本识别；移动端拾取是屏幕右中部的物品列表按钮。
-实现：OCR 交互按钮附近的条目文字，命中可拾取词条（或非黑名单）时点按交互位。
+实现：OCR 交互按钮附近的条目文字，根据 BetterGI 的白/黑名单模式点按交互位。
 """
 
 from __future__ import annotations
 
 import time
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Callable
 
 from ..engine.context import GameContext
 from ..engine.recognition import ImageRegion, RecognitionObject
 
-# 出现即不点的词条（对话/进入类交互，交给 AutoSkip 或玩家）
+# 黑名单模式的移动端安全兜底（对话/进入类交互，交给 AutoSkip 或玩家）。
 DEFAULT_BLACKLIST = ["对话", "进入", "传送", "离开", "调查", "阅读", "操作", "开启", "参加"]
+DEFAULT_WHITELIST_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "assets" / "config" / "pick" / "default_pick_white_lists.json"
+)
+
+
+@lru_cache(maxsize=1)
+def _default_whitelist() -> frozenset[str]:
+    try:
+        values = json.loads(DEFAULT_WHITELIST_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return frozenset()
+    return frozenset(_normalize_text(value) for value in values if _normalize_text(value))
+
+
+def _normalize_text(value: object) -> str:
+    return "".join(str(value or "").split()).strip()
+
+
+def _normalize_mode(value: object) -> str:
+    mode = str(value or "Whitelist").strip().casefold()
+    if mode in {"whitelist", "white", "白名单", "白名單"}:
+        return "Whitelist"
+    if mode in {"blacklist", "black", "黑名单", "黑名單"}:
+        return "Blacklist"
+    raise ValueError(f"不支持的 AutoPick 模式：{value}")
 
 
 class AutoPickTrigger:
     name = "AutoPick"
 
-    def __init__(self, ctx: GameContext, blacklist: list[str] | None = None,
-                 log: Callable[[str], None] = print,
-                 force_interaction: bool = False):
+    def __init__(
+        self,
+        ctx: GameContext,
+        blacklist: list[str] | None = None,
+        whitelist: list[str] | None = None,
+        fuzzy_blacklist: list[str] | None = None,
+        whitelist_exclusions: list[str] | None = None,
+        mode: str = "Whitelist",
+        log: Callable[[str], None] = print,
+        force_interaction: bool = False,
+    ):
         self.ctx = ctx
         self.enabled = True
-        self.blacklist = blacklist if blacklist is not None else DEFAULT_BLACKLIST
+        self.mode = _normalize_mode(mode)
+        self.blacklist = {
+            _normalize_text(value) for value in (
+                blacklist if blacklist is not None else DEFAULT_BLACKLIST
+            ) if _normalize_text(value)
+        }
+        self.fuzzy_blacklist = tuple(
+            _normalize_text(value) for value in (fuzzy_blacklist or []) if _normalize_text(value)
+        )
+        selected_whitelist = (
+            _default_whitelist() if whitelist is None
+            else {_normalize_text(value) for value in whitelist if _normalize_text(value)}
+        )
+        exclusions = {
+            _normalize_text(value) for value in (whitelist_exclusions or []) if _normalize_text(value)
+        }
+        self.whitelist = frozenset(selected_whitelist) - exclusions
         self.log = log
         self.force_interaction = bool(force_interaction)
         self._last_action_at = 0.0
@@ -42,8 +95,8 @@ class AutoPickTrigger:
             return
         hits = region.find_multi(RecognitionObject.ocr(*self.roi), limit=5)
         for h in hits:
-            text = h.text.strip()
-            if len(text) < 2 or any(b in text for b in self.blacklist):
+            text = _normalize_text(h.text)
+            if not self._should_pick(text):
                 continue
             now = time.monotonic()
             if text == self._last_text and now - self._last_action_at < 1.2:
@@ -54,6 +107,28 @@ class AutoPickTrigger:
             self._last_text = text
             self._last_action_at = now
             return
+
+    def _should_pick(self, text: str) -> bool:
+        """Apply BetterGI's exact whitelist and exact/fuzzy blacklist semantics."""
+        text = _normalize_text(text)
+        if len(text) <= 1 or self._always_excluded(text):
+            return False
+        if self.mode == "Whitelist":
+            return text in self.whitelist
+        if text in self.blacklist:
+            return False
+        return not any(value in text for value in self.fuzzy_blacklist)
+
+    @staticmethod
+    def _always_excluded(text: str) -> bool:
+        # Keep the dynamic interaction guards from upstream AutoPickTrigger.
+        if "长时间" in text or "聚所" in text:
+            return True
+        if "霜月" in text and "坊" in text:
+            return True
+        return "我在" in text and any(
+            value in text for value in ("声望", "回声", "悬木人", "流泉")
+        )
 
     def _press_interaction(self) -> None:
         now = time.monotonic()

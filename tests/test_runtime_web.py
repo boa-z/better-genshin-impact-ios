@@ -77,9 +77,118 @@ def test_dispatcher_passes_bettergi_force_interaction_config():
     ctx = Context()
     TaskDispatcher(ctx).add_timer({
         "name": "AutoPick",
-        "config": {"forceInteraction": True},
+        "config": {
+            "forceInteraction": True,
+            "mode": "Blacklist",
+            "blackList": ["调查"],
+            "fuzzyBlacklist": ["进入"],
+            "whiteList": ["甜甜花"],
+            "doNotPickList": ["薄荷"],
+        },
     })
-    assert ctx.calls == [(('AutoPick',), {"force_interaction": True})]
+    assert ctx.calls == [(('AutoPick',), {
+        "force_interaction": True,
+        "mode": "Blacklist",
+        "whitelist": ["甜甜花"],
+        "blacklist": ["调查"],
+        "fuzzy_blacklist": ["进入"],
+        "whitelist_exclusions": ["薄荷"],
+    })]
+
+
+def test_autopick_defaults_to_recommended_whitelist_and_supports_blacklist():
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+
+    trigger = AutoPickTrigger.__new__(AutoPickTrigger)
+    trigger.mode = "Whitelist"
+    trigger.whitelist = frozenset({"甜甜花", "薄荷"})
+    trigger.blacklist = {"调查"}
+    trigger.fuzzy_blacklist = ("进入",)
+
+    assert trigger._should_pick("甜甜花")
+    assert not trigger._should_pick("优兰尼娅湖")
+    assert not trigger._should_pick("聚所")
+
+    trigger.mode = "Blacklist"
+    assert trigger._should_pick("甜甜花")
+    assert not trigger._should_pick("调查")
+    assert not trigger._should_pick("进入秘境")
+
+
+def test_teleport_panel_wait_does_not_fail_on_first_empty_frame():
+    from bgi_touch.pathing.tp import TpTask
+
+    class Hit:
+        text = ""
+
+        def __init__(self, exists):
+            self.exists = exists
+            self.clicks = 0
+
+        def is_exist(self):
+            return self.exists
+
+        def click(self):
+            self.clicks += 1
+
+    button = Hit(True)
+
+    class Region:
+        def __init__(self, ready):
+            self.ready = ready
+
+        def find(self, _):
+            return button if self.ready else Hit(False)
+
+        def find_multi(self, *_args, **_kwargs):
+            return []
+
+    class Context:
+        def __init__(self):
+            self.captures = 0
+
+        def capture_region(self):
+            self.captures += 1
+            return Region(self.captures >= 2)
+
+        def sleep(self, _):
+            pass
+
+    task = TpTask.__new__(TpTask)
+    task.ctx = Context()
+    task.log = lambda _: None
+    task._go_teleport = object()
+
+    assert task._find_and_tap_confirm(timeout_s=0.2, initial_delay_ms=0)
+    assert task.ctx.captures == 2
+    assert button.clicks == 1
+
+
+def test_teleport_ambiguous_icons_use_only_one_precomputed_fallback():
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.tp import TpTask
+
+    taps = []
+    fallback = SimpleNamespace(clicks=0)
+    fallback.click = lambda: setattr(fallback, "clicks", fallback.clicks + 1)
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=1000, device_height=500),
+        device=SimpleNamespace(tap=lambda *args, **kwargs: taps.append((args, kwargs))),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = lambda _: None
+    task._anchor_icons_near = lambda *_: [
+        (20, fallback),
+        (35, SimpleNamespace()),
+    ]
+    confirmations = iter((False, True))
+    task._find_and_tap_confirm = lambda: next(confirmations)
+
+    assert task._select_target_and_confirm(400, 250, 50)
+    assert len(taps) == 1
+    assert fallback.clicks == 1
 
 
 def test_js_runtime_awaits_async_iife_and_restores_python_error_text(tmp_path):
