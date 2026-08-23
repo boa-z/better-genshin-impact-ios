@@ -374,6 +374,8 @@ class JsScriptRuntime:
                 return task_dispatcher.run_use_redemption_code_task(param, ct)
             def runAutoArtifactSalvageTask(self, param=None, ct=None):
                 return task_dispatcher.run_auto_artifact_salvage_task(param, ct)
+            def runCountInventoryItemTask(self, param=None, ct=None):
+                return task_dispatcher.run_count_inventory_item_task(param, ct)
             def runCombatScript(self, script, avatar=None):
                 return task_dispatcher.run_combat_script(str(script), avatar)
             def addTimer(self, timer):
@@ -395,6 +397,11 @@ class JsScriptRuntime:
         # 构造器类：脚本里 new RealtimeTimer("AutoPick") / new SoloTask("AutoFight")
         g["RealtimeTimer"] = pm.eval("(function(){ return function RealtimeTimer(name, cfg){ this.name = name; this.config = cfg; }; })()")
         g["SoloTask"] = pm.eval("(function(){ return function SoloTask(name, cfg){ this.name = name; this.config = cfg; }; })()")
+        g["CountInventoryItemParam"] = pm.eval(
+            "(function(){ return function CountInventoryItemParam(){"
+            "this.gridScreenName='Materials';this.itemName=null;this.itemNames=[];"
+            "this.iconRecognitionMode='GridIcon';}; })()"
+        )
         g["CancellationTokenSource"] = pm.eval("(function(){ return function CancellationTokenSource(){ this.cancelled = false; this.cancel = () => { this.cancelled = true; }; this.token = this; }; })()")
 
     # ---- run ----

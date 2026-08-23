@@ -384,6 +384,7 @@ def api_scripts():
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "UseRedemptionCode",
         "AutoArtifactSalvage",
+        "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
     ):
         out["task"].append({"path": name, "name": name})
     js_dir = SCRIPTS_DIR / "js"

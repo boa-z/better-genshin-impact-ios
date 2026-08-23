@@ -416,6 +416,82 @@ def test_artifact_dispatcher_maps_upstream_and_safety_parameters():
     assert kwargs["confirm_salvage"] is False
 
 
+def test_inventory_category_aliases_and_grid_detector():
+    import cv2
+    import numpy as np
+
+    from bgi_touch.tasks.inventory_grid import (
+        detect_artifact_set_filter_cells,
+        detect_inventory_cells,
+        inventory_category,
+    )
+
+    assert inventory_category("GridScreenName.Materials").name == "Materials"
+    assert inventory_category("养成道具").name == "CharacterDevelopmentItems"
+    with pytest.raises(ValueError, match="不支持"):
+        inventory_category("不存在")
+
+    grid = np.zeros((420, 1171, 3), dtype=np.uint8)
+    for row, y in enumerate((15, 200)):
+        for column, x in enumerate((12, 158, 304)):
+            cv2.rectangle(grid, (x, y), (x + 124, y + 152), (220, 220, 220), 3)
+    cells = detect_inventory_cells(grid, columns=8)
+    assert len(cells) == 6
+    assert {(cell.row, cell.column) for cell in cells} == {
+        (0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)
+    }
+
+    filter_grid = np.zeros((300, 1300, 3), dtype=np.uint8)
+    for y in (20, 110):
+        cv2.rectangle(filter_grid, (20, y), (610, y + 68), (220, 220, 220), 2)
+        cv2.rectangle(filter_grid, (670, y), (1260, y + 68), (220, 220, 220), 2)
+    filter_cells = detect_artifact_set_filter_cells(filter_grid)
+    assert len(filter_cells) == 4
+    assert {(cell.row, cell.column) for cell in filter_cells} == {
+        (0, 0), (0, 1), (1, 0), (1, 1)
+    }
+
+
+def test_inventory_count_parser_and_narrow_one_correction():
+    import numpy as np
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.inventory_grid import parse_inventory_count, recognize_inventory_count
+
+    assert parse_inventory_count("１２３") == 123
+    assert parse_inventory_count("12a") is None
+
+    cell = np.full((153, 125, 3), 240, dtype=np.uint8)
+    cell[132:149, 60:63] = 80
+    with patch("bgi_touch.tasks.inventory_grid._ocr_text", return_value=""):
+        result = recognize_inventory_count(cell)
+    assert result.count == 1
+    assert result.reason == "NARROW_ONE"
+
+
+def test_count_inventory_dispatcher_preserves_single_and_multi_contract():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.inventory_grid.CountInventoryItemTask") as task:
+        task.return_value.run.return_value = {"萃凝晶": 42}
+        result = TaskDispatcher(object()).run_task({
+            "name": "CountInventoryItem",
+            "config": {
+                "gridScreenName": "Materials",
+                "itemNames": ["萃凝晶"],
+                "iconRecognitionMode": "Item",
+                "maxPages": 3,
+            },
+        })
+    assert result == {"萃凝晶": 42}
+    kwargs = task.call_args.kwargs
+    assert kwargs["item_names"] == ["萃凝晶"]
+    assert kwargs["icon_recognition_mode"] == "Item"
+    assert kwargs["max_pages"] == 3
+
+
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
 

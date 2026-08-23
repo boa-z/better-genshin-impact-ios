@@ -257,6 +257,9 @@ bgi-touch task QuickClaimReward --config '{"scrollDown":true,"maxScrolls":3}'
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 # 安全预览：选择 1~4 星后停在复查页，不会执行最终分解
 bgi-touch task AutoArtifactSalvage --config '{"star":4}'
+# 单物品返回整数；itemNames 多物品模式返回名称到数量的对象
+bgi-touch task CountInventoryItem --config \
+  '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
 
 # 键鼠宏：直接给原始宏 JSON，运行时自动翻译为触控
 bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹-塔拉塔海谷.json
@@ -323,6 +326,18 @@ bgi-touch task AutoArtifactSalvage --config-file artifact-salvage.json
   "confirmSalvage": false
 }
 ```
+
+`CountInventoryItem` 支持上游 `gridScreenName`、`itemName`、`itemNames` 和
+`iconRecognitionMode` 参数契约，也可通过 `dispatcher.runCountInventoryItemTask` 调用。
+上游发布包中的图标 ONNX/原型表不在源码仓库内，因此 iOS 端遍历同一背包网格后点击
+每个格子，用右侧详情名称 OCR 匹配目标，再用上游相同比例的底部数字裁剪、HSV 连通域
+和窄 `1`/宽 `7` 修正规则读取数量。单项未找到返回 `-1`，数量识别失败返回 `-2`；
+多项模式只返回找到的键，与 BetterGI 一致。
+
+`GetGridIcons` 会把去重后的网格图标写入 `log/gridIcons/`，可配置
+`gridScreenName`、`starAsSuffix`、`maxNumToGet` 和 `outputDirectory`。
+`InventoryCountComparison` 会输出页面截图、常规/裁剪 OCR 的 CSV 以及异常数字标准化图；
+`target` 支持 `CharacterDevelopmentItems`、`Food`、`Materials` 和 `CurrentPage`。
 
 战斗 DSL 语法速查（与原版一致）：
 

@@ -80,6 +80,7 @@ class TaskDispatcher:
         "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat", "AutoMusicGame", "AutoAlbum",
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "UseRedemptionCode", "AutoArtifactSalvage",
+        "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
     })
 
     def __init__(
@@ -144,6 +145,12 @@ class TaskDispatcher:
             return self.run_use_redemption_code_task(cfg, ct)
         if name in ("AutoArtifactSalvage", "ArtifactSalvage"):
             return self.run_auto_artifact_salvage_task(cfg, ct)
+        if name == "CountInventoryItem":
+            return self.run_count_inventory_item_task(cfg, ct)
+        if name == "GetGridIcons":
+            return self.run_get_grid_icons_task(cfg, ct)
+        if name == "InventoryCountComparison":
+            return self.run_inventory_count_comparison_task(cfg, ct)
         raise NotImplementedError(
             f"SoloTask {name} 尚未移植；当前已支持 {', '.join(sorted(self.IMPLEMENTED))}"
         )
@@ -449,6 +456,55 @@ class TaskDispatcher:
             confirm_salvage=bool(_value(param, "confirmSalvage", False)),
             max_pages=int(_value(param, "maxPages", 12) or 12),
             timeout_s=float(_value(param, "timeoutSeconds", 300) or 300),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_count_inventory_item_task(self, param: Any = None, ct: Any = None) -> Any:
+        from .inventory_grid import CountInventoryItemTask
+
+        category = _value(param, "gridScreenName", _value(param, "category", None))
+        if category is None:
+            raise ValueError("CountInventoryItem 需要 gridScreenName")
+        item_names = _value(param, "itemNames", None)
+        if isinstance(item_names, str):
+            item_names = [item_names]
+        return CountInventoryItemTask(
+            self.ctx,
+            category,
+            item_name=_value(param, "itemName", None),
+            item_names=item_names,
+            icon_recognition_mode=_value(param, "iconRecognitionMode", "GridIcon"),
+            max_pages=int(_value(param, "maxPages", 100) or 100),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_get_grid_icons_task(self, param: Any = None, ct: Any = None) -> list[str]:
+        from .inventory_grid import GetGridIconsTask
+
+        category = _value(
+            param, "gridScreenName", _value(param, "gridName", _value(param, "category", None))
+        )
+        if category is None:
+            raise ValueError("GetGridIcons 需要 gridScreenName/gridName")
+        max_num = _value(param, "maxNumToGet", None)
+        return GetGridIconsTask(
+            self.ctx,
+            category,
+            star_as_suffix=bool(_value(param, "starAsSuffix", False)),
+            max_num_to_get=int(max_num) if max_num is not None else None,
+            max_pages=int(_value(param, "maxPages", 100) or 100),
+            output_dir=_value(param, "outputDirectory", _value(param, "outputDir", None)),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_inventory_count_comparison_task(self, param: Any = None, ct: Any = None) -> str:
+        from .inventory_grid import InventoryCountComparisonTask
+
+        return InventoryCountComparisonTask(
+            self.ctx,
+            _value(param, "target", "CurrentPage"),
+            max_pages=int(_value(param, "maxPages", 100) or 100),
+            output_dir=_value(param, "outputDirectory", _value(param, "outputDir", None)),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
