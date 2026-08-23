@@ -22,6 +22,12 @@
   BetterGI 名称到累计数量的返回契约；ItemV2 模型由资产下载器按需安装。
 - OneDragonFlowConfig 的新旧格式、显式顺序、同名重复任务 ID、NextTaskId 断点、
   内置任务编排与关闭/挂起原神完成动作；自定义配置组可通过 taskConfigs 映射任务。
+- AutoGeniusInvokation 的完整策略元数据、投骰与重投、行动骰子、元素调和、回合状态、
+  异常状态与阵亡重选；官方 TCG 模板和角色别名元数据可由资产下载器固定版本获取。
+- AutoFishing 的全天、白天、夜晚和不调整时间策略；全天模式按 BetterGI 语义依次
+  清理 07:00 与 19:00 两个鱼塘阶段。
+- JavaScript 参数对象、取消令牌、ServerTime、PostMessage 前台触控近似，以及
+  file 文本回调、图片缩放/写入等 bettergi.d.ts 宿主契约。
 
 ## 已完成 — 地图追踪离线核心
 
@@ -65,8 +71,9 @@ HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest �
 AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批未迁移能力主要是七圣召唤中仍以简化流程代替的骰子与回合状态分支。
-或大量页面状态，需要继续移植对应识别器，不能只用通用 OCR 点击流代替。
+下一批迁移重点是 QuickBuy、QuickForge、FarmingPlan 等尚未接入统一调度器的页面
+任务，以及 AutoBoss/地脉/幽境的内置导航和树脂分支；需要继续移植专用识别器，
+不能只用通用 OCR 点击流代替。
 
 ## 工程
 

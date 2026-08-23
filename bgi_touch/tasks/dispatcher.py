@@ -164,7 +164,8 @@ class TaskDispatcher:
         from .auto_fight import AutoFightTask
         strategy = _value(param, "combatStrategyPath", None)
         timeout = _value(param, "timeout", None)
-        timeout_s = float(timeout) / 1000 if timeout else 120
+        # BetterGI AutoFightParam.Timeout is expressed in seconds.
+        timeout_s = float(timeout) if timeout else 120
         return AutoFightTask(
             self.ctx,
             combat_strategy_path=strategy,

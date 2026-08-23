@@ -57,6 +57,7 @@ PARTIAL = {
     "dispatcher.runAutoMusicGameTask": "已迁移六轨像素检测；需要先进入千音雅集曲目界面",
     "dispatcher.runAutoAlbumTask": "已迁移专辑导航、完成标志跳过和难度循环；需要先进入主题专辑界面",
     "dispatcher.runAutoGeniusInvokationTask": "已迁移完整回合状态机、投骰/骰子识别、元素调和、异常状态与阵亡切换；需准备七圣召唤识别资产",
+    "PostMessage": "iOS 无后台窗口消息，按键与点击映射到 DeviceHub 前台触控输入",
     "dispatcher.runAutoStygianOnslaughtTask": "复用路线、战斗和领奖循环；活动入口与树脂状态需由路线或当前界面准备",
     "dispatcher.runQuickSereniteaPotTask": "使用背包小道具页与原版模板快速进入/离开尘歌壶",
     "dispatcher.runQuickClaimRewardTask": "使用原版领取模板并将滚轮操作转换为触控上滑",
@@ -65,7 +66,6 @@ PARTIAL = {
     "dispatcher.runCountInventoryItemTask": "遍历 iOS 背包网格，通过详情名称和数量区域 OCR 返回单项或多项计数",
 }
 UNSUPPORTED = {
-    "PostMessage": "后台按键为 Windows 专有",
     "KeyMouseHook": "全局键鼠钩子为 Windows 专有",
 }
 

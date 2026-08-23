@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +33,7 @@ CASE_PROXY = """
   const cache = {};
   return new Proxy(target, {
     get(t, prop, recv) {
+      if (prop === '__wrapped__') return t;
       if (typeof prop !== 'string' || prop in t) return Reflect.get(t, prop, recv);
       if (!(prop in cache)) {
         const lower = prop.toLowerCase();
@@ -39,6 +42,14 @@ CASE_PROXY = """
           ?? null;
       }
       return cache[prop] === null ? undefined : Reflect.get(t, cache[prop], recv);
+    },
+    set(t, prop, value, recv) {
+      if (typeof prop !== 'string' || prop in t) return Reflect.set(t, prop, value, recv);
+      const lower = prop.toLowerCase();
+      const key = Object.getOwnPropertyNames(t).find(k => k.toLowerCase() === lower)
+        ?? Object.getOwnPropertyNames(Object.getPrototypeOf(t) ?? {}).find(k => k.toLowerCase() === lower)
+        ?? prop;
+      return Reflect.set(t, key, value, recv);
     }
   });
 })
@@ -223,6 +234,8 @@ class JsScriptRuntime:
         expose("rightButtonDown", lambda: ctx.input.button_down("aim"))
         expose("rightButtonUp", lambda: ctx.input.button_up("aim"))
         expose("middleButtonClick", lambda: None)
+        expose("middleButtonDown", lambda: None)
+        expose("middleButtonUp", lambda: None)
         expose("verticalScroll", lambda n: None)
 
         # log / notification / settings
@@ -251,9 +264,15 @@ class JsScriptRuntime:
         class _File:
             def readTextSync(self, p): return rt._resolve(p).read_text(encoding="utf-8")
             def readText(self, p, cb=None):
-                text = self.readTextSync(p)
+                try:
+                    text = self.readTextSync(p)
+                except Exception as error:
+                    if cb:
+                        cb(str(error), None)
+                        return None
+                    raise
                 if cb:
-                    cb(text)
+                    cb(None, text)
                 return text
             def writeTextSync(self, p, content, append=False):
                 f = rt._resolve(p)
@@ -262,12 +281,35 @@ class JsScriptRuntime:
                 with open(f, mode, encoding="utf-8") as fh:
                     fh.write(str(content))
                 return True
-            def writeText(self, p, content, append=False): return self.writeTextSync(p, content, append)
+            def writeText(self, p, content, callback_or_append=False, append=False):
+                callback = callback_or_append if callable(callback_or_append) else None
+                should_append = append if callback else bool(callback_or_append)
+                try:
+                    result = self.writeTextSync(p, content, should_append)
+                except Exception as error:
+                    if callback:
+                        callback(str(error), None)
+                        return False
+                    raise
+                if callback:
+                    callback(None, result)
+                return result
             def readImageMatSync(self, p): return wrap(Mat.from_file(str(rt._resolve(p))))
             def readImageMatWithResizeSync(self, p, w, h, interp=1):
                 import cv2 as _cv2
                 m = Mat.from_file(str(rt._resolve(p)))
-                return wrap(Mat(_cv2.resize(m.bgr, (int(w), int(h)))))
+                return wrap(Mat(_cv2.resize(
+                    m.bgr, (int(w), int(h)), interpolation=int(interp)
+                )))
+            def writeImageSync(self, p, mat):
+                import cv2 as _cv2
+                value = getattr(mat, "__wrapped__", mat)
+                bgr = value.bgr if isinstance(value, Mat) else getattr(value, "bgr", None)
+                if bgr is None:
+                    raise TypeError("file.writeImageSync 需要 Mat")
+                out = rt._resolve(p)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                return bool(_cv2.imwrite(str(out), bgr))
             def readPathSync(self, folder):
                 base = rt._resolve(folder)
                 return [str(p.relative_to(rt.script_dir)) for p in sorted(base.iterdir())]
@@ -281,6 +323,14 @@ class JsScriptRuntime:
             def request(self, method, url, body=None, headers_json=""):
                 return rt._http_request(str(method), str(url), body, str(headers_json or ""))
         expose("http", wrap(_Http()), proxy=False)
+
+        class _ServerTime:
+            @staticmethod
+            def getServerTimeZoneOffset():
+                offset = datetime.now().astimezone().utcoffset()
+                return int(offset.total_seconds() * 1000) if offset else 0
+
+        expose("ServerTime", wrap(_ServerTime()), proxy=False)
 
         # 识别类型
         class _RO:
@@ -340,9 +390,50 @@ class JsScriptRuntime:
         )
 
         class _CTS:
-            def __init__(self): self._cancelled = False
-            def cancel(self): self._cancelled = True
+            def __init__(self):
+                self._cancelled = False
+                self._callbacks = []
+                self._timer = None
+            @property
+            def cancelled(self): return self._cancelled
+            @property
             def isCancellationRequested(self): return self._cancelled
+            @property
+            def canBeCanceled(self): return True
+            def cancel(self, _throw_on_first=False):
+                if self._cancelled:
+                    return
+                self._cancelled = True
+                for callback in self._callbacks:
+                    callback()
+                self._callbacks.clear()
+            def cancelAsync(self): self.cancel()
+            def cancelAfter(self, milliseconds):
+                # PythonMonkey callbacks must stay on the JS thread. The timer
+                # only flips the token; manual cancel still runs registrations.
+                self._timer = threading.Timer(
+                    float(milliseconds) / 1000,
+                    lambda: setattr(self, "_cancelled", True),
+                )
+                self._timer.daemon = True
+                self._timer.start()
+            def tryReset(self):
+                self._cancelled = False
+                return True
+            def register(self, callback, *_args):
+                if self._cancelled:
+                    callback()
+                else:
+                    self._callbacks.append(callback)
+                return None
+            unsafeRegister = register
+            def throwIfCancellationRequested(self):
+                if self._cancelled:
+                    raise ScriptCancelled()
+            def dispose(self):
+                if self._timer is not None:
+                    self._timer.cancel()
+                self._callbacks.clear()
             @property
             def token(self): return self
 
@@ -350,17 +441,20 @@ class JsScriptRuntime:
             def runTask(self, task, ct=None):
                 return task_dispatcher.run_task(task, ct)
 
-            def runAutoDomainTask(self, param):
-                return task_dispatcher.run_auto_domain_task(param)
+            def runAutoDomainTask(self, param, ct=None):
+                return task_dispatcher.run_auto_domain_task(param, ct)
 
             def runOneDragonTask(self, param=None, ct=None):
                 return task_dispatcher.run_one_dragon_task(param, ct)
 
-            def runAutoFightTask(self, param):
-                return task_dispatcher.run_auto_fight_task(param)
-            def runAutoCookTask(self, param=None): return task_dispatcher.run_auto_cook_task(param)
-            def runAutoFishingTask(self, param=None): return task_dispatcher.run_auto_fishing_task(param)
-            def runAutoOpenChestTask(self, param=None): return task_dispatcher.run_auto_open_chest_task(param)
+            def runAutoFightTask(self, param, ct=None):
+                return task_dispatcher.run_auto_fight_task(param, ct)
+            def runAutoCookTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_cook_task(param, ct)
+            def runAutoFishingTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_fishing_task(param, ct)
+            def runAutoOpenChestTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_open_chest_task(param, ct)
             def runAutoEatTask(self, param=None, ct=None):
                 return task_dispatcher.run_auto_eat_task(param, ct)
             def runAutoMusicGameTask(self, param=None, ct=None):
@@ -373,9 +467,12 @@ class JsScriptRuntime:
                 return task_dispatcher.run_auto_genius_invokation_task(param, ct)
             def runAutoStygianOnslaughtTask(self, param=None, ct=None):
                 return task_dispatcher.run_auto_stygian_onslaught_task(param, ct)
-            def runAutoBossTask(self, param=None): return task_dispatcher.run_auto_boss_task(param)
-            def runAutoLeyLineTask(self, param=None): return task_dispatcher.run_auto_leyline_task(param)
-            def runAutoLeyLineOutcropTask(self, param=None): return task_dispatcher.run_auto_leyline_task(param)
+            def runAutoBossTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_boss_task(param, ct)
+            def runAutoLeyLineTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_leyline_task(param, ct)
+            def runAutoLeyLineOutcropTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_leyline_task(param, ct)
             def runQuickSereniteaPotTask(self, param=None, ct=None):
                 return task_dispatcher.run_quick_serenitea_pot_task(param, ct)
             def runQuickClaimRewardTask(self, param=None, ct=None):
@@ -412,7 +509,210 @@ class JsScriptRuntime:
             "this.gridScreenName='Materials';this.itemName=null;this.itemNames=[];"
             "this.iconRecognitionMode='GridIcon';}; })()"
         )
-        g["CancellationTokenSource"] = pm.eval("(function(){ return function CancellationTokenSource(){ this.cancelled = false; this.cancel = () => { this.cancelled = true; }; this.token = this; }; })()")
+        constructors = pm.eval(r"""
+            (function () {
+              function caseInsensitive(target) {
+                return new Proxy(target, {
+                  get(t, prop, recv) {
+                    if (typeof prop !== 'string' || prop in t) return Reflect.get(t, prop, recv);
+                    const key = Reflect.ownKeys(t).find(k => typeof k === 'string' && k.toLowerCase() === prop.toLowerCase());
+                    return key === undefined ? undefined : Reflect.get(t, key, recv);
+                  },
+                  set(t, prop, value, recv) {
+                    if (typeof prop !== 'string' || prop in t) return Reflect.set(t, prop, value, recv);
+                    const key = Reflect.ownKeys(t).find(k => typeof k === 'string' && k.toLowerCase() === prop.toLowerCase());
+                    return Reflect.set(t, key === undefined ? prop : key, value, recv);
+                  }
+                });
+              }
+
+              function FightFinishDetectConfig() {
+                Object.assign(this, {
+                  battleEndProgressBarColor: '', battleEndProgressBarColorTolerance: '',
+                  fastCheckEnabled: false, fastCheckParams: '', checkEndDelay: '',
+                  beforeDetectDelay: '', rotateFindEnemyEnabled: false
+                });
+                return caseInsensitive(this);
+              }
+
+              function AutoFightParam(strategyName) {
+                Object.assign(this, {
+                  combatStrategyPath: strategyName ? String(strategyName) : '', timeout: 120,
+                  fightFinishDetectEnabled: false,
+                  finishDetectConfig: new FightFinishDetectConfig(),
+                  pickDropsAfterFightEnabled: false, pickDropsAfterFightSeconds: 15,
+                  kazuhaPickupEnabled: true, kazuhaPartyName: '', actionSchedulerByCd: '',
+                  onlyPickEliteDropsMode: '', battleThresholdForLoot: -1,
+                  guardianAvatar: '', guardianCombatSkip: false, guardianAvatarHold: false,
+                  checkBeforeBurst: false, isFirstCheck: true, rotaryFactor: 10,
+                  burstEnabled: false, qinDoublePickUp: false
+                });
+                this.setCombatStrategyPath = value => {
+                  this.combatStrategyPath = value ? String(value) : '';
+                };
+                this.setDefault = () => this;
+                return caseInsensitive(this);
+              }
+
+              function AutoDomainParam(rounds, path) {
+                Object.assign(this, {
+                  domainRoundNum: Number(rounds || 0) || 9999,
+                  combatStrategyPath: path ? String(path) : '', partyName: '',
+                  domainName: '', sundaySelectedValue: '', autoArtifactSalvage: false,
+                  maxArtifactStar: '4', specifyResinUse: false,
+                  resinPriorityList: ['浓缩树脂', '原粹树脂'],
+                  originalResinUseCount: 0, originalResin20UseCount: 0,
+                  originalResin40UseCount: 0, condensedResinUseCount: 0,
+                  transientResinUseCount: 0, fragileResinUseCount: 0,
+                  rewardRecognitionEnabled: false
+                });
+                this.setDefault = () => this;
+                this.setCombatStrategyPath = value => {
+                  this.combatStrategyPath = value ? String(value) : '';
+                  return this.combatStrategyPath;
+                };
+                this.setResinPriorityList = (...values) => {
+                  this.resinPriorityList = values.map(String);
+                };
+                return caseInsensitive(this);
+              }
+
+              function AutoLeyLineOutcropParam(count, country, type) {
+                Object.assign(this, {
+                  count: Number(count || 0), country: country ? String(country) : '',
+                  leyLineOutcropType: type ? String(type) : '',
+                  isResinExhaustionMode: false, openModeCountMin: false,
+                  useAdventurerHandbook: true, friendshipTeam: '', team: '',
+                  timeout: 240, isGoToSynthesizer: false, useFragileResin: false,
+                  useTransientResin: false, isNotification: false
+                });
+                return caseInsensitive(this);
+              }
+
+              function AutoStygianOnslaughtParam(path) {
+                Object.assign(this, {
+                  routePath: path ? String(path) : '', bossNum: 1,
+                  autoArtifactSalvage: false, specifyResinUse: false,
+                  resinPriorityList: ['原粹树脂'], originalResinUseCount: 0,
+                  condensedResinUseCount: 0, transientResinUseCount: 0,
+                  fragileResinUseCount: 0, fightTeamName: '', combatScriptBagPath: ''
+                });
+                this.setCombatStrategyPath = value => {
+                  this.combatScriptBagPath = value ? String(value) : '';
+                  return this.combatScriptBagPath;
+                };
+                this.setResinPriorityList = (...values) => {
+                  this.resinPriorityList = values.map(String);
+                };
+                return caseInsensitive(this);
+              }
+
+              function AutoBossParam(path) {
+                Object.assign(this, {
+                  bossName: '', strategyName: '',
+                  combatStrategyPath: path ? String(path) : '', teamName: '',
+                  specifyRunCount: false, runCount: 1, useTransientResin: false,
+                  useFragileResin: false, reviveRetryCount: 3,
+                  returnToStatueAfterEachRound: false,
+                  rewardRecognitionEnabled: false, timeout: 240
+                });
+                this.setDefault = () => this;
+                this.setCombatStrategyPath = value => {
+                  this.combatStrategyPath = value ? String(value) : '';
+                };
+                return caseInsensitive(this);
+              }
+
+              function CancellationTokenSource() {
+                this.cancelled = false;
+                this._callbacks = [];
+                this.token = null;
+                Object.defineProperties(this, {
+                  isCancellationRequested: { get: () => this.cancelled },
+                  canBeCanceled: { get: () => true }
+                });
+                this.cancel = () => {
+                  if (this.cancelled) return;
+                  this.cancelled = true;
+                  for (const callback of this._callbacks.splice(0)) callback();
+                };
+                this.cancelAsync = async () => this.cancel();
+                this.cancelAfter = milliseconds => setTimeout(() => this.cancel(), Number(milliseconds));
+                this.tryReset = () => { this.cancelled = false; return true; };
+                this.dispose = () => { this._callbacks.length = 0; };
+                this.register = callback => {
+                  if (this.cancelled) callback(); else this._callbacks.push(callback);
+                  return { dispose() {} };
+                };
+                this.unsafeRegister = this.register;
+                this.throwIfCancellationRequested = () => {
+                  if (this.cancelled) throw new Error('OperationCanceledException');
+                };
+                const proxy = caseInsensitive(this);
+                proxy.token = proxy;
+                return proxy;
+              }
+              CancellationTokenSource.createLinkedTokenSource = (...tokens) => {
+                const source = new CancellationTokenSource();
+                for (const token of tokens) {
+                  if (token && token.isCancellationRequested) source.cancel();
+                  else if (token && typeof token.register === 'function') token.register(() => source.cancel());
+                }
+                return source;
+              };
+              CancellationTokenSource.CreateLinkedTokenSource =
+                CancellationTokenSource.createLinkedTokenSource;
+              const CancellationToken = CancellationTokenSource;
+              CancellationToken.none = caseInsensitive({
+                isCancellationRequested: false, canBeCanceled: false,
+                register: () => ({ dispose() {} }),
+                unsafeRegister: () => ({ dispose() {} }),
+                throwIfCancellationRequested: () => {}
+              });
+              CancellationToken.None = CancellationToken.none;
+
+              function PostMessage() {
+                this.keyDown = globalThis.keyDown;
+                this.keyUp = globalThis.keyUp;
+                this.keyPress = globalThis.keyPress;
+                this.click = globalThis.leftButtonClick;
+                return caseInsensitive(this);
+              }
+
+              return {
+                FightFinishDetectConfig, AutoFightParam, AutoDomainParam,
+                AutoLeyLineOutcropParam, AutoStygianOnslaughtParam, AutoBossParam,
+                CancellationTokenSource, CancellationToken, PostMessage
+              };
+            })()
+        """)
+        for name in (
+            "FightFinishDetectConfig", "AutoFightParam", "AutoDomainParam",
+            "AutoLeyLineOutcropParam", "AutoStygianOnslaughtParam", "AutoBossParam",
+            "CancellationTokenSource", "CancellationToken", "PostMessage",
+        ):
+            g[name] = constructors[name]
+        pm.eval("""
+            CancellationTokenSource.createLinkedTokenSource = (...tokens) => {
+              const source = new CancellationTokenSource();
+              for (const token of tokens) {
+                if (token && token.isCancellationRequested) source.cancel();
+                else if (token && typeof token.register === 'function') {
+                  token.register(() => source.cancel());
+                }
+              }
+              return source;
+            };
+            CancellationTokenSource.CreateLinkedTokenSource =
+              CancellationTokenSource.createLinkedTokenSource;
+            CancellationToken.none = {
+              isCancellationRequested: false, canBeCanceled: false,
+              register: () => ({ dispose() {} }),
+              unsafeRegister: () => ({ dispose() {} }),
+              throwIfCancellationRequested: () => {}
+            };
+            CancellationToken.None = CancellationToken.none;
+        """)
 
     # ---- run ----
 

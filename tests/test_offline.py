@@ -465,6 +465,127 @@ Output = ArtifactStat.Level == 0 && hasATK && hasDEF;
         evaluate_artifact_javascript(artifact, "while (true) {}", timeout_ms=20)
 
 
+def test_js_runtime_exposes_bettergi_param_tokens_file_and_postmessage(tmp_path):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import cv2
+    import numpy as np
+
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    cv2.imwrite(str(tmp_path / "source.png"), np.full((8, 8, 3), 127, np.uint8))
+    (tmp_path / "input.txt").write_text("兼容文本", encoding="utf-8")
+    (tmp_path / "main.js").write_text(
+        """
+const fight = new AutoFightParam("strategy.txt");
+fight.Timeout = 321;
+fight.FinishDetectConfig.FastCheckEnabled = true;
+const domain = new AutoDomainParam(2, "combat.txt");
+domain.SetResinPriorityList("原粹树脂", "浓缩树脂");
+const leyline = new AutoLeyLineOutcropParam(3, "枫丹", "启示之花");
+const stygian = new AutoStygianOnslaughtParam("route.json");
+stygian.SetCombatStrategyPath("fight.txt");
+const boss = new AutoBossParam();
+boss.BossName = "急冻树";
+boss.RunCount = 4;
+
+let callbackCount = 0;
+const cts = new CancellationTokenSource();
+cts.Token.Register(() => callbackCount++);
+cts.Cancel();
+const linked = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+
+let readCallback = "";
+await file.ReadText("input.txt", (error, data) => {
+  if (error) throw new Error(error);
+  readCallback = data;
+});
+let writeCallback = false;
+await file.WriteText("callback.txt", "ok", (error, success) => {
+  if (error) throw new Error(error);
+  writeCallback = success;
+});
+const mat = file.ReadImageMatWithResizeSync("source.png", 4, 5, 0);
+const imageSaved = file.WriteImageSync("written.png", mat);
+const recognition = RecognitionObject.TemplateMatch(mat);
+recognition.Threshold = 0.61;
+
+const post = new PostMessage();
+post.KeyDown("W");
+post.KeyUp("W");
+
+return JSON.stringify({
+  timeout: fight.timeout,
+  fast: fight.finishDetectConfig.fastCheckEnabled,
+  rounds: domain.DomainRoundNum,
+  resin: domain.resinPriorityList,
+  leylineCount: leyline.Count,
+  route: stygian.routePath,
+  combat: stygian.CombatScriptBagPath,
+  boss: boss.bossName,
+  bossRuns: boss.runCount,
+  cancelled: cts.IsCancellationRequested,
+  linkedCancelled: linked.isCancellationRequested,
+  callbackCount,
+  readCallback,
+  writeCallback,
+  imageSaved,
+  imageSize: [mat.Width, mat.Height],
+  recognitionThreshold: recognition.threshold,
+  serverOffset: ServerTime.GetServerTimeZoneOffset()
+});
+""",
+        encoding="utf-8",
+    )
+    input_simulator = SimpleNamespace(
+        key_down=Mock(), key_up=Mock(), key_press=Mock(),
+        click_ref=Mock(), move_camera_by=Mock(), attack=Mock(),
+        attack_down=Mock(), attack_up=Mock(), button_down=Mock(), button_up=Mock(),
+    )
+    ctx = SimpleNamespace(
+        input=input_simulator,
+        device=SimpleNamespace(paste_text=Mock()),
+        transform=ScreenTransform(1920, 1080),
+        sleep=lambda _ms: None,
+    )
+    result = json.loads(JsScriptRuntime(ctx, tmp_path).run())
+    assert result["timeout"] == 321
+    assert result["fast"] is True
+    assert result["rounds"] == 2
+    assert result["resin"] == ["原粹树脂", "浓缩树脂"]
+    assert (result["leylineCount"], result["route"], result["combat"]) == (
+        3, "route.json", "fight.txt"
+    )
+    assert (result["boss"], result["bossRuns"]) == ("急冻树", 4)
+    assert result["cancelled"] is True
+    assert result["linkedCancelled"] is True
+    assert result["callbackCount"] == 1
+    assert result["readCallback"] == "兼容文本"
+    assert result["writeCallback"] is True
+    assert result["imageSaved"] is True
+    assert result["imageSize"] == [4, 5]
+    assert result["recognitionThreshold"] == pytest.approx(0.61)
+    assert isinstance(result["serverOffset"], int)
+    assert (tmp_path / "callback.txt").read_text(encoding="utf-8") == "ok"
+    input_simulator.key_down.assert_called_once_with("W")
+    input_simulator.key_up.assert_called_once_with("W")
+
+
+def test_auto_fight_dispatcher_keeps_upstream_timeout_seconds():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_fight.AutoFightTask") as task:
+        task.return_value.run.return_value = True
+        assert TaskDispatcher(object()).run_auto_fight_task({"timeout": 321})
+    assert task.call_args.kwargs["timeout_s"] == 321
+
+
 def test_artifact_status_detector_matches_upstream_hsv_markers():
     import cv2
     import numpy as np
