@@ -245,6 +245,7 @@ def test_auto_fishing_dispatcher_maps_upstream_full_auto_parameters():
             "autoThrowRodTimeOut": 18,
             "wholeProcessTimeoutSeconds": 360,
             "targetCatches": 5,
+            "fishingTimePolicy": 2,
             "quitOnFinish": False,
         })
     assert result is True
@@ -253,7 +254,57 @@ def test_auto_fishing_dispatcher_maps_upstream_full_auto_parameters():
     assert kwargs["throw_rod_timeout_s"] == 18
     assert kwargs["timeout_s"] == 360
     assert kwargs["target_catches"] == 5
+    assert kwargs["fishing_time_policy"] == 2
     assert kwargs["quit_on_finish"] is False
+
+
+def test_auto_fishing_time_policy_matches_bettergi_schedule():
+    import pytest
+
+    from bgi_touch.tasks.auto_fishing import (
+        FishingTimePolicy,
+        fishing_hours,
+        parse_fishing_time_policy,
+    )
+
+    assert parse_fishing_time_policy(0) == FishingTimePolicy.ALL
+    assert parse_fishing_time_policy("白天") == FishingTimePolicy.DAYTIME
+    assert parse_fishing_time_policy("Nighttime") == FishingTimePolicy.NIGHTTIME
+    assert parse_fishing_time_policy("不调") == FishingTimePolicy.DONT_CHANGE
+    assert fishing_hours(FishingTimePolicy.ALL) == (7, 19)
+    assert fishing_hours(FishingTimePolicy.DAYTIME) == (7,)
+    assert fishing_hours(FishingTimePolicy.NIGHTTIME) == (19,)
+    assert fishing_hours(FishingTimePolicy.ALL, coop=True) == (None,)
+    with pytest.raises(ValueError, match="fishingTimePolicy"):
+        parse_fishing_time_policy("黄昏")
+
+
+def test_auto_fishing_all_policy_runs_day_and_night_rounds():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.tasks.auto_fishing import AutoFishingTask
+
+    release_all = Mock()
+    ctx = SimpleNamespace(input=SimpleNamespace(release_all=release_all))
+    task = AutoFishingTask(
+        ctx,
+        target_catches=0,
+        fishing_time_policy="全天",
+        auto_throw_rod_enabled=False,
+        quit_on_finish=False,
+        log=lambda _message: None,
+    )
+    task._set_time = Mock(return_value=True)
+    task._run_fishing_round = Mock(side_effect=[(True, 2), (True, 3)])
+    task._quit_fishing_mode = Mock()
+    ctx.sleep = Mock()
+
+    assert task.run() is True
+    assert [call.args for call in task._set_time.call_args_list] == [(7,), (19,)]
+    assert task._run_fishing_round.call_count == 2
+    task._quit_fishing_mode.assert_called_once_with()
+    release_all.assert_called_once_with()
 
 
 def test_auto_eat_red_bar_detector_scales_from_full_frame():

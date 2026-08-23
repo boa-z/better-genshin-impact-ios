@@ -53,7 +53,7 @@ PARTIAL = {
     "runAutoLeyLine": "支持提供 routePath/pathingFile 的通用地脉战斗循环",
     "genshin.switchParty": "iOS 端按 config/party.json 切换当前角色槽位，不重组完整队伍",
     "genshin.setBigMapZoomLevel": "使用触控 pinch 近似 BetterGI 的 1.0-6.0 缩放等级",
-    "genshin.autoFishing": "已迁移鱼条视觉控制；鱼塘/鱼饵 YOLO 选择仍需预先进入钓鱼状态",
+    "genshin.autoFishing": "已迁移找鱼、选饵、抛竿、提竿、拉条与全天/昼夜时间策略闭环",
     "dispatcher.runAutoMusicGameTask": "已迁移六轨像素检测；需要先进入千音雅集曲目界面",
     "dispatcher.runAutoAlbumTask": "已迁移专辑导航、完成标志跳过和难度循环；需要先进入主题专辑界面",
     "dispatcher.runAutoGeniusInvokationTask": "已迁移完整回合状态机、投骰/骰子识别、元素调和、异常状态与阵亡切换；需准备七圣召唤识别资产",

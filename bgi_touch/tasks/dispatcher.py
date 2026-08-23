@@ -220,20 +220,25 @@ class TaskDispatcher:
 
     def run_auto_fishing_task(self, param: Any = None, ct: Any = None) -> bool:
         from .auto_fishing import AutoFishingTask
+        target_catches = _value(
+            param, "targetCatches", _value(param, "fishCount", 0)
+        )
         return AutoFishingTask(
             self.ctx,
-            target_catches=int(_value(param, "targetCatches", _value(param, "fishCount", 1)) or 1),
+            target_catches=int(target_catches or 0),
             timeout_s=float(_value(
                 param, "wholeProcessTimeoutSeconds", _value(param, "timeoutSeconds", 300)
             ) or 300),
             idle_timeout_s=float(_value(param, "idleTimeoutSeconds", 20) or 20),
-            # BetterGI's AutoFishing SoloTask is always the full behaviour
-            # tree; AutoThrowRodEnabled only controls the separate realtime trigger.
+            # BetterGI's SoloTask defaults to the full behaviour tree. The
+            # iOS extension still permits disabling automatic casting explicitly.
             auto_throw_rod_enabled=bool(_value(param, "autoThrowRodEnabled", True)),
             throw_rod_timeout_s=float(_value(
                 param, "throwRodTimeOutTimeoutSeconds",
                 _value(param, "autoThrowRodTimeOut", 15),
             ) or 15),
+            fishing_time_policy=_value(param, "fishingTimePolicy", 0),
+            coop=bool(_value(param, "isCoop", _value(param, "coop", False))),
             quit_on_finish=bool(_value(param, "quitOnFinish", True)),
             log=self.log,
         ).run(cancelled=self._callback(ct))

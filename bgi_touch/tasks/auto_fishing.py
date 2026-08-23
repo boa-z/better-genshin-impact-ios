@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import time
+from enum import IntEnum
 from pathlib import Path
 from typing import Callable
 
@@ -22,6 +23,52 @@ from .fishing_model import FishPond, FishPredictor, choose_bait, rod_state
 REF_WIDTH = 1920
 REF_HEIGHT = 1080
 ASSETS = Path(__file__).resolve().parents[2] / "assets" / "templates" / "autofishing"
+
+
+class FishingTimePolicy(IntEnum):
+    """Numeric values match BetterGI's public SoloTask parameter contract."""
+
+    ALL = 0
+    DAYTIME = 1
+    NIGHTTIME = 2
+    DONT_CHANGE = 3
+
+
+def parse_fishing_time_policy(value) -> FishingTimePolicy:
+    if isinstance(value, FishingTimePolicy):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace("_", "").replace("-", "")
+        aliases = {
+            "all": FishingTimePolicy.ALL,
+            "全天": FishingTimePolicy.ALL,
+            "day": FishingTimePolicy.DAYTIME,
+            "daytime": FishingTimePolicy.DAYTIME,
+            "白天": FishingTimePolicy.DAYTIME,
+            "night": FishingTimePolicy.NIGHTTIME,
+            "nighttime": FishingTimePolicy.NIGHTTIME,
+            "夜晚": FishingTimePolicy.NIGHTTIME,
+            "dontchange": FishingTimePolicy.DONT_CHANGE,
+            "不调": FishingTimePolicy.DONT_CHANGE,
+            "不调整": FishingTimePolicy.DONT_CHANGE,
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+    try:
+        return FishingTimePolicy(int(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"无效的 fishingTimePolicy：{value}") from exc
+
+
+def fishing_hours(policy: FishingTimePolicy, *, coop: bool = False) -> tuple[int | None, ...]:
+    """Return BetterGI's 07:00/19:00 fishing phase schedule."""
+    if coop or policy == FishingTimePolicy.DONT_CHANGE:
+        return (None,)
+    if policy == FishingTimePolicy.DAYTIME:
+        return (7,)
+    if policy == FishingTimePolicy.NIGHTTIME:
+        return (19,)
+    return (7, 19)
 
 
 def get_fish_bar_rects(bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -101,20 +148,24 @@ class AutoFishingTask:
     def __init__(
         self,
         ctx: GameContext,
-        target_catches: int = 1,
+        target_catches: int = 0,
         timeout_s: float = 120,
         idle_timeout_s: float = 20,
         auto_throw_rod_enabled: bool = False,
         throw_rod_timeout_s: float = 15,
+        fishing_time_policy: FishingTimePolicy | int | str = FishingTimePolicy.ALL,
+        coop: bool = False,
         quit_on_finish: bool = True,
         log: Callable[[str], None] = print,
     ):
         self.ctx = ctx
-        self.target_catches = max(1, int(target_catches))
+        self.target_catches = max(0, int(target_catches))
         self.timeout_s = max(5.0, float(timeout_s))
         self.idle_timeout_s = max(2.0, float(idle_timeout_s))
         self.auto_throw_rod_enabled = bool(auto_throw_rod_enabled)
         self.throw_rod_timeout_s = max(3.0, float(throw_rod_timeout_s))
+        self.fishing_time_policy = parse_fishing_time_policy(fishing_time_policy)
+        self.coop = bool(coop)
         self.quit_on_finish = bool(quit_on_finish)
         self.log = log
         self._templates: dict[str, Mat] = {}
@@ -313,30 +364,39 @@ class AutoFishingTask:
         self.ctx.sleep(600)
         self._tap_ocr("确认", "退出", timeout_s=2)
 
-    def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
-        deadline = time.monotonic() + self.timeout_s
+    def _set_time(self, hour: int) -> bool:
+        from ..engine.genshin_api import GenshinApi
+
+        self.log(f"[AutoFishing] 调整游戏时间到 {hour:02d}:00")
+        return bool(GenshinApi(self.ctx).setTime(hour, 0))
+
+    def _run_fishing_round(
+        self,
+        deadline: float,
+        target_remaining: int,
+        cancelled: Callable[[], bool] | None,
+    ) -> tuple[bool, int]:
         last_activity = time.monotonic()
         last_press = 0.0
         last_bar_seen = 0.0
         holding = False
         catches = 0
-        self.log(f"[AutoFishing] 自动钓鱼启动（目标 {self.target_catches} 条）")
         try:
             if self.auto_throw_rod_enabled:
                 if not self._enter_fishing_mode(cancelled):
-                    return False
+                    self.log("[AutoFishing] 当前时段没有可进入的鱼塘")
+                    return True, 0
                 if not self._cast_rod(cancelled):
-                    return False
+                    self.log("[AutoFishing] 当前时段没有可钓目标")
+                    return True, 0
+            last_activity = time.monotonic()
             while time.monotonic() < deadline:
                 if cancelled and cancelled():
                     self.log("[AutoFishing] 已取消")
-                    return False
+                    return False, catches
                 region = self.ctx.capture_region()
                 frame = region.bgr
                 now = time.monotonic()
-
-                if self._in_fishing_mode(region):
-                    last_activity = now
 
                 bar = get_fish_bar_rects(frame[: max(1, frame.shape[0] // 2)])
                 action = fish_bar_action(bar)
@@ -375,11 +435,12 @@ class AutoFishingTask:
                     last_bar_seen = 0.0
                     last_activity = now
                     self.log(f"[AutoFishing] 完成第 {catches} 条")
-                    if catches >= self.target_catches:
-                        return True
+                    if target_remaining and catches >= target_remaining:
+                        return True, catches
                     if self.auto_throw_rod_enabled:
                         if not self._cast_rod(cancelled):
-                            return False
+                            self.log("[AutoFishing] 当前时段鱼塘已清空")
+                            return True, catches
                         last_activity = time.monotonic()
                     elif now - last_press > 0.8:
                         self.ctx.input.key_press("SPACE")
@@ -387,13 +448,49 @@ class AutoFishingTask:
 
                 if now - last_activity >= self.idle_timeout_s:
                     self.log("[AutoFishing] 未检测到钓鱼界面，结束任务")
-                    return False
+                    return True, catches
                 self.ctx.sleep(120)
             self.log("[AutoFishing] 超时退出")
-            return False
+            return False, catches
         finally:
             if holding:
                 self.ctx.input.attack_up()
+
+    def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
+        deadline = time.monotonic() + self.timeout_s
+        catches = 0
+        target = f"目标 {self.target_catches} 条" if self.target_catches else "清空鱼塘"
+        phases = fishing_hours(self.fishing_time_policy, coop=self.coop)
+        self.log(
+            f"[AutoFishing] 自动钓鱼启动（{target}，"
+            f"时间策略 {self.fishing_time_policy.name}）"
+        )
+        try:
+            for phase_index, hour in enumerate(phases, start=1):
+                if time.monotonic() >= deadline or (cancelled and cancelled()):
+                    return False
+                if phase_index > 1:
+                    self._quit_fishing_mode()
+                    self.ctx.sleep(600)
+                if hour is not None and not self._set_time(hour):
+                    # BetterGI's SetTimeTask logs and continues fishing when
+                    # changing time fails (for example during a UI transition).
+                    self.log("[AutoFishing] 调整时间失败，继续使用当前游戏时间")
+                remaining = (
+                    max(0, self.target_catches - catches)
+                    if self.target_catches
+                    else 0
+                )
+                success, round_catches = self._run_fishing_round(
+                    deadline, remaining, cancelled
+                )
+                catches += round_catches
+                if not success:
+                    return False
+                if self.target_catches and catches >= self.target_catches:
+                    return True
+            return self.target_catches == 0 or catches >= self.target_catches
+        finally:
             if self.auto_throw_rod_enabled and self.quit_on_finish:
                 self._quit_fishing_mode()
             self.ctx.input.release_all()
