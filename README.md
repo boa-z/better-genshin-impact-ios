@@ -78,6 +78,7 @@ bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemN
 bgi-touch task CharacterDevelopment --config '{"characterName":"钟离","categories":"属性;武器;天赋"}'
 bgi-touch task AutoDomain --config '{"domainRoundNum":2,"rewardRecognitionEnabled":true}'
 bgi-touch task OneDragon --config-file '/path/to/User/OneDragon/日常.json'
+bgi-touch task AutoFishing --config '{"autoThrowRodEnabled":true,"targetCatches":5}'
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
@@ -114,7 +115,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
 | SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
-| SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ 视觉逻辑已迁移，需在对应游戏状态真机回归 |
+| SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ AutoFishing 已含找鱼、选饵、HutaoFisher 抛竿、提竿与拉条闭环；需真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ 已迁移；Boss、地脉、幽境需路线，七圣召唤需策略 |
 | 快捷任务：尘歌壶 / 一键领取 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |

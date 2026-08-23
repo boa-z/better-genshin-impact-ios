@@ -49,8 +49,9 @@
 ## P1 — 实时触发器与任务视觉回归
 
 AutoPick、AutoSkip 已有后台截图循环；需要在更多 iOS HUD 缩放下校准模板阈值。
-AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼条轮廓控制和 AutoOpenChest 的
-模板导航已经迁移，真机需要分别从烹饪、钓鱼、宝箱交互状态启动回归。
+AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼类 YOLO、鱼饵 ItemV2 识别、
+HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest 的模板导航已经迁移；
+真机需要分别从烹饪点、钓鱼点和宝箱附近启动回归。
 
 ## P1 — 战斗增强
 
@@ -64,8 +65,7 @@ AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼条轮廓控制和 Aut
 AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批未迁移能力主要是 AutoFishing/七圣召唤中仍以简化流程
-代替的模型驱动分支。
+下一批未迁移能力主要是七圣召唤中仍以简化流程代替的骰子与回合状态分支。
 或大量页面状态，需要继续移植对应识别器，不能只用通用 OCR 点击流代替。
 
 ## 工程

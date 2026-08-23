@@ -211,6 +211,51 @@ def test_auto_fishing_bar_detector_and_controller():
     assert fish_bar_action(rects) == "hold"
 
 
+def test_auto_fishing_model_maps_current_labels_and_bait_policy():
+    from bgi_touch.tasks.fishing_model import (
+        choose_bait,
+        fishpond_from_detections,
+        rod_state,
+    )
+    from bgi_touch.vision.yolo import Detection
+
+    detections = [
+        Detection(100, 100, 50, 30, 0.9, 13),  # medaka
+        Detection(180, 100, 50, 30, 0.8, 13),
+        Detection(260, 100, 60, 35, 0.85, 20),  # stickleback
+        Detection(210, 160, 70, 25, 0.95, 18),  # rod
+    ]
+    pond = fishpond_from_detections(detections, include_target=True)
+    assert [fish.kind.chinese_name for fish in pond.fishes] == ["花鳉", "棘鱼", "花鳉"]
+    assert choose_bait(pond.fishes) == "果酿饵"
+    assert pond.rod == (210, 160, 70, 25)
+    state = rod_state(pond.rod, pond.fishes[0], 800, 450)
+    assert state == 2
+
+
+def test_auto_fishing_dispatcher_maps_upstream_full_auto_parameters():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_fishing.AutoFishingTask") as task:
+        task.return_value.run.return_value = True
+        result = TaskDispatcher(object()).run_auto_fishing_task({
+            "autoThrowRodEnabled": True,
+            "autoThrowRodTimeOut": 18,
+            "wholeProcessTimeoutSeconds": 360,
+            "targetCatches": 5,
+            "quitOnFinish": False,
+        })
+    assert result is True
+    kwargs = task.call_args.kwargs
+    assert kwargs["auto_throw_rod_enabled"] is True
+    assert kwargs["throw_rod_timeout_s"] == 18
+    assert kwargs["timeout_s"] == 360
+    assert kwargs["target_catches"] == 5
+    assert kwargs["quit_on_finish"] is False
+
+
 def test_auto_eat_red_bar_detector_scales_from_full_frame():
     import numpy as np
 

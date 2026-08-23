@@ -223,8 +223,18 @@ class TaskDispatcher:
         return AutoFishingTask(
             self.ctx,
             target_catches=int(_value(param, "targetCatches", _value(param, "fishCount", 1)) or 1),
-            timeout_s=float(_value(param, "timeoutSeconds", 120) or 120),
+            timeout_s=float(_value(
+                param, "wholeProcessTimeoutSeconds", _value(param, "timeoutSeconds", 300)
+            ) or 300),
             idle_timeout_s=float(_value(param, "idleTimeoutSeconds", 20) or 20),
+            # BetterGI's AutoFishing SoloTask is always the full behaviour
+            # tree; AutoThrowRodEnabled only controls the separate realtime trigger.
+            auto_throw_rod_enabled=bool(_value(param, "autoThrowRodEnabled", True)),
+            throw_rod_timeout_s=float(_value(
+                param, "throwRodTimeOutTimeoutSeconds",
+                _value(param, "autoThrowRodTimeOut", 15),
+            ) or 15),
+            quit_on_finish=bool(_value(param, "quitOnFinish", True)),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

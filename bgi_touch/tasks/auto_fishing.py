@@ -1,9 +1,7 @@
 """AutoFishing task migrated from BetterGI's image-driven fishing loop.
 
-The iOS port keeps the deterministic part of the original implementation:
-yellow fish-bar segmentation and cursor/target control.  Fish-pond YOLO
-selection is intentionally optional; callers can start this task while a rod
-is already equipped, which is also the safest behavior for touch devices.
+The iOS port includes BetterGI's fish YOLO labels, bait policy, HutaoFisher
+rod-distance model, bite recognition, and yellow fish-bar controller.
 """
 
 from __future__ import annotations
@@ -18,6 +16,8 @@ import numpy as np
 
 from ..engine.context import GameContext
 from ..engine.recognition import Mat, RecognitionObject
+from ..vision.item_recognizer import ItemIconRecognizer
+from .fishing_model import FishPond, FishPredictor, choose_bait, rod_state
 
 REF_WIDTH = 1920
 REF_HEIGHT = 1080
@@ -104,14 +104,23 @@ class AutoFishingTask:
         target_catches: int = 1,
         timeout_s: float = 120,
         idle_timeout_s: float = 20,
+        auto_throw_rod_enabled: bool = False,
+        throw_rod_timeout_s: float = 15,
+        quit_on_finish: bool = True,
         log: Callable[[str], None] = print,
     ):
         self.ctx = ctx
         self.target_catches = max(1, int(target_catches))
         self.timeout_s = max(5.0, float(timeout_s))
         self.idle_timeout_s = max(2.0, float(idle_timeout_s))
+        self.auto_throw_rod_enabled = bool(auto_throw_rod_enabled)
+        self.throw_rod_timeout_s = max(3.0, float(throw_rod_timeout_s))
+        self.quit_on_finish = bool(quit_on_finish)
         self.log = log
         self._templates: dict[str, Mat] = {}
+        self._fish_predictor = None
+        self._item_recognizer = None
+        self._selected_bait: str | None = None
 
     def _template(self, name: str) -> Mat:
         if name not in self._templates:
@@ -123,6 +132,187 @@ class AutoFishingTask:
         ro.threshold = 0.70
         return region.find(ro)
 
+    def _in_fishing_mode(self, region=None) -> bool:
+        region = region or self.ctx.capture_region()
+        return self._find(region, "exit_fishing", (1780, 900, 140, 180)).is_exist()
+
+    def _predict_fishpond(self, frame: np.ndarray, *, include_target: bool = False) -> FishPond:
+        if self._fish_predictor is None:
+            self._fish_predictor = FishPredictor()
+        return self._fish_predictor.predict(frame, include_target=include_target)
+
+    def _tap_ocr(self, *texts: str, timeout_s: float = 2.0) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            hits = self.ctx.capture_region().find_multi(
+                RecognitionObject.ocr(0, 0, 1920, 1080), limit=40
+            )
+            for hit in hits:
+                normalized = hit.text.replace(" ", "")
+                if any(text.replace(" ", "") in normalized for text in texts):
+                    hit.click()
+                    self.ctx.sleep(500)
+                    return True
+            self.ctx.sleep(200)
+        return False
+
+    def _enter_fishing_mode(self, cancelled=None) -> bool:
+        if self._in_fishing_mode():
+            return True
+        self.log("[AutoFishing] 寻找鱼塘并进入钓鱼模式")
+        self.ctx.input.move_camera_by(0, 480)
+        self.ctx.sleep(400)
+        for _ in range(24):
+            if cancelled and cancelled():
+                return False
+            frame = self.ctx.capture_bgr()
+            pond = self._predict_fishpond(frame)
+            bounds = pond.bounds
+            if bounds is None:
+                self.ctx.input.move_camera_by(120, 0)
+                self.ctx.sleep(250)
+                continue
+            center_x = bounds[0] + bounds[2] / 2
+            if center_x < frame.shape[1] * 0.25:
+                self.ctx.input.move_camera_by(-100, 0)
+                self.ctx.sleep(250)
+                continue
+            if center_x > frame.shape[1] * 0.75:
+                self.ctx.input.move_camera_by(100, 0)
+                self.ctx.sleep(250)
+                continue
+            self.ctx.input.key_down("S")
+            self.ctx.sleep(100)
+            self.ctx.input.key_up("S")
+            self.ctx.sleep(300)
+            self.ctx.input.key_down("W")
+            self.ctx.sleep(100)
+            self.ctx.input.key_up("W")
+            self.ctx.sleep(600)
+            self.ctx.input.key_press("F")
+            self.ctx.sleep(1000)
+            self._tap_ocr("开始钓鱼", "确认", timeout_s=2.5)
+            for _ in range(8):
+                if self._in_fishing_mode():
+                    return True
+                self.ctx.sleep(350)
+        self.log("[AutoFishing] 未能进入钓鱼模式")
+        return False
+
+    def _normalized_1080p(self, frame: np.ndarray) -> np.ndarray:
+        scale = self.ctx.transform.scale
+        width = round(REF_WIDTH * scale)
+        left = max(0, round((frame.shape[1] - width) / 2))
+        crop = frame[:round(REF_HEIGHT * scale), left:left + width]
+        return cv2.resize(crop, (REF_WIDTH, REF_HEIGHT), interpolation=cv2.INTER_AREA)
+
+    def _select_bait_icon(self, bait: str) -> bool:
+        if self._item_recognizer is None:
+            self._item_recognizer = ItemIconRecognizer()
+        frame = self._normalized_1080p(self.ctx.capture_bgr())
+        roi_x, roi_y, roi_w, roi_h = 538, 400, 864, 238
+        grid = frame[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+        gray = cv2.cvtColor(grid, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 20, 40)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes = []
+        for contour in contours:
+            x, y, width, height = cv2.boundingRect(contour)
+            if width >= 100 and height and abs(width / height - 0.81) < 0.06:
+                boxes.append((x, y, width, height))
+        for x, y, width, height in sorted(boxes):
+            card = grid[y:y + height, x:x + width]
+            icon = card[:min(card.shape[0], card.shape[1]), :min(card.shape[0], card.shape[1])]
+            match = self._item_recognizer.match(icon)
+            if match.score >= 0.75 and match.name == bait:
+                ref_x, ref_y = roi_x + x + width / 2, roi_y + y + height / 2
+                dev_x, dev_y = self.ctx.transform.to_device(ref_x, ref_y, anchor="center")
+                self.ctx.device.tap(
+                    dev_x, dev_y,
+                    image_width=self.ctx.transform.device_width,
+                    image_height=self.ctx.transform.device_height,
+                )
+                self.ctx.sleep(600)
+                self._tap_ocr("确认", timeout_s=1.5)
+                return True
+        return False
+
+    def _choose_bait(self, pond: FishPond) -> str | None:
+        bait = choose_bait(pond.fishes)
+        if bait is None or bait == self._selected_bait:
+            return bait
+        region = self.ctx.capture_region()
+        switch = self._find(region, "switch_bait", (960, 810, 960, 270))
+        if not switch.is_exist():
+            self.log("[AutoFishing] 未找到换饵按钮")
+            return None
+        self.log(f"[AutoFishing] 选择鱼饵 {bait}")
+        switch.click()
+        self.ctx.sleep(700)
+        if not self._select_bait_icon(bait):
+            self.ctx.input.key_press("ESCAPE")
+            self.log(f"[AutoFishing] 未识别到鱼饵 {bait}")
+            return None
+        self._selected_bait = bait
+        return bait
+
+    def _cast_rod(self, cancelled=None) -> bool:
+        frame = self.ctx.capture_bgr()
+        pond = self._predict_fishpond(frame)
+        bait = self._choose_bait(pond)
+        if bait is None:
+            return False
+        self.ctx.input.move_camera_by(0, 480)
+        self.ctx.sleep(300)
+        self.ctx.input.attack_down()
+        deadline = time.monotonic() + self.throw_rod_timeout_s
+        try:
+            while time.monotonic() < deadline:
+                if cancelled and cancelled():
+                    return False
+                frame = self.ctx.capture_bgr()
+                pond = self._predict_fishpond(frame, include_target=True)
+                if pond.rod is None:
+                    self.ctx.input.move_camera_by(0, 80)
+                    self.ctx.sleep(180)
+                    continue
+                candidates = [fish for fish in pond.fishes if fish.kind.bait == bait]
+                if not candidates:
+                    self.ctx.sleep(180)
+                    continue
+                rod_center = (
+                    pond.rod[0] + pond.rod[2] / 2,
+                    pond.rod[1] + pond.rod[3] / 2,
+                )
+                fish = min(candidates, key=lambda item: math.hypot(
+                    item.center[0] - rod_center[0], item.center[1] - rod_center[1]
+                ))
+                state = rod_state(pond.rod, fish, frame.shape[1], frame.shape[0])
+                dx = fish.center[0] - rod_center[0]
+                dy = fish.center[1] - rod_center[1]
+                if state == 0:
+                    self.log(f"[AutoFishing] 尝试钓取 {fish.kind.chinese_name}")
+                    self.ctx.input.attack_up()
+                    return True
+                if state == 1:
+                    self.ctx.input.move_camera_by(-dx / 1.5, -dy * 1.5)
+                elif state == 2:
+                    self.ctx.input.move_camera_by(dx / 1.5, dy * 1.5)
+                else:
+                    self.ctx.input.move_camera_by(dx * 0.35, dy * 0.35)
+                self.ctx.sleep(max(80, min(500, int(math.hypot(dx, dy)))))
+        finally:
+            self.ctx.input.attack_up()
+        self.log("[AutoFishing] 自动抛竿超时")
+        return False
+
+    def _quit_fishing_mode(self) -> None:
+        if not self._in_fishing_mode():
+            return
+        self.ctx.input.key_press("ESCAPE")
+        self.ctx.sleep(600)
+        self._tap_ocr("确认", "退出", timeout_s=2)
+
     def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
         deadline = time.monotonic() + self.timeout_s
         last_activity = time.monotonic()
@@ -132,6 +322,11 @@ class AutoFishingTask:
         catches = 0
         self.log(f"[AutoFishing] 自动钓鱼启动（目标 {self.target_catches} 条）")
         try:
+            if self.auto_throw_rod_enabled:
+                if not self._enter_fishing_mode(cancelled):
+                    return False
+                if not self._cast_rod(cancelled):
+                    return False
             while time.monotonic() < deadline:
                 if cancelled and cancelled():
                     self.log("[AutoFishing] 已取消")
@@ -140,11 +335,8 @@ class AutoFishingTask:
                 frame = region.bgr
                 now = time.monotonic()
 
-                if not self._find(region, "exit_fishing", (150, 0, 480, 270)).is_empty():
-                    if holding:
-                        self.ctx.input.attack_up()
-                    self.log("[AutoFishing] 检测到退出钓鱼按钮")
-                    return catches >= self.target_catches
+                if self._in_fishing_mode(region):
+                    last_activity = now
 
                 bar = get_fish_bar_rects(frame[: max(1, frame.shape[0] // 2)])
                 action = fish_bar_action(bar)
@@ -185,7 +377,11 @@ class AutoFishingTask:
                     self.log(f"[AutoFishing] 完成第 {catches} 条")
                     if catches >= self.target_catches:
                         return True
-                    if now - last_press > 0.8:
+                    if self.auto_throw_rod_enabled:
+                        if not self._cast_rod(cancelled):
+                            return False
+                        last_activity = time.monotonic()
+                    elif now - last_press > 0.8:
                         self.ctx.input.key_press("SPACE")
                         last_press = now
 
@@ -198,4 +394,6 @@ class AutoFishingTask:
         finally:
             if holding:
                 self.ctx.input.attack_up()
+            if self.auto_throw_rod_enabled and self.quit_on_finish:
+                self._quit_fishing_mode()
             self.ctx.input.release_all()
