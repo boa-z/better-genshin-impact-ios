@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -151,7 +152,33 @@ class OneDragonFlowTask:
         if item.name == "领取尘歌壶奖励":
             return self.dispatcher.run_quick_serenitea_pot_task(task_config)
         if item.name == "自动地脉花":
-            task_config.setdefault("count", _get(self.config, "leyLineRunCount", 1) or 1)
+            day_name = (
+                datetime.now().astimezone() - timedelta(hours=4)
+            ).strftime("%A")
+            if not bool(_get(self.config, f"leyLineRun{day_name}", True)):
+                self.log(f"[OneDragon] {day_name} 未启用自动地脉花，跳过")
+                return True
+            configured_count = int(_get(self.config, "leyLineRunCount", 0) or 0)
+            if configured_count > 0:
+                task_config.setdefault("count", configured_count)
+            else:
+                task_config.setdefault("count", 1)
+            daily_type = str(_get(self.config, f"leyLine{day_name}Type", "") or "")
+            daily_country = str(_get(self.config, f"leyLine{day_name}Country", "") or "")
+            if daily_type:
+                task_config.setdefault("leyLineOutcropType", daily_type)
+            if daily_country:
+                task_config.setdefault("country", daily_country)
+            task_config.setdefault(
+                "isResinExhaustionMode",
+                _get(self.config, "leyLineResinExhaustionMode", False),
+            )
+            task_config.setdefault(
+                "openModeCountMin", _get(self.config, "leyLineOpenModeCountMin", False)
+            )
+            task_config.setdefault(
+                "oneDragonMode", _get(self.config, "leyLineOneDragonMode", False)
+            )
             return self.dispatcher.run_auto_leyline_task(task_config)
         raise KeyError(item.name)
 

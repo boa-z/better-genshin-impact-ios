@@ -584,10 +584,15 @@ class JsScriptRuntime:
                   count: Number(count || 0), country: country ? String(country) : '',
                   leyLineOutcropType: type ? String(type) : '',
                   isResinExhaustionMode: false, openModeCountMin: false,
-                  useAdventurerHandbook: true, friendshipTeam: '', team: '',
-                  timeout: 240, isGoToSynthesizer: false, useFragileResin: false,
-                  useTransientResin: false, isNotification: false
+                  useAdventurerHandbook: false, friendshipTeam: '', team: '',
+                  timeout: 120, isGoToSynthesizer: false, useFragileResin: false,
+                  useTransientResin: false, isNotification: false,
+                  scanDropsAfterRewardEnabled: false, scanDropsAfterRewardSeconds: 12,
+                  fightConfig: caseInsensitive({ strategyName: '', teamNames: '', timeout: 120,
+                    fightFinishDetectEnabled: true, seekEnemyEnabled: false,
+                    seekEnemyIntervalSeconds: 3, seekEnemyRotaryFactor: 6 })
                 });
+                this.setDefault = () => this;
                 return caseInsensitive(this);
               }
 

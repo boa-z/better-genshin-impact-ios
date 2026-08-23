@@ -538,6 +538,8 @@ fight.FinishDetectConfig.FastCheckEnabled = true;
 const domain = new AutoDomainParam(2, "combat.txt");
 domain.SetResinPriorityList("原粹树脂", "浓缩树脂");
 const leyline = new AutoLeyLineOutcropParam(3, "枫丹", "启示之花");
+leyline.FightConfig.Timeout = 188;
+leyline.ScanDropsAfterRewardEnabled = true;
 const stygian = new AutoStygianOnslaughtParam("route.json");
 stygian.SetCombatStrategyPath("fight.txt");
 const boss = new AutoBossParam();
@@ -575,6 +577,8 @@ return JSON.stringify({
   rounds: domain.DomainRoundNum,
   resin: domain.resinPriorityList,
   leylineCount: leyline.Count,
+  leylineTimeout: leyline.fightConfig.timeout,
+  leylineScan: leyline.scanDropsAfterRewardEnabled,
   route: stygian.routePath,
   combat: stygian.CombatScriptBagPath,
   boss: boss.bossName,
@@ -611,6 +615,8 @@ return JSON.stringify({
     assert (result["leylineCount"], result["route"], result["combat"]) == (
         3, "route.json", "fight.txt"
     )
+    assert result["leylineTimeout"] == 188
+    assert result["leylineScan"] is True
     assert (result["boss"], result["bossRuns"]) == ("急冻树", 4)
     assert result["cancelled"] is True
     assert result["linkedCancelled"] is True
@@ -958,6 +964,106 @@ def test_auto_boss_official_route_inventory_is_complete():
     assert not [path.name for path in required if not path.is_file()]
 
 
+def test_auto_leyline_graph_and_official_routes_are_complete():
+    from bgi_touch.tasks.auto_leyline import LeyLineRouteGraph
+    from bgi_touch.pathing.model import PathingTask
+
+    graph = LeyLineRouteGraph.load()
+    blossoms = [node for node in graph.nodes.values() if node.kind == "blossom"]
+    assert len(graph.nodes) == 382
+    assert len(graph.edges) == 378
+    assert len(blossoms) == 269
+    missing = []
+    for blossom in blossoms:
+        nearest = graph.nearest_blossom(
+            blossom.x, blossom.y, country=blossom.region[:2], threshold=1,
+        )
+        assert nearest is not None
+        assert (nearest.x, nearest.y) == (blossom.x, blossom.y)
+        plan = graph.shortest_plan(blossom)
+        assert plan is not None and plan.routes
+        for route in plan.routes:
+            if not graph.resolve_route(route).is_file():
+                missing.append(route)
+        target = graph.resolve_route(graph.target_route(plan.routes[-1]))
+        if not target.is_file():
+            missing.append(str(target))
+    assert missing == []
+    # Parse every bundled base/target/rerun file, including upstream BOM files.
+    route_root = graph.resolve_route("")
+    route_files = list(route_root.rglob("*.json"))
+    assert len(route_files) == 632
+    assert sum(len(PathingTask.load(path).positions) for path in route_files) == 1711
+
+
+def test_auto_leyline_resin_count_and_reward_priority_match_upstream():
+    from bgi_touch.tasks.auto_leyline import (
+        LeyLineResinCounts,
+        calculate_leyline_run_count,
+        choose_leyline_reward_resins,
+    )
+
+    count = calculate_leyline_run_count(
+        LeyLineResinCounts(original=100, condensed=3, transient=2, fragile=4),
+        use_transient=True, use_fragile=False,
+    )
+    assert (count.total, count.original, count.condensed, count.transient, count.fragile) == (
+        8, 3, 3, 2, 0,
+    )
+    assert choose_leyline_reward_resins(
+        ["浓缩树脂", "原粹树脂 20"], use_transient=False, use_fragile=False,
+    ) == ["浓缩树脂", "原粹树脂"]
+    assert choose_leyline_reward_resins(
+        ["双倍产出", "原粹树脂 20"], use_transient=True, use_fragile=True,
+    ) == ["原粹树脂"]
+    assert choose_leyline_reward_resins(
+        ["补充原粹树脂", "须臾树脂", "脆弱树脂"],
+        use_transient=True, use_fragile=False,
+    ) == ["须臾树脂"]
+
+
+def test_auto_leyline_dispatcher_maps_current_parameters():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_leyline.AutoLeyLineOutcropTask") as task:
+        task.return_value.run.return_value = True
+        result = TaskDispatcher(object()).run_auto_leyline_task({
+            "count": 6,
+            "country": "纳塔",
+            "leyLineOutcropType": "藏金之花",
+            "openModeCountMin": True,
+            "isResinExhaustionMode": True,
+            "useAdventurerHandbook": True,
+            "friendshipTeam": "好感队",
+            "team": "战斗队",
+            "useFragileResin": True,
+            "useTransientResin": True,
+            "scanDropsAfterRewardEnabled": True,
+            "scanDropsAfterRewardSeconds": 25,
+            "fightConfig": {"timeout": 188},
+            "oneDragonMode": True,
+        })
+
+    assert result is True
+    kwargs = task.call_args.kwargs
+    assert kwargs["count"] == 6
+    assert kwargs["country"] == "纳塔"
+    assert kwargs["ley_line_type"] == "藏金之花"
+    assert kwargs["open_mode_count_min"] is True
+    assert kwargs["resin_exhaustion_mode"] is True
+    assert kwargs["use_adventurer_handbook"] is True
+    assert kwargs["friendship_team"] == "好感队"
+    assert kwargs["team"] == "战斗队"
+    assert kwargs["use_fragile_resin"] is True
+    assert kwargs["use_transient_resin"] is True
+    assert kwargs["scan_drops_after_reward_enabled"] is True
+    assert kwargs["scan_drops_after_reward_seconds"] == 25
+    assert kwargs["timeout_s"] == 188
+    assert kwargs["one_dragon_mode"] is True
+
+
 def test_one_dragon_parser_supports_ids_duplicates_and_next_task():
     from bgi_touch.tasks.one_dragon import parse_one_dragon_items
 
@@ -1056,6 +1162,46 @@ def test_one_dragon_maps_current_auto_boss_config():
         "returnToStatueAfterEachRound": True,
         "rewardRecognitionEnabled": True,
         "timeout": 360,
+    }
+
+
+def test_one_dragon_maps_daily_leyline_config():
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.one_dragon import OneDragonFlowTask, OneDragonItem
+
+    day = (datetime.now().astimezone() - timedelta(hours=4)).strftime("%A")
+
+    class Dispatcher:
+        def run_auto_leyline_task(self, config):
+            self.config = config
+            return True
+
+    dispatcher = Dispatcher()
+    task = OneDragonFlowTask(
+        SimpleNamespace(),
+        {
+            f"leyLineRun{day}": True,
+            f"leyLine{day}Type": "藏金之花",
+            f"leyLine{day}Country": "纳塔",
+            "leyLineRunCount": 5,
+            "leyLineResinExhaustionMode": True,
+            "leyLineOpenModeCountMin": True,
+            "leyLineOneDragonMode": True,
+        },
+        dispatcher,
+        log=lambda _: None,
+    )
+
+    assert task._run_builtin(OneDragonItem("leyline", "自动地脉花", True)) is True
+    assert dispatcher.config == {
+        "count": 5,
+        "leyLineOutcropType": "藏金之花",
+        "country": "纳塔",
+        "isResinExhaustionMode": True,
+        "openModeCountMin": True,
+        "oneDragonMode": True,
     }
 
 

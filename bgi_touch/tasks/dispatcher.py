@@ -468,18 +468,54 @@ class TaskDispatcher:
         ).run(cancelled=self._callback(ct))
 
     def run_auto_leyline_task(self, param: Any = None, ct: Any = None) -> bool:
-        from .auto_encounter import AutoLeyLineTask
+        from .auto_leyline import AutoLeyLineOutcropTask
 
         route = self._resolve_route(param, kind="leyline")
-        strategy = _value(param, "combatStrategyPath", None)
-        timeout = _value(param, "timeout", 240)
-        return AutoLeyLineTask(
+        fight_config = _value(param, "fightConfig", {}) or {}
+        strategy = _value(
+            param, "combatStrategyPath",
+            _value(fight_config, "combatStrategyPath", None),
+        )
+        if not strategy:
+            strategy_name = str(_value(fight_config, "strategyName", "") or "")
+            if strategy_name:
+                root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
+                for candidate in (
+                    Path(strategy_name).expanduser(), root / strategy_name,
+                    root / f"{strategy_name}.txt",
+                ):
+                    if candidate.is_file():
+                        strategy = str(candidate)
+                        break
+        timeout = _value(
+            fight_config, "timeout", _value(param, "timeout", 120)
+        )
+        return AutoLeyLineOutcropTask(
             self.ctx,
             route_path=route,
-            rounds=int(_value(param, "count", _value(param, "rounds", 1)) or 1),
+            count=int(_value(param, "count", _value(param, "rounds", 1)) or 1),
+            country=str(_value(param, "country", "蒙德") or "蒙德"),
+            ley_line_type=str(
+                _value(param, "leyLineOutcropType", _value(param, "type", "启示之花"))
+                or "启示之花"
+            ),
+            open_mode_count_min=bool(_value(param, "openModeCountMin", False)),
+            resin_exhaustion_mode=bool(_value(param, "isResinExhaustionMode", False)),
+            use_adventurer_handbook=bool(_value(param, "useAdventurerHandbook", False)),
+            friendship_team=str(_value(param, "friendshipTeam", "") or ""),
+            team=str(_value(param, "team", "") or ""),
+            use_fragile_resin=bool(_value(param, "useFragileResin", False)),
+            use_transient_resin=bool(_value(param, "useTransientResin", False)),
+            scan_drops_after_reward_enabled=bool(
+                _value(param, "scanDropsAfterRewardEnabled", False)
+            ),
+            scan_drops_after_reward_seconds=int(
+                _value(param, "scanDropsAfterRewardSeconds", 12) or 0
+            ),
             combat_strategy_path=str(strategy) if strategy else None,
             timeout_s=float(timeout),
             party_slots=self.party_slots,
+            one_dragon_mode=bool(_value(param, "oneDragonMode", False)),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

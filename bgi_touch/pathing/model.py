@@ -104,7 +104,9 @@ class PathingTask:
 
     @classmethod
     def load(cls, path: str | Path) -> "PathingTask":
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        # BetterGI's bundled route set contains both plain UTF-8 and UTF-8 BOM
+        # files. ``utf-8-sig`` accepts both without leaking U+FEFF into JSON.
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         return cls.parse(raw)
 
     @classmethod
