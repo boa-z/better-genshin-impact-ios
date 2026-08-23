@@ -77,6 +77,7 @@ bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停
 bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
 bgi-touch task CharacterDevelopment --config '{"characterName":"钟离","categories":"属性;武器;天赋"}'
 bgi-touch task AutoDomain --config '{"domainRoundNum":2,"rewardRecognitionEnabled":true}'
+bgi-touch task OneDragon --config-file '/path/to/User/OneDragon/日常.json'
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
@@ -120,6 +121,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |
+| 一条龙 OneDragonFlowConfig | ⚠️ 顺序、重复任务 ID、NextTaskId、内置任务与安全完成动作已迁移，待真机回归 |
 
 ## 已知约束
 

@@ -353,6 +353,9 @@ class JsScriptRuntime:
             def runAutoDomainTask(self, param):
                 return task_dispatcher.run_auto_domain_task(param)
 
+            def runOneDragonTask(self, param=None, ct=None):
+                return task_dispatcher.run_one_dragon_task(param, ct)
+
             def runAutoFightTask(self, param):
                 return task_dispatcher.run_auto_fight_task(param)
             def runAutoCookTask(self, param=None): return task_dispatcher.run_auto_cook_task(param)

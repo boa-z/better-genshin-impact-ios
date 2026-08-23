@@ -81,7 +81,7 @@ class TaskDispatcher:
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
-        "CharacterDevelopment",
+        "CharacterDevelopment", "OneDragon",
     })
 
     def __init__(
@@ -154,6 +154,8 @@ class TaskDispatcher:
             return self.run_inventory_count_comparison_task(cfg, ct)
         if name in ("CharacterDevelopment", "CharacterDevelopmentTask"):
             return self.run_character_development_task(cfg, ct)
+        if name in ("OneDragon", "OneDragonFlow"):
+            return self.run_one_dragon_task(cfg, ct)
         raise NotImplementedError(
             f"SoloTask {name} 尚未移植；当前已支持 {', '.join(sorted(self.IMPLEMENTED))}"
         )
@@ -168,6 +170,25 @@ class TaskDispatcher:
             combat_strategy_path=strategy,
             timeout_s=timeout_s,
             party_slots=self.party_slots,
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_one_dragon_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
+        from .one_dragon import OneDragonFlowTask
+
+        source = _value(param, "configFile", _value(param, "path", None))
+        if source is None:
+            nested = _value(param, "flowConfig", _value(param, "oneDragonConfig", None))
+            source = nested if nested is not None else param
+        config = OneDragonFlowTask.load_config(source)
+        return OneDragonFlowTask(
+            self.ctx,
+            config,
+            self,
+            continue_on_error=bool(_value(param, "continueOnError", True)),
+            close_game_on_completion=bool(
+                _value(param, "closeGameOnCompletion", True)
+            ),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

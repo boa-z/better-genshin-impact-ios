@@ -386,6 +386,7 @@ def api_scripts():
         "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment",
+        "OneDragon",
     ):
         out["task"].append({"path": name, "name": name})
     js_dir = SCRIPTS_DIR / "js"

@@ -603,6 +603,61 @@ def test_auto_domain_dispatcher_maps_reward_recognition_options():
     assert task.call_args.kwargs["reward_max_pages"] == 4
 
 
+def test_one_dragon_parser_supports_ids_duplicates_and_next_task():
+    from bgi_touch.tasks.one_dragon import parse_one_dragon_items
+
+    items = parse_one_dragon_items({
+        "TaskEnabledList": {"a": True, "b": False, "c": True},
+        "TaskOrder": ["c", "a", "b"],
+        "TaskDefinitions": {"a": "自动秘境", "b": "领取邮件", "c": "自动秘境"},
+        "NextTaskId": "a",
+    })
+    assert [(item.id, item.name, item.enabled) for item in items] == [
+        ("a", "自动秘境", True),
+        ("b", "领取邮件", False),
+    ]
+
+
+def test_one_dragon_parser_supports_legacy_name_keys():
+    from bgi_touch.tasks.one_dragon import parse_one_dragon_items
+
+    items = parse_one_dragon_items({
+        "taskEnabledList": {"领取邮件": True, "自动秘境": False},
+    })
+    assert [item.name for item in items] == ["领取邮件", "自动秘境"]
+
+
+def test_one_dragon_runner_dispatches_custom_task_configs_and_continues():
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.one_dragon import OneDragonFlowTask
+
+    calls = []
+
+    class Dispatcher:
+        IMPLEMENTED = {"AutoCook", "AutoFishing", "OneDragon"}
+
+        def run_task(self, task):
+            calls.append(task)
+            return task["name"] != "AutoCook"
+
+    ctx = SimpleNamespace(sleep=lambda _ms: None)
+    config = {
+        "name": "离线一条龙",
+        "taskEnabledList": {"x": True, "y": True},
+        "taskOrder": ["x", "y"],
+        "taskDefinitions": {"x": "自定义烹饪", "y": "自定义钓鱼"},
+        "taskConfigs": {
+            "x": {"taskName": "AutoCook", "timeoutSeconds": 10},
+            "y": {"taskName": "AutoFishing", "targetCatches": 2},
+        },
+    }
+    result = OneDragonFlowTask(ctx, config, Dispatcher(), log=lambda _: None).run()
+    assert [call["name"] for call in calls] == ["AutoCook", "AutoFishing"]
+    assert result["completed"] == ["y"]
+    assert "x" in result["failed"]
+
+
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
 
