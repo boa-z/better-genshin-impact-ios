@@ -23,8 +23,11 @@ if TYPE_CHECKING:
 class Mat:
     """OpenCvSharp Mat 的替身：BGR ndarray + 惰性灰度缓存。"""
 
-    def __init__(self, bgr: np.ndarray):
-        self.bgr = bgr
+    def __init__(self, bgr: np.ndarray | None = None):
+        self.bgr = (
+            bgr if bgr is not None
+            else np.empty((0, 0, 3), dtype=np.uint8)
+        )
         self._gray: np.ndarray | None = None
 
     @classmethod
@@ -52,6 +55,12 @@ class Mat:
 
     def empty(self) -> bool:
         return self.bgr.size == 0
+
+    def dispose(self) -> None:
+        self.bgr = np.empty((0, 0, 3), dtype=np.uint8)
+        self._gray = None
+
+    Dispose = dispose
 
 
 class Point2f:
@@ -139,6 +148,11 @@ class RecognitionObject:
 
     initTemplate = init_template
 
+    def dispose(self) -> None:
+        """OpenCV resources are Python-owned; retain BetterGI lifecycle API."""
+
+    Dispose = dispose
+
 
 class Region:
     """已识别（或派生）的矩形。对脚本暴露 ref 坐标，内部持有设备像素矩形。"""
@@ -189,17 +203,27 @@ class Region:
     def is_exist(self) -> bool:
         return not self._empty
 
-    def click(self) -> None:
+    def click(self) -> "Region":
         if self._empty:
             raise RuntimeError("对空 Region 调用 click()")
         self.ctx.device.tap(self.dx + self.dw / 2, self.dy + self.dh / 2,
                             image_width=self.ctx.transform.device_width,
                             image_height=self.ctx.transform.device_height)
+        return self
 
-    def double_click(self) -> None:
+    def double_click(self) -> "Region":
         self.click()
         self.ctx.sleep(120)
         self.click()
+        return self
+
+    def click_to(self, x: float, y: float, w: float = 0, h: float = 0) -> None:
+        ref_x = self.x + float(x) + float(w) / 2
+        ref_y = self.y + float(y) + float(h) / 2
+        dx, dy = self.ctx.transform.to_device(ref_x, ref_y)
+        self.ctx.device.tap(dx, dy,
+                            image_width=self.ctx.transform.device_width,
+                            image_height=self.ctx.transform.device_height)
 
     def move(self) -> None:
         """原版移动鼠标指针；触控端无指针，空操作。"""
@@ -207,9 +231,21 @@ class Region:
     def background_click(self) -> None:
         self.click()
 
-    def derive(self, x: float, y: float, w: float, h: float) -> "Region":
+    def derive(self, x: float, y: float, w: float = 0, h: float = 0) -> "Region":
         s = self.ctx.transform.scale
         return Region(self.ctx, self.dx + x * s, self.dy + y * s, w * s, h * s, empty=self._empty)
+
+    def draw_self(self, name: str = "rect", pen=None) -> None:
+        """Drawing is optional on the touch console; preserve script flow."""
+
+    def draw_rect(self, *args) -> None:
+        """Compatibility no-op until a script requests persistent debug drawing."""
+
+    def draw_line(self, *args) -> None:
+        """Compatibility no-op until a script requests persistent debug drawing."""
+
+    def dispose(self) -> None:
+        """Region arrays are garbage-collected; expose IDisposable semantics."""
 
     @classmethod
     def empty_region(cls, ctx: "GameContext") -> "Region":
@@ -220,12 +256,21 @@ class Region:
     isExist = is_exist
     IsExist = is_exist
     Click = click
+    clickTo = click_to
+    ClickTo = click_to
     doubleClick = double_click
     DoubleClick = double_click
     Move = move
     backgroundClick = background_click
     BackgroundClick = background_click
     Derive = derive
+    drawSelf = draw_self
+    DrawSelf = draw_self
+    drawRect = draw_rect
+    DrawRect = draw_rect
+    drawLine = draw_line
+    DrawLine = draw_line
+    Dispose = dispose
     X = property(lambda self: self.x, lambda self, value: setattr(self, "x", value))
     Y = property(lambda self: self.y, lambda self, value: setattr(self, "y", value))
     Width = property(
@@ -237,6 +282,14 @@ class Region:
         lambda self, value: setattr(self, "height", value),
     )
     Text = property(lambda self: self.text, lambda self, value: setattr(self, "text", str(value)))
+    top = property(lambda self: self.y, lambda self, value: setattr(self, "y", value))
+    Top = top
+    bottom = property(lambda self: self.y + self.height)
+    Bottom = bottom
+    left = property(lambda self: self.x, lambda self, value: setattr(self, "x", value))
+    Left = left
+    right = property(lambda self: self.x + self.width)
+    Right = right
     matchScore = property(
         lambda self: self.score,
         lambda self, value: setattr(self, "score", float(value)),

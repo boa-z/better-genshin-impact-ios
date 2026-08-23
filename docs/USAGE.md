@@ -254,6 +254,10 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 屏幕预览区的按下/释放/移动/滚轮事件会进入当前 JS 脚本。回调在脚本线程的 `sleep`
 检查点执行，不会跨线程访问 PythonMonkey；按住 Alt 等修饰键点击预览只触发脚本钩子，
 不会同时点按设备，因而可兼容社区 OCR 选区与快捷键脚本。
+`getVersion()` 返回当前对齐的 BetterGI 兼容版本；`RecognitionObject`、`Mat`、
+`Point2f`、`Region`、`ImageRegion` 与 `GameCaptureRegion` 均支持 HostType 构造语义。
+`GameCaptureRegion.gameRegion1080PPosClick()` 会直接使用 1920×1080 参考坐标触控，
+背包任务相关的 `GridScreenName` 和 `ItemIconRecognitionMode` 枚举也已暴露。
 
 ### 5.4 执行战斗策略 / 键鼠宏 / pathing
 

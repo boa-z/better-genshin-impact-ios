@@ -43,9 +43,30 @@ class ScreenTransform:
                 x = self.device_width / 2 + (ref_x - REF_WIDTH / 2) * s
         return x, y
 
-    def to_ref(self, dev_x: float, dev_y: float) -> tuple[float, float]:
+    def resolve_device_anchor(self, dev_x: float, anchor: str = "auto") -> str:
+        if anchor != "auto":
+            return anchor
         s = self.scale
-        return (REF_WIDTH / 2 + (dev_x - self.device_width / 2) / s, dev_y / s)
+        edge = REF_WIDTH / 3 * s
+        extra = max(0.0, self.device_width - REF_WIDTH * s)
+        cutoff = edge + extra / 4
+        if dev_x < cutoff:
+            return "left"
+        if dev_x > self.device_width - cutoff:
+            return "right"
+        return "center"
+
+    def to_ref(self, dev_x: float, dev_y: float,
+               anchor: str = "auto") -> tuple[float, float]:
+        s = self.scale
+        match self.resolve_device_anchor(dev_x, anchor):
+            case "left":
+                x = dev_x / s
+            case "right":
+                x = REF_WIDTH - (self.device_width - dev_x) / s
+            case _:
+                x = REF_WIDTH / 2 + (dev_x - self.device_width / 2) / s
+        return x, dev_y / s
 
     def scale_len(self, ref_len: float) -> float:
         return ref_len * self.scale

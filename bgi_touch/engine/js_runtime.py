@@ -57,6 +57,7 @@ CASE_PROXY = """
 """
 
 _SCRIPT_ERROR_MARKER = "__BGI_SCRIPT_ERROR__"
+BETTERGI_COMPAT_VERSION = "0.63.2-alpha.4"
 
 
 def _repair_js_text(text: str) -> str:
@@ -236,7 +237,7 @@ class JsScriptRuntime:
 
         # 基础
         expose("sleep", self._sleep)
-        expose("getVersion", lambda: "0.1.0-touch")
+        expose("getVersion", lambda: BETTERGI_COMPAT_VERSION)
         expose("captureGameRegion", self._capture)
         expose("getAvatars", lambda: list(self.party_slots.keys()))
         expose("inputText", lambda text: ctx.device.paste_text(str(text)))
@@ -422,25 +423,62 @@ class JsScriptRuntime:
 
         expose("ServerTime", wrap(_ServerTime()), proxy=False)
 
-        # 识别类型
-        class _RO:
-            @staticmethod
-            def templateMatch(mat, x=None, y=None, w=None, h=None):
-                m = mat if isinstance(mat, Mat) else getattr(mat, "__wrapped__", mat)
-                return wrap(RecognitionObject.template_match(m, x, y, w, h))
-            TemplateMatch = templateMatch
-            @staticmethod
-            def ocr(x, y, w, h): return wrap(RecognitionObject.ocr(x, y, w, h))
-            Ocr = ocr
-            @staticmethod
-            def ocrMatch(x, y, w, h, *texts): return wrap(RecognitionObject.ocr_match(x, y, w, h, *[str(t) for t in texts]))
-            OcrMatch = ocrMatch
-            @property
-            def ocrThis(self): return wrap(RecognitionObject.ocr_this())
-            @property
-            def OcrThis(self): return wrap(RecognitionObject.ocr_this())
-        expose("RecognitionObject", wrap(_RO()), proxy=False)
-        expose("Point2f", Point2f, proxy=False)
+        # 识别类型。ClearScript HostType 同时可 ``new`` 且有静态工厂；原生 JS
+        # 构造器保留这两个语义，再把实例交回大小写不敏感的 Python 宿主。
+        def _create_recognition_object():
+            return wrap(RecognitionObject())
+
+        def _template_match(mat, x=None, y=None, w=None, h=None):
+            value = getattr(mat, "__wrapped__", mat)
+            return wrap(RecognitionObject.template_match(value, x, y, w, h))
+
+        def _ocr(x, y, w, h):
+            return wrap(RecognitionObject.ocr(x, y, w, h))
+
+        def _ocr_match(x, y, w, h, *texts):
+            return wrap(RecognitionObject.ocr_match(
+                x, y, w, h, *[str(text) for text in texts]
+            ))
+
+        def _ocr_this():
+            return wrap(RecognitionObject.ocr_this())
+
+        recognition_object_type = pm.eval(r"""
+            (factory, templateMatch, ocr, ocrMatch, ocrThis) => {
+              function RecognitionObject() { return factory(); }
+              RecognitionObject.templateMatch = templateMatch;
+              RecognitionObject.TemplateMatch = templateMatch;
+              RecognitionObject.ocr = ocr;
+              RecognitionObject.Ocr = ocr;
+              RecognitionObject.ocrMatch = ocrMatch;
+              RecognitionObject.OcrMatch = ocrMatch;
+              Object.defineProperties(RecognitionObject, {
+                ocrThis: { get: ocrThis }, OcrThis: { get: ocrThis }
+              });
+              return RecognitionObject;
+            }
+        """)(_create_recognition_object, _template_match, _ocr, _ocr_match, _ocr_this)
+        g["RecognitionObject"] = recognition_object_type
+
+        g["Point2f"] = pm.eval(
+            "factory => function Point2f(x = 0, y = 0) { return factory(x, y); }"
+        )(lambda x=0, y=0: wrap(Point2f(float(x), float(y))))
+        g["Mat"] = pm.eval(
+            "factory => function Mat() { return factory(); }"
+        )(lambda: wrap(Mat()))
+
+        def _create_region(x=0, y=0, w=0, h=0, *_unused):
+            dx, dy = ctx.transform.to_device(float(x), float(y))
+            return wrap(Region(
+                ctx, dx, dy,
+                ctx.transform.scale_len(float(w)),
+                ctx.transform.scale_len(float(h)),
+            ))
+
+        g["Region"] = pm.eval(
+            "factory => function Region(x = 0, y = 0, w = 0, h = 0) { "
+            "return factory(x, y, w, h); }"
+        )(_create_region)
 
         def _create_image_region(mat, x=0, y=0):
             value = getattr(mat, "__wrapped__", mat)
@@ -456,6 +494,62 @@ class JsScriptRuntime:
             "factory => function ImageRegion(mat, x = 0, y = 0) { "
             "return factory(mat, x, y); }"
         )(_create_image_region)
+
+        def _game_region_click(position):
+            size = pm.eval("(w, h) => ({width:w,height:h,Width:w,Height:h})")(
+                ctx.transform.device_width, ctx.transform.device_height,
+            )
+            point = position(size, ctx.transform.scale)
+            ctx.device.tap(
+                float(point[0]), float(point[1]),
+                image_width=ctx.transform.device_width,
+                image_height=ctx.transform.device_height,
+            )
+
+        def _game_region_move_by(delta):
+            size = pm.eval("(w, h) => ({width:w,height:h,Width:w,Height:h})")(
+                ctx.transform.device_width, ctx.transform.device_height,
+            )
+            point = delta(size, ctx.transform.scale)
+            ctx.input.move_camera_by(
+                float(point[0]) / ctx.transform.scale,
+                float(point[1]) / ctx.transform.scale,
+            )
+
+        def _game_region_1080p_click(x, y):
+            ctx.input.click_ref(float(x), float(y))
+
+        game_capture_region_type = pm.eval(r"""
+            (factory, click, moveBy, click1080, move1080) => {
+              function GameCaptureRegion(mat, x = 0, y = 0) {
+                return factory(mat, x, y);
+              }
+              Object.assign(GameCaptureRegion, {
+                gameRegionClick: click, GameRegionClick: click,
+                gameRegionMove: move1080, GameRegionMove: move1080,
+                gameRegionMoveBy: moveBy, GameRegionMoveBy: moveBy,
+                gameRegion1080PPosClick: click1080, GameRegion1080PPosClick: click1080,
+                gameRegion1080PPosMove: move1080, GameRegion1080PPosMove: move1080
+              });
+              return GameCaptureRegion;
+            }
+        """)(
+            _create_image_region, _game_region_click, _game_region_move_by,
+            _game_region_1080p_click, lambda *_args: None,
+        )
+        g["GameCaptureRegion"] = game_capture_region_type
+
+        g["GridScreenName"] = pm.eval("Object.freeze({"
+            "Weapons:'Weapons',Artifacts:'Artifacts',"
+            "CharacterDevelopmentItems:'CharacterDevelopmentItems',Food:'Food',"
+            "Materials:'Materials',Gadget:'Gadget',Quest:'Quest',"
+            "PreciousItems:'PreciousItems',Furnishings:'Furnishings',"
+            "ArtifactSalvage:'ArtifactSalvage',Crafting:'Crafting',"
+            "PartySetupCharacters:'PartySetupCharacters',"
+            "ArtifactSetFilter:'ArtifactSetFilter'})")
+        g["ItemIconRecognitionMode"] = pm.eval(
+            "Object.freeze({GridIcon:'GridIcon',Item:'Item'})"
+        )
 
         from .bv import BvPage
 
