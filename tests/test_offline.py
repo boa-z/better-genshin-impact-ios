@@ -871,6 +871,93 @@ def test_auto_domain_dispatcher_maps_reward_recognition_options():
     assert task.call_args.kwargs["reward_max_pages"] == 4
 
 
+def test_auto_boss_resin_policy_matches_upstream_contract():
+    from bgi_touch.tasks.auto_encounter import (
+        BossRunPolicy,
+        OriginalResinInfo,
+        calculate_current_resin,
+        calculate_supplemental_resin_quantity,
+        parse_full_recovery_seconds,
+        parse_resin_limit,
+    )
+
+    fixed = BossRunPolicy(specify_run_count=True, run_count=3)
+    assert [fixed.should_continue(count) for count in range(5)] == [
+        True, True, True, False, False,
+    ]
+    assert BossRunPolicy().should_continue(999)
+    with pytest.raises(ValueError, match="必须大于"):
+        BossRunPolicy(specify_run_count=True, run_count=0)
+
+    assert parse_resin_limit(" 3０ / ２００ ") == 200
+    recovery = parse_full_recovery_seconds("全部恢复 22：40：01")
+    assert recovery == 22 * 3600 + 40 * 60 + 1
+    assert calculate_current_resin(200, recovery) == OriginalResinInfo(29, 200)
+    assert calculate_current_resin(200, parse_full_recovery_seconds("原粹树脂已完全恢复")) == OriginalResinInfo(200, 200)
+    assert calculate_supplemental_resin_quantity(20, 200) == 3
+    assert calculate_supplemental_resin_quantity(20, 200, available=2) == 2
+    assert calculate_supplemental_resin_quantity(0, 2000, available=99) == 20
+
+
+def test_auto_boss_dispatcher_maps_current_bettergi_parameters():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_encounter.AutoBossTask") as task:
+        task.return_value.run.return_value = {"摩拉": 6000}
+        result = TaskDispatcher(object()).run_auto_boss_task({
+            "bossName": "急冻树",
+            "specifyRunCount": True,
+            "runCount": 4,
+            "useTransientResin": True,
+            "useFragileResin": True,
+            "reviveRetryCount": 5,
+            "returnToStatueAfterEachRound": True,
+            "rewardRecognitionEnabled": True,
+            "rewardMaxPages": 4,
+            "teamName": "讨伐队",
+            "timeout": 321,
+        })
+
+    assert result == {"摩拉": 6000}
+    kwargs = task.call_args.kwargs
+    assert kwargs["route_path"] is None
+    assert kwargs["specify_run_count"] is True
+    assert kwargs["rounds"] == 4
+    assert kwargs["use_transient_resin"] is True
+    assert kwargs["use_fragile_resin"] is True
+    assert kwargs["revive_retry_count"] == 5
+    assert kwargs["return_to_statue_after_each_round"] is True
+    assert kwargs["reward_recognition_enabled"] is True
+    assert kwargs["reward_max_pages"] == 4
+    assert kwargs["team_name"] == "讨伐队"
+    assert kwargs["timeout_s"] == 321
+
+
+def test_auto_boss_official_route_inventory_is_complete():
+    from bgi_touch.tasks.auto_encounter import (
+        BOSS_ROUTE_ROOT,
+        NO_PATHING_SUPPORT_BOSSES,
+        SUPPORTED_BOSSES,
+        TALK_TO_START_BOSSES,
+    )
+
+    assert len(SUPPORTED_BOSSES) == 41
+    required = []
+    for boss_name in SUPPORTED_BOSSES:
+        if boss_name in NO_PATHING_SUPPORT_BOSSES:
+            required.extend((
+                BOSS_ROUTE_ROOT / f"{boss_name}强制传送.json",
+                BOSS_ROUTE_ROOT / f"{boss_name}键鼠前往.json",
+            ))
+        else:
+            required.append(BOSS_ROUTE_ROOT / f"{boss_name}前往.json")
+            if boss_name in TALK_TO_START_BOSSES:
+                required.append(BOSS_ROUTE_ROOT / f"{boss_name}战斗后快速前往.json")
+    assert not [path.name for path in required if not path.is_file()]
+
+
 def test_one_dragon_parser_supports_ids_duplicates_and_next_task():
     from bgi_touch.tasks.one_dragon import parse_one_dragon_items
 
@@ -924,6 +1011,52 @@ def test_one_dragon_runner_dispatches_custom_task_configs_and_continues():
     assert [call["name"] for call in calls] == ["AutoCook", "AutoFishing"]
     assert result["completed"] == ["y"]
     assert "x" in result["failed"]
+
+
+def test_one_dragon_maps_current_auto_boss_config():
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.one_dragon import OneDragonFlowTask, OneDragonItem
+
+    class Dispatcher:
+        def run_auto_boss_task(self, config):
+            self.config = config
+            return {"摩拉": 6000}
+
+    dispatcher = Dispatcher()
+    task = OneDragonFlowTask(
+        SimpleNamespace(),
+        {
+            "autoBossName": "急冻树",
+            "autoBossStrategyName": "讨伐策略",
+            "autoBossTeamName": "讨伐队",
+            "autoBossSpecifyRunCount": True,
+            "autoBossRunCount": 3,
+            "autoBossUseTransientResin": True,
+            "autoBossUseFragileResin": True,
+            "autoBossReviveRetryCount": 4,
+            "autoBossReturnToStatueAfterEachRound": True,
+            "autoBossRewardRecognitionEnabled": True,
+            "autoBossTimeout": 360,
+        },
+        dispatcher,
+        log=lambda _: None,
+    )
+
+    assert task._run_builtin(OneDragonItem("boss", "自动首领讨伐", True)) == {"摩拉": 6000}
+    assert dispatcher.config == {
+        "bossName": "急冻树",
+        "strategyName": "讨伐策略",
+        "teamName": "讨伐队",
+        "specifyRunCount": True,
+        "runCount": 3,
+        "useTransientResin": True,
+        "useFragileResin": True,
+        "reviveRetryCount": 4,
+        "returnToStatueAfterEachRound": True,
+        "rewardRecognitionEnabled": True,
+        "timeout": 360,
+    }
 
 
 def test_tcg_strategy_parser_matches_bettergi_format():

@@ -6,8 +6,8 @@
 - `Genshin-Impact-fixed-16by9` profile 的原始 KeyboardEvent.code 映射，以及
   `config/controls/genshin-native-ui.json` 的小游戏键位覆盖。
 - BetterGI 兼容 JS 运行时、统一 `TaskDispatcher`、战斗 DSL、宏和 WebUI/CLI 任务入口。
-- AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）和
--  AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
+- AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）、
+  AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
 - AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught 和 AutoGeniusInvokation 的
   路线/策略驱动迁移，以及 `dispatcher.runTask` / `runAuto*Task` 入口兼容。
 - QuickSereniteaPot、QuickClaimReward、UseRedemptionCode 和邮件奖励领取的触控流程；
@@ -30,6 +30,8 @@
   file 文本回调、图片缩放/写入等 bettergi.d.ts 宿主契约。
 - QuickBuy 的普通商店与尘歌壶商店数量滑块、购买确认分支；货币模板由资产下载器
   固定版本获取，缺少模板时要求显式指定商店类型以避免误购。
+- AutoBoss 的 41 个官方首领路线分型、树脂耗尽/指定次数策略、须臾与脆弱树脂补充、
+  征讨之花模板导航、领奖结果汇总、死亡重试、回神像和战后二次定位流程。
 
 ## 已完成 — 地图追踪离线核心
 
@@ -73,8 +75,8 @@ HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest �
 AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批迁移重点是 FarmingPlan 等尚未接入统一调度器的页面任务，以及
-AutoBoss/地脉/幽境的内置导航和树脂分支；QuickForge 上游当前仍为空类。需要继续移植专用识别器，
+下一批迁移重点是 FarmingPlan 等尚未接入统一调度器的页面任务，以及地脉/幽境的
+内置导航和树脂分支；QuickForge 上游当前仍为空类。需要继续移植专用识别器，
 不能只用通用 OCR 点击流代替。
 
 ## 工程

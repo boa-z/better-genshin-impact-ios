@@ -419,18 +419,48 @@ class TaskDispatcher:
                 return str(matches[0])
         return None
 
-    def run_auto_boss_task(self, param: Any = None, ct: Any = None) -> bool:
+    def run_auto_boss_task(self, param: Any = None, ct: Any = None) -> dict[str, int]:
         from .auto_encounter import AutoBossTask
 
         boss_name = str(_value(param, "bossName", "") or "")
-        route = self._resolve_route(param, kind="boss", name=boss_name)
+        explicit_route = _value(param, "routePath", _value(param, "pathingFile", None))
+        route = (
+            self._resolve_route(
+                {"routePath": explicit_route}, kind="boss", name=boss_name
+            )
+            if explicit_route else None
+        )
         strategy = _value(param, "combatStrategyPath", None)
+        if not strategy:
+            strategy_name = str(_value(param, "strategyName", "") or "")
+            if strategy_name and strategy_name != "根据队伍自动选择":
+                root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
+                for candidate in (
+                    Path(strategy_name).expanduser(),
+                    root / strategy_name,
+                    root / f"{strategy_name}.txt",
+                ):
+                    if candidate.is_file():
+                        strategy = str(candidate)
+                        break
         timeout = _value(param, "timeout", 240)
         return AutoBossTask(
             self.ctx,
             boss_name=boss_name,
             route_path=route,
+            specify_run_count=bool(_value(param, "specifyRunCount", False)),
             rounds=int(_value(param, "runCount", _value(param, "rounds", 1)) or 1),
+            use_transient_resin=bool(_value(param, "useTransientResin", False)),
+            use_fragile_resin=bool(_value(param, "useFragileResin", False)),
+            revive_retry_count=int(_value(param, "reviveRetryCount", 3) or 0),
+            return_to_statue_after_each_round=bool(
+                _value(param, "returnToStatueAfterEachRound", False)
+            ),
+            reward_recognition_enabled=bool(
+                _value(param, "rewardRecognitionEnabled", False)
+            ),
+            reward_max_pages=int(_value(param, "rewardMaxPages", 3) or 3),
+            team_name=str(_value(param, "teamName", "") or ""),
             combat_strategy_path=str(strategy) if strategy else None,
             timeout_s=float(timeout),
             party_slots=self.party_slots,

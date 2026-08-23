@@ -111,7 +111,31 @@ class OneDragonFlowTask:
             return self.dispatcher.run_auto_domain_task(task_config)
         if item.name == "自动首领讨伐":
             task_config.setdefault("bossName", _get(self.config, "autoBossName", ""))
+            task_config.setdefault(
+                "strategyName", _get(self.config, "autoBossStrategyName", "根据队伍自动选择")
+            )
+            task_config.setdefault("teamName", _get(self.config, "autoBossTeamName", ""))
+            task_config.setdefault(
+                "specifyRunCount", _get(self.config, "autoBossSpecifyRunCount", False)
+            )
             task_config.setdefault("runCount", _get(self.config, "autoBossRunCount", 1))
+            task_config.setdefault(
+                "useTransientResin", _get(self.config, "autoBossUseTransientResin", False)
+            )
+            task_config.setdefault(
+                "useFragileResin", _get(self.config, "autoBossUseFragileResin", False)
+            )
+            task_config.setdefault(
+                "reviveRetryCount", _get(self.config, "autoBossReviveRetryCount", 3)
+            )
+            task_config.setdefault(
+                "returnToStatueAfterEachRound",
+                _get(self.config, "autoBossReturnToStatueAfterEachRound", False),
+            )
+            task_config.setdefault(
+                "rewardRecognitionEnabled",
+                _get(self.config, "autoBossRewardRecognitionEnabled", False),
+            )
             task_config.setdefault("timeout", _get(self.config, "autoBossTimeout", 240))
             return self.dispatcher.run_auto_boss_task(task_config)
         if item.name == "自动幽境危战":

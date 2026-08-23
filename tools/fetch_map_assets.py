@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""下载 BetterGI 官方地图、模型与七圣召唤识别资产。
+"""下载 BetterGI 官方地图、模型与任务识别资产。
 
-用法：.venv/bin/python tools/fetch_map_assets.py [--models] [--tcg]
+用法：.venv/bin/python tools/fetch_map_assets.py [--models] [--tcg] [--auto-boss]
 资产较大（~180MB 下载，解出 ~120MB），已在 .gitignore 中排除。
 """
 
@@ -56,6 +56,15 @@ TCG_EXTRA = {
 QUICK_BUY_SOURCE = (
     "BetterGenshinImpact/GameTask/QuickBuy/Assets/1920x1080/SereniteaPotCoin.png"
 )
+AUTO_BOSS_ASSET_ROOT = "BetterGenshinImpact/GameTask/AutoBoss/Assets/1920x1080"
+AUTO_BOSS_WANTED = [
+    "original_resin_top_icon.png",
+    "box.png",
+    "open_resin_supplement_pane_button.png",
+    "transient_resin_in_supplement_pane.png",
+    "fragile_resin_in_supplement_pane.png",
+    "increase_resin_usage_quantity_button.png",
+]
 
 
 def fetch_tcg_assets(ref: str) -> None:
@@ -94,6 +103,24 @@ def fetch_quick_buy_asset(ref: str) -> None:
     print(f"快速购买资产完成：{destination.parent}")
 
 
+def fetch_auto_boss_assets(ref: str) -> None:
+    destination = PROJECT_ROOT / "assets" / "autoboss"
+    missing = [name for name in AUTO_BOSS_WANTED if not (destination / name).is_file()]
+    if not missing:
+        print(f"自动首领资产已就绪：{destination}")
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in missing:
+        out = destination / name
+        source = f"{AUTO_BOSS_ASSET_ROOT}/{name}"
+        url = f"{TCG_REPOSITORY}/{quote(ref, safe='')}/{quote(source, safe='/')}"
+        partial = out.with_suffix(out.suffix + ".part")
+        urllib.request.urlretrieve(url, partial)
+        partial.replace(out)
+        print(f"下载 AutoBoss/{name}")
+    print(f"自动首领资产完成：{destination}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.0.19")
@@ -107,6 +134,7 @@ def main() -> None:
         help="BetterGI Git ref（用于七圣召唤和快捷任务资产）",
     )
     ap.add_argument("--quick-buy", action="store_true", help="同时下载快速购买识别模板")
+    ap.add_argument("--auto-boss", action="store_true", help="同时下载自动首领识别模板")
     args = ap.parse_args()
 
     DEST.mkdir(parents=True, exist_ok=True)
@@ -168,6 +196,8 @@ def main() -> None:
         fetch_tcg_assets(args.bettergi_ref)
     if args.quick_buy:
         fetch_quick_buy_asset(args.bettergi_ref)
+    if args.auto_boss:
+        fetch_auto_boss_assets(args.bettergi_ref)
 
 
 if __name__ == "__main__":
