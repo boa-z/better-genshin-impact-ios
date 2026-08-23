@@ -321,6 +321,10 @@ bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 也接受对应中文名称。执行器会按路线的 `map_name` 自动切换区域、坐标系和多楼层
 SIFT 特征库；跨地图路线不需要手工重启任务。
 
+DeviceHub Wi-Fi HID 偶发失效时，大地图按键或连续拖动会自动重建设备通道一次；
+建议长路线仍使用 USB。若游戏版本新增区域早于 `BetterGI.Assets.Map` 更新，该区域会
+明确报告 SIFT 不匹配，不会回退成其他地图的退化匹配结果。
+
 路线中的 `farming_info` 会按 BetterGI 语义写入每日锄地统计，日志位于
 `log/FarmingPlan/YYYYMMDD.json`，并以服务器时间凌晨 4 点切日。编辑
 `config/farming.json` 并设置 `enabled=true` 后，执行器会在路线启动前检查每日

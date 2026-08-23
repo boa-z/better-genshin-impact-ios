@@ -26,6 +26,8 @@ from .feature_store import SiftFeatureStore
 from .map_locator import ASSETS, MapConfig, get_map_definition, resolve_map_name
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
+MIN_VIEW_PX_PER_FEATURE = 0.25
+MAX_VIEW_PX_PER_FEATURE = 20.0
 
 
 class BigMapLocator:
@@ -81,7 +83,13 @@ class BigMapLocator:
         for store in self.stores:
             r = store.locate(desc, pts, center)
             if r is not None and r.scale > 1e-6:
-                return r.x, r.y, 1.0 / (resize * r.scale)
+                px_per_feature = 1.0 / (resize * r.scale)
+                # Degenerate affine fits can satisfy the inlier threshold on
+                # unrelated maps while collapsing almost every query point to
+                # one train point. Real map zoom levels stay within this very
+                # generous screen-pixels / feature-pixel range.
+                if MIN_VIEW_PX_PER_FEATURE <= px_per_feature <= MAX_VIEW_PX_PER_FEATURE:
+                    return r.x, r.y, px_per_feature
         return None
 
 
@@ -101,7 +109,10 @@ class TpTask:
         )
         self._go_teleport.threshold = 0.7
         self._map_close = RecognitionObject.template_match(
-            Mat.from_file(str(TEMPLATES / "MapCloseButton.png")), 0, 0, 180, 140
+            # iPhone safe areas move the button farther inward than the PC
+            # ``cw - 107*s`` ROI. Keep the top-right search right-anchored but
+            # wide enough for 16:9 and 19.5:9 layouts.
+            Mat.from_file(str(TEMPLATES / "MapCloseButton.png")), 1600, 0, 320, 140
         )
         self._map_close.threshold = 0.65
 
@@ -120,8 +131,23 @@ class TpTask:
         finally:
             loop.resume(state)
 
+    def _recover_device_channel(self, reason: str) -> bool:
+        """Rebuild a stale Wi-Fi HID channel once without losing map state."""
+        self.log(f"[tp] {reason}，重建设备输入通道后重试")
+        try:
+            self.ctx.device.reconnect_device()
+            self.ctx.sleep(2000)
+            refresh = getattr(self.ctx, "refresh_orientation", None)
+            if callable(refresh):
+                refresh()
+            return True
+        except Exception as error:
+            self.log(f"[tp] 设备输入通道重建失败：{error}")
+            return False
+
     def open_map(self) -> bool:
-        for _ in range(3):
+        recovered = False
+        for attempt in range(3):
             frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
                 return True
@@ -141,6 +167,8 @@ class TpTask:
                 return True
             if self._is_map_ui() and self._switch_area():
                 return self._wait_for_target_map()
+            if attempt == 0 and not recovered:
+                recovered = self._recover_device_channel("地图按键未生效")
         return self.big.locate_view(self.ctx.capture_bgr()) is not None
 
     def _is_map_ui(self) -> bool:
@@ -239,6 +267,9 @@ class TpTask:
         deadline = time.monotonic() + timeout_s
         t = self.ctx.transform
         tol = 0.05 * t.device_width
+        last_view: tuple[float, float] | None = None
+        stagnant_iterations = 0
+        recovered = False
         for it in range(14):
             if time.monotonic() > deadline:
                 break
@@ -264,6 +295,17 @@ class TpTask:
             self.log(f"[map] 迭代{it}: 目标偏移 {dist:.0f}px")
             if dist <= tol:
                 return True
+            if last_view is not None and math.hypot(vx - last_view[0], vy - last_view[1]) < 1.0:
+                stagnant_iterations += 1
+            else:
+                stagnant_iterations = 0
+            last_view = (vx, vy)
+            if stagnant_iterations >= 2:
+                if recovered or not self._recover_device_channel("连续拖动后地图视野未变化"):
+                    raise RuntimeError("大地图移动失败：连续拖动后地图视野未发生变化")
+                recovered = True
+                stagnant_iterations = 0
+                last_view = None
             self._drag_map(-dx_screen, -dy_screen)
         raise RuntimeError("大地图移动失败：迭代/超时耗尽")
 
@@ -449,6 +491,7 @@ class TpTask:
 
         last_view: tuple[float, float] | None = None
         stagnant_iterations = 0
+        recovered = False
         for it in range(20):
             if time.monotonic() > deadline:
                 break
@@ -467,7 +510,7 @@ class TpTask:
             dx_screen = (tx - vx) * px_per_map
             dy_screen = (ty - vy) * px_per_map
             dist = math.hypot(dx_screen, dy_screen)
-            self.log(f"[tp] 迭代{it}: 视野中心 256图({vx:.0f},{vy:.0f}) 比例{px_per_map:.2f} 目标偏移 {dist:.0f}px")
+            self.log(f"[tp] 迭代{it}: 视野中心 特征图({vx:.0f},{vy:.0f}) 比例{px_per_map:.2f} 目标偏移 {dist:.0f}px")
             if last_view is not None and math.hypot(vx - last_view[0], vy - last_view[1]) < 1.0:
                 stagnant_iterations += 1
             else:
@@ -484,7 +527,11 @@ class TpTask:
                 self._wait_for_teleport_completion()
                 return True
             if stagnant_iterations >= 2:
-                raise RuntimeError("大地图移动失败：连续拖动后地图视野未发生变化")
+                if recovered or not self._recover_device_channel("连续拖动后地图视野未变化"):
+                    raise RuntimeError("大地图移动失败：连续拖动后地图视野未发生变化")
+                recovered = True
+                stagnant_iterations = 0
+                last_view = None
             # 拖动地图：目标向中心移动 = 内容朝反方向平移
             self._drag_map(-dx_screen, -dy_screen)
         raise RuntimeError("传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）")

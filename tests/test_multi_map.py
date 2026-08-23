@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 
 
@@ -84,6 +85,51 @@ def test_big_map_locator_uses_each_maps_native_feature_scale(tmp_path, monkeypat
 
     assert feature == pytest.approx((1948, 2098))
     assert locator.feature_to_world(*feature) == pytest.approx((100, -50))
+
+
+def test_big_map_locator_rejects_degenerate_affine_scale():
+    import bgi_touch.pathing.tp as module
+    from bgi_touch.pathing.feature_store import MatchResult
+
+    class _Sift:
+        def detectAndCompute(self, _image, _mask):
+            keypoints = [SimpleNamespace(pt=(float(i), float(i))) for i in range(10)]
+            return keypoints, np.ones((10, 128), dtype=np.float32)
+
+    locator = module.BigMapLocator.__new__(module.BigMapLocator)
+    locator.definition = SimpleNamespace(big_map_query_resize=1.0)
+    locator._sift = _Sift()
+    locator.stores = [SimpleNamespace(locate=Mock(return_value=MatchResult(
+        100.0, 200.0, 8, 0.001,
+    )))]
+
+    assert locator.locate_view(np.zeros((120, 200, 3), dtype=np.uint8)) is None
+
+
+def test_tp_task_uses_safe_area_aware_map_close_roi(monkeypatch):
+    import bgi_touch.pathing.tp as module
+
+    monkeypatch.setattr(module, "BigMapLocator", lambda _name: SimpleNamespace())
+    task = module.TpTask(SimpleNamespace(), map_name="Teyvat")
+
+    assert task._map_close.roi == (1600, 0, 320, 140)
+
+
+def test_tp_task_recovers_stale_device_channel_and_orientation():
+    import bgi_touch.pathing.tp as module
+
+    logs = []
+    device = SimpleNamespace(reconnect_device=Mock())
+    ctx = SimpleNamespace(device=device, sleep=Mock(), refresh_orientation=Mock())
+    task = module.TpTask.__new__(module.TpTask)
+    task.ctx = ctx
+    task.log = logs.append
+
+    assert task._recover_device_channel("地图视野未变化") is True
+    device.reconnect_device.assert_called_once_with()
+    ctx.sleep.assert_called_once_with(2000)
+    ctx.refresh_orientation.assert_called_once_with()
+    assert logs == ["[tp] 地图视野未变化，重建设备输入通道后重试"]
 
 
 def test_pathing_executor_replaces_only_map_aware_positioners(monkeypatch):

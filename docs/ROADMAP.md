@@ -65,6 +65,8 @@
 3. **真机路线回归**
    - 优先验证短路线和包含 `teleport`、`target`、`combat_script`、`nahida_collect`、
      `mining` 的路线；确认完成后执行 `bgi-touch close-game` 挂起原神。
+   - iPhone 13 Pro Max 已验证渊下宫 → 层岩巨渊 OCR 区域切换、层岩大地图定位、
+     `moveMapTo`、传送确认/加载完成和落点小地图定位；其余独立地图仍需逐图回归。
 
 ## P1 — 实时触发器与任务视觉回归
 
