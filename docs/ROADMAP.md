@@ -9,7 +9,7 @@
 - AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）、
   AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
 - AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught 和 AutoGeniusInvokation 的
-  路线/策略驱动迁移，以及 `dispatcher.runTask` / `runAuto*Task` 入口兼容。
+  专用流程迁移，以及 `dispatcher.runTask` / `runAuto*Task` 入口兼容。
 - QuickSereniteaPot、QuickClaimReward、UseRedemptionCode 和邮件奖励领取的触控流程；
   奖励列表滚动使用触控上滑，文本输入使用 DeviceHub 原生输入。
 - AutoArtifactSalvage 的 1~4 星快速选择、4x9 五星网格扫描、详情 OCR 和限时
@@ -34,6 +34,8 @@
   征讨之花模板导航、领奖结果汇总、死亡重试、回神像和战后二次定位流程。
 - AutoLeyLineOutcrop 的 269 个地脉节点、378 条图边和 632 份官方路线，支持大地图
   花朵定位、最短传送路线、目标纠偏、树脂耗尽/取小值、领奖树脂优先级和每日一条龙配置。
+- AutoStygianOnslaught 的活动菜单、地图传送、入口、困难难度、Boss 1~3、胜负结果、
+  地脉花、固定/自动树脂策略和继续/退出状态机；自定义路线仅作为可选入口覆盖。
 
 ## 已完成 — 地图追踪离线核心
 
@@ -73,12 +75,12 @@ HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest �
 
 ## P2 — 原生 SoloTask 扩展
 
-已完成路线/策略驱动的 AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught、
-AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备活动入口、战斗
+已完成专用流程驱动的 AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught、
+AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备有效活动期、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批迁移重点是 FarmingPlan 等尚未接入统一调度器的页面任务，以及幽境的
-内置导航和树脂分支；QuickForge 上游当前仍为空类。需要继续移植专用识别器，
+下一批迁移重点是 FarmingPlan 等尚未接入统一调度器的页面任务；QuickForge 上游
+当前仍为空类。需要继续移植专用识别器，
 不能只用通用 OCR 点击流代替。
 
 ## 工程

@@ -377,23 +377,76 @@ class TaskDispatcher:
         from .auto_stygian import AutoStygianOnslaughtTask
 
         route = self._resolve_route(param, kind="stygian")
-        if route is None:
-            raise FileNotFoundError(
-                "AutoStygianOnslaught 未配置 routePath/pathingFile；请提供活动入口路线"
-            )
         strategy = _value(
             param,
             "combatScriptBagPath",
             _value(param, "combatStrategyPath", None),
         )
+        raw_priority = _value(
+            param, "resinPriorityList", ("浓缩树脂", "原粹树脂")
+        )
+        if isinstance(raw_priority, str):
+            resin_priority = [
+                item.strip() for item in raw_priority.replace("，", ",").split(",")
+                if item.strip()
+            ]
+        else:
+            try:
+                resin_priority = [str(item) for item in raw_priority]
+            except TypeError:
+                resin_priority = ["浓缩树脂", "原粹树脂"]
+        salvage_options = {
+            "star": int(
+                _value(param, "artifactSalvageStar", _value(param, "maxArtifactStar", 4))
+                or 4
+            ),
+            "javascript": _value(param, "artifactSalvageJavaScript", None),
+            "artifact_set_filter": _value(param, "artifactSetFilter", None),
+            "max_num_to_check": int(_value(param, "maxNumToCheck", 100) or 100),
+            "recognition_failure_policy": str(
+                _value(param, "recognitionFailurePolicy", "Skip") or "Skip"
+            ),
+            "confirm_quick_salvage": bool(
+                _value(param, "confirmQuickSalvage", False)
+            ),
+            "confirm_salvage": bool(
+                _value(
+                    param,
+                    "confirmArtifactSalvage",
+                    _value(param, "confirmSalvage", False),
+                )
+            ),
+        }
         return AutoStygianOnslaughtTask(
             self.ctx,
             route_path=route,
             boss_num=int(_value(param, "bossNum", 1) or 1),
-            rounds=_value(param, "rounds", None),
             combat_strategy_path=str(strategy) if strategy else None,
-            timeout_s=float(_value(param, "timeoutSeconds", 360) or 360),
+            timeout_s=float(
+                _value(param, "timeoutSeconds", _value(param, "timeout", 360))
+                or 360
+            ),
             party_slots=self.party_slots,
+            auto_artifact_salvage=bool(
+                _value(param, "autoArtifactSalvage", False)
+            ),
+            specify_resin_use=bool(_value(param, "specifyResinUse", False)),
+            resin_priority_list=resin_priority,
+            original_resin_use_count=int(
+                _value(param, "originalResinUseCount", 0) or 0
+            ),
+            condensed_resin_use_count=int(
+                _value(param, "condensedResinUseCount", 0) or 0
+            ),
+            transient_resin_use_count=int(
+                _value(param, "transientResinUseCount", 0) or 0
+            ),
+            fragile_resin_use_count=int(
+                _value(param, "fragileResinUseCount", 0) or 0
+            ),
+            fight_team_name=str(_value(param, "fightTeamName", "") or ""),
+            artifact_salvage_options=salvage_options,
+            max_battle_failures=int(_value(param, "maxBattleFailures", 20) or 20),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

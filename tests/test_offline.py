@@ -112,6 +112,7 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
             {"type": "Press", "bind": ["KeyE"], "position": {"x": 0.72, "y": 0.89}},
             {"type": "Press", "bind": ["KeyR"], "position": {"x": 0.697, "y": 0.746}},
             {"type": "Press", "bind": ["KeyX"], "position": {"x": 0.795, "y": 0.778}},
+            {"type": "Press", "bind": ["KeyO"], "position": {"x": 0.742, "y": 0.064}},
             {
                 "type": "DirectionPad",
                 "bind": {"up": ["KeyW"], "down": ["KeyS"],
@@ -130,6 +131,7 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
     assert layout.profile_key("LSHIFT") == "Space"
     assert layout.profile_key_for_button("aim") == "KeyR"
     assert layout.profile_key_for_button("attack") == "KeyX"
+    assert layout.profile_key("F5") == "KeyO"
 
     class FakeDevice:
         def __init__(self):
@@ -541,6 +543,7 @@ const leyline = new AutoLeyLineOutcropParam(3, "枫丹", "启示之花");
 leyline.FightConfig.Timeout = 188;
 leyline.ScanDropsAfterRewardEnabled = true;
 const stygian = new AutoStygianOnslaughtParam("route.json");
+stygian.RoutePath = "route.json";
 stygian.SetCombatStrategyPath("fight.txt");
 const boss = new AutoBossParam();
 boss.BossName = "急冻树";
@@ -1395,8 +1398,12 @@ def test_new_task_dispatcher_validates_upstream_parameter_contracts():
         dispatcher.run_auto_eat_task({"foodName": "甜甜花酿鸡", "foodEffectType": 1})
     with pytest.raises(ValueError, match="需要 strategy"):
         dispatcher.run_auto_genius_invokation_task({})
-    with pytest.raises(FileNotFoundError, match="routePath"):
-        dispatcher.run_auto_stygian_onslaught_task({})
+    from unittest.mock import patch
+
+    with patch("bgi_touch.tasks.auto_stygian.AutoStygianOnslaughtTask") as task:
+        task.return_value.run.return_value = True
+        assert dispatcher.run_auto_stygian_onslaught_task({})
+    assert task.call_args.kwargs["route_path"] is None
 
 
 def test_genshin_map_local_match_overload_keeps_world_hint_separate_from_cache():

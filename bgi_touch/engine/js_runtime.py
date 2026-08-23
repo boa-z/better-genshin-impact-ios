@@ -598,11 +598,13 @@ class JsScriptRuntime:
 
               function AutoStygianOnslaughtParam(path) {
                 Object.assign(this, {
-                  routePath: path ? String(path) : '', bossNum: 1,
+                  routePath: '', bossNum: 1,
                   autoArtifactSalvage: false, specifyResinUse: false,
-                  resinPriorityList: ['原粹树脂'], originalResinUseCount: 0,
+                  resinPriorityList: ['浓缩树脂', '原粹树脂'], originalResinUseCount: 0,
                   condensedResinUseCount: 0, transientResinUseCount: 0,
-                  fragileResinUseCount: 0, fightTeamName: '', combatScriptBagPath: ''
+                  fragileResinUseCount: 0, fightTeamName: '',
+                  combatScriptBagPath: path ? String(path) : '',
+                  confirmQuickSalvage: false, confirmArtifactSalvage: false
                 });
                 this.setCombatStrategyPath = value => {
                   this.combatScriptBagPath = value ? String(value) : '';
