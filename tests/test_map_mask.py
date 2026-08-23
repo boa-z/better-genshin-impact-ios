@@ -85,10 +85,11 @@ def test_map_mask_tracks_big_map_viewport_and_layer():
         def feature_to_world(x, y):
             return 48.0, -24.0
 
+    positioner = SimpleNamespace(set_prior=Mock())
     trigger = MapMaskTrigger(
         SimpleNamespace(),
         map_name="旧日之海",
-        positioner=SimpleNamespace(),
+        positioner=positioner,
         big_locator=BigMap(),
         main_ui_detector=lambda _ctx, _frame: False,
         big_map_detector=lambda _ctx, _frame: True,
@@ -115,6 +116,30 @@ def test_map_mask_tracks_big_map_viewport_and_layer():
         "height": 500.0,
         "layer": -1,
     }
+    positioner.set_prior.assert_called_once_with(48.0, -24.0)
+
+
+def test_minimap_positioner_normalizes_native_iphone_crop_to_bettergi_size():
+    from bgi_touch.pathing.positioner import MINIMAP_MATCH_SIZE, MinimapPositioner
+
+    class Locator:
+        map_name = "Teyvat"
+
+    ctx = SimpleNamespace(
+        layout=SimpleNamespace(buttons={"minimapCenter": (0.128, 0.123)})
+    )
+    positioner = MinimapPositioner.__new__(MinimapPositioner)
+    positioner.ctx = ctx
+    positioner.locator = Locator()
+    positioner.map_name = "Teyvat"
+
+    frame = np.zeros((1284, 2778, 3), dtype=np.uint8)
+    frame[40:275, 238:473] = (10, 80, 200)
+    minimap = positioner.crop_minimap(frame)
+
+    assert minimap is not None
+    assert minimap.shape == (MINIMAP_MATCH_SIZE, MINIMAP_MATCH_SIZE)
+    assert minimap.dtype == np.uint8
 
 
 def test_map_mask_skips_sift_outside_main_and_big_map_ui():

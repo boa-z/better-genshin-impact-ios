@@ -292,6 +292,13 @@ class MapMaskTrigger:
         layer = getattr(self.big_locator, "last_layer", 0)
         layer = 0 if layer is None else int(layer)
         world = self.big_locator.feature_to_world(center_x, center_y)
+        # A global SIFT query is deliberately conservative and can reject a
+        # city minimap covered by icons.  A successfully located big-map view
+        # gives the same coarse prior BetterGI carries between frames, allowing
+        # the next gameplay frame to use the much less ambiguous local subset.
+        set_prior = getattr(self.positioner, "set_prior", None)
+        if callable(set_prior):
+            set_prior(*world)
         position = self._display_position(world)
         self.state.update(
             scene="bigMap",

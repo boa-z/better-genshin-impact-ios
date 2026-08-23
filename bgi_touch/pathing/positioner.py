@@ -17,6 +17,11 @@ from ..engine.context import GameContext
 from .map_locator import MapLocator
 
 MINIMAP_RADIUS_N = 0.042  # 半径 / 屏宽（实测 iPhone 13 Pro Max）
+# BetterGI's MiniMapPreprocessor normalizes the usable minimap to 156x156
+# before matching.  The same HUD occupies about 233x233 native pixels on an
+# iPhone 13 Pro Max; feeding those pixels to SIFT directly changes descriptor
+# scale enough to lose otherwise valid matches.
+MINIMAP_MATCH_SIZE = 156
 
 
 class MinimapPositioner:
@@ -37,7 +42,17 @@ class MinimapPositioner:
         size = int(2 * r)
         if x0 < 0 or y0 < 0 or y0 + size > h or x0 + size > w:
             return None
-        return cv2.cvtColor(bgr[y0:y0 + size, x0:x0 + size], cv2.COLOR_BGR2GRAY)
+        minimap = bgr[y0:y0 + size, x0:x0 + size]
+        if minimap.shape[:2] != (MINIMAP_MATCH_SIZE, MINIMAP_MATCH_SIZE):
+            minimap = cv2.resize(
+                minimap,
+                (MINIMAP_MATCH_SIZE, MINIMAP_MATCH_SIZE),
+                # Keep BetterGI/OpenCV's linear resampling. INTER_AREA looks
+                # smoother but changes the SIFT descriptors enough to drop
+                # valid local matches on the native iPhone minimap.
+                interpolation=cv2.INTER_LINEAR,
+            )
+        return cv2.cvtColor(minimap, cv2.COLOR_BGR2GRAY)
 
     def get_position(self, bgr: np.ndarray) -> tuple[float, float] | None:
         mm = self.crop_minimap(bgr)
