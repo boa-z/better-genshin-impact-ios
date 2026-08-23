@@ -171,13 +171,17 @@ class TaskDispatcher:
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
-    def run_auto_domain_task(self, param: Any = None, ct: Any = None) -> bool:
+    def run_auto_domain_task(self, param: Any = None, ct: Any = None) -> dict[str, int]:
         from .auto_domain import AutoDomainTask
         return AutoDomainTask(
             self.ctx,
             rounds=int(_value(param, "domainRoundNum", _value(param, "rounds", 1)) or 1),
             combat_strategy_path=_value(param, "combatStrategyPath", None),
             use_condensed_resin=bool(_value(param, "useCondensedResin", True)),
+            reward_recognition_enabled=bool(
+                _value(param, "rewardRecognitionEnabled", False)
+            ),
+            reward_max_pages=int(_value(param, "rewardMaxPages", 3) or 3),
             party_slots=self.party_slots,
             log=self.log,
         ).run(cancelled=self._callback(ct))

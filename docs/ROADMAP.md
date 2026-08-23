@@ -18,6 +18,8 @@
   CountInventoryItem、常规分类 GetGridIcons、InventoryCountComparison。
 - characterDevelopmentTask 的单/多角色接口、固定尺寸角色卡选择，以及属性、武器、
   普攻/战技/爆发天赋等级读取；角色别名和元素/武器元数据已随项目固定版本保存。
+- AutoDomain 奖励页稳定等待、卡片检测、ItemV2 图标匹配、数量 OCR、多页去重与
+  BetterGI 名称到累计数量的返回契约；ItemV2 模型由资产下载器按需安装。
 
 ## 已完成 — 地图追踪离线核心
 

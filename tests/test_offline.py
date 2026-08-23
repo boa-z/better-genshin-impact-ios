@@ -555,6 +555,54 @@ def test_character_development_dispatcher_maps_single_character():
     task.return_value.run.assert_called_once()
 
 
+def test_reward_card_detector_ports_bettergi_strip_geometry():
+    import cv2
+    import numpy as np
+
+    from bgi_touch.tasks.reward_result import detect_reward_card_rects
+
+    band = np.zeros((220, 1480, 3), dtype=np.uint8)
+    # Low-saturation, V=220 strips match the quantity/name band mask.
+    for x in (300, 450, 600):
+        cv2.rectangle(band, (x, 155), (x + 100, 184), (220, 220, 220), -1)
+    cards = detect_reward_card_rects(band)
+    assert len(cards) == 3
+    assert [card[0] for card in cards] == [288, 438, 588]
+    assert all(card[1:] == (32, 125, 153) for card in cards)
+
+
+def test_reward_summary_and_duplicate_prefix_match_bettergi_contract():
+    from bgi_touch.tasks.reward_result import (
+        RewardItem,
+        RewardResultRecognizer,
+        merge_reward_summary,
+    )
+
+    summary = {"摩拉": 1000}
+    merge_reward_summary(summary, [RewardItem("摩拉", 500), RewardItem("冒险阅历", -1)])
+    assert summary == {"摩拉": 1500, "冒险阅历": 1}
+    previous = [RewardItem("摩拉", 1000), RewardItem("好感经验", 20)]
+    current = [RewardItem("好感经验", 20), RewardItem("冒险阅历", 100)]
+    assert RewardResultRecognizer._duplicate_prefix(current, previous) == 1
+
+
+def test_auto_domain_dispatcher_maps_reward_recognition_options():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_domain.AutoDomainTask") as task:
+        task.return_value.run.return_value = {"摩拉": 12000}
+        result = TaskDispatcher(object()).run_auto_domain_task({
+            "domainRoundNum": 2,
+            "rewardRecognitionEnabled": True,
+            "rewardMaxPages": 4,
+        })
+    assert result == {"摩拉": 12000}
+    assert task.call_args.kwargs["reward_recognition_enabled"] is True
+    assert task.call_args.kwargs["reward_max_pages"] == 4
+
+
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
 

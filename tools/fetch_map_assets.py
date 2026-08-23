@@ -68,18 +68,28 @@ def main() -> None:
         mdl_dest = PROJECT_ROOT / "assets" / "models"
         mdl_dest.mkdir(parents=True, exist_ok=True)
         wanted = ["Domain/bgi_tree.onnx", "Fish/bgi_fish.onnx", "Mine/bgi_mine.onnx"]
-        pkg2 = Path(tempfile.gettempdir()) / "bettergi-model-1.0.29.nupkg"
-        if not pkg2.exists():
-            print("下载模型包（~160MB）…")
-            urllib.request.urlretrieve(NUPKG_URL.format(version="1.0.29").replace("Assets.Map", "Assets.Model"), pkg2)
-        with zipfile.ZipFile(pkg2) as z:
-            for w in wanted:
-                out = mdl_dest / Path(w).name
-                if out.exists():
-                    continue
-                with z.open("contentFiles/any/any/Assets/Model/" + w) as src, open(out, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                print(f"解出 {w}")
+        missing_yolo = [w for w in wanted if not (mdl_dest / Path(w).name).exists()]
+        if missing_yolo:
+            pkg2 = Path(tempfile.gettempdir()) / "bettergi-model-1.0.29.nupkg"
+            if not pkg2.exists():
+                print("下载模型包（~160MB）…")
+                urllib.request.urlretrieve(NUPKG_URL.format(version="1.0.29").replace("Assets.Map", "Assets.Model"), pkg2)
+            with zipfile.ZipFile(pkg2) as z:
+                for w in missing_yolo:
+                    out = mdl_dest / Path(w).name
+                    with z.open("contentFiles/any/any/Assets/Model/" + w) as src, open(out, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    print(f"解出 {w}")
+        item_base = (
+            "https://raw.githubusercontent.com/babalae/bettergi-libraries/main/"
+            "BetterGI.Assets.Model/Assets/Model/ItemV2/"
+        )
+        for name in ("item.onnx", "item.csv"):
+            out = mdl_dest / name
+            if out.exists():
+                continue
+            print(f"下载 ItemV2/{name} …")
+            urllib.request.urlretrieve(item_base + name, out)
         print(f"模型完成：{mdl_dest}")
 
 

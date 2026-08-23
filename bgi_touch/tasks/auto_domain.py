@@ -22,11 +22,17 @@ class AutoDomainTask:
     def __init__(self, ctx: GameContext, rounds: int = 1,
                  combat_strategy_path: str | None = None,
                  use_condensed_resin: bool = True,
+                 reward_recognition_enabled: bool = False,
+                 reward_max_pages: int = 3,
                  party_slots: dict[str, int] | None = None,
                  log: Callable[[str], None] = print):
         self.ctx = ctx
         self.rounds = max(1, int(rounds))
         self.use_condensed = use_condensed_resin
+        self.reward_recognition_enabled = bool(reward_recognition_enabled)
+        self.reward_max_pages = max(1, int(reward_max_pages))
+        self.reward_summary: dict[str, int] = {}
+        self._reward_recognizer = None
         self.log = log
         self.fight = AutoFightTask(ctx, combat_strategy_path, timeout_s=300,
                                    party_slots=party_slots, log=log)
@@ -88,10 +94,42 @@ class AutoDomainTask:
 
     # ---- 主流程 ----
 
-    def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
+    def _recognize_rewards(self, cancelled: Callable[[], bool] | None = None) -> None:
+        if not self.reward_recognition_enabled:
+            return
+        from .reward_result import (
+            RewardResultRecognizer,
+            crop_reward_band,
+            detect_reward_card_rects,
+        )
+
+        deadline = time.monotonic() + 6
+        ready = False
+        while time.monotonic() < deadline:
+            if cancelled and cancelled():
+                return
+            frame = self.ctx.capture_bgr()
+            if detect_reward_card_rects(crop_reward_band(self.ctx, frame)):
+                ready = True
+                break
+            self.ctx.sleep(300)
+        if not ready:
+            self.log("[AutoDomain] 奖励结果页未就绪，跳过本轮奖励识别")
+            return
+        try:
+            if self._reward_recognizer is None:
+                self._reward_recognizer = RewardResultRecognizer(self.ctx, log=self.log)
+            rewards = self._reward_recognizer.recognize_multi_page(self.reward_max_pages)
+        except Exception as error:
+            self.log(f"[AutoDomain] 奖励识别失败，跳过本轮汇总：{error}")
+            return
+        for name, quantity in rewards.items():
+            self.reward_summary[name] = self.reward_summary.get(name, 0) + quantity
+
+    def run(self, cancelled: Callable[[], bool] | None = None) -> dict[str, int]:
         for rd in range(1, self.rounds + 1):
             if cancelled and cancelled():
-                return False
+                return dict(self.reward_summary)
             self.log(f"[AutoDomain] 第 {rd}/{self.rounds} 轮")
 
             # ① 启动挑战（面板按钮或场内交互）
@@ -127,15 +165,18 @@ class AutoDomainTask:
                 self.log("[AutoDomain] 未找到树脂选项（树脂不足或未到古树），本轮跳过领奖")
             self.ctx.sleep(3000)
 
+            # 奖励页动画结束且卡片稳定后再识别，避免截到淡入中的图标。
+            self._recognize_rewards(cancelled)
+
             # ⑦ 继续或退出
             if rd < self.rounds:
                 if not self._tap_text("继续挑战", timeout_s=8):
                     self.log("[AutoDomain] 未能继续挑战，提前退出")
                     self._tap_text("退出秘境", timeout_s=5)
-                    return False
+                    return dict(self.reward_summary)
                 self.ctx.sleep(6000)
             else:
                 self._tap_text("退出秘境", timeout_s=8)
                 self.ctx.sleep(8000)
         self.log("[AutoDomain] 完成")
-        return True
+        return dict(self.reward_summary)

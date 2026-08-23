@@ -50,7 +50,8 @@ DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e .                       # 核心：mcp + opencv + numpy
-.venv/bin/pip install -e '.[ocr,js]'             # 推荐：RapidOCR + pythonmonkey
+.venv/bin/pip install -e '.[ocr,js,models]'      # 推荐：OCR + JS + BetterGI ONNX 模型运行时
+.venv/bin/python tools/fetch_map_assets.py --models  # 地图、YOLO 与 ItemV2 奖励识别资产
 ```
 
 前置：macOS/Linux 上运行 DeviceHub Mask 并连接 iPhone（**建议 USB**，Wi-Fi 通道输入注入不稳定），iPhone 已安装原神。
@@ -75,6 +76,7 @@ bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
 bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
 bgi-touch task CharacterDevelopment --config '{"characterName":"钟离","categories":"属性;武器;天赋"}'
+bgi-touch task AutoDomain --config '{"domainRoundNum":2,"rewardRecognitionEnabled":true}'
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
@@ -110,7 +112,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 实时触发器（AutoPick OCR拾取 / AutoSkip 剧情推进） | ⚠️ 已实现，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
-| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现，待真机验证 |
+| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ 视觉逻辑已迁移，需在对应游戏状态真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ 已迁移；Boss、地脉、幽境需路线，七圣召唤需策略 |
