@@ -140,28 +140,7 @@ class AutoPickTrigger:
         self._last_action_at = now
 
     def _is_gameplay_frame(self, region: ImageRegion) -> bool:
-        """Use the minimap circle as a cheap main-gameplay guard."""
-        import cv2
+        """Require BetterGI's Paimon HUD marker, which menus hide."""
+        from ..vision.game_ui import is_main_ui
 
-        mm = self.ctx.layout.buttons.get("minimapCenter")
-        if mm is None:
-            return False
-        width, height = self.ctx.transform.device_width, self.ctx.transform.device_height
-        cx, cy = int(mm[0] * width), int(mm[1] * height)
-        radius = max(20, int(0.075 * width))
-        x0, y0 = max(0, cx - radius), max(0, cy - radius)
-        crop = region.bgr[y0:cy + radius, x0:cx + radius]
-        if crop.size == 0:
-            return False
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        circles = cv2.HoughCircles(
-            gray,
-            cv2.HOUGH_GRADIENT,
-            dp=1.5,
-            minDist=radius,
-            param1=120,
-            param2=40,
-            minRadius=int(radius * 0.55),
-            maxRadius=int(radius * 0.95),
-        )
-        return circles is not None
+        return is_main_ui(self.ctx, region.bgr)

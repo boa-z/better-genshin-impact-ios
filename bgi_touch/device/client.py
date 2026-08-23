@@ -261,6 +261,16 @@ class DeviceClient:
                            if isinstance(item, dict) and item.get("active")), None)
             if isinstance(active, dict):
                 selection_id = active.get("id") or active.get("udid")
+            elif isinstance(devices, list):
+                available = [
+                    item for item in devices
+                    if isinstance(item, dict) and (item.get("id") or item.get("udid"))
+                ]
+                # Fresh DeviceHub 140 sessions list a reachable Wi-Fi iPhone
+                # before marking it active. Selecting the sole candidate is
+                # deterministic; with multiple devices, keep refusing to guess.
+                if len(available) == 1:
+                    selection_id = available[0].get("id") or available[0].get("udid")
         if not selection_id:
             raise DeviceError("status 未返回可连接的设备 ID")
         result = self.call("connect_device", udid=selection_id)

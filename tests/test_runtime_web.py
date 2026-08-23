@@ -21,6 +21,32 @@ def test_game_context_cached_frame_returns_copy_without_device_access():
     assert not ctx._last_frame[0, 0].any()
 
 
+def test_main_ui_uses_paimon_hud_marker_instead_of_minimap_circle():
+    from bgi_touch.engine.recognition import ImageRegion
+    from bgi_touch.vision.coordinate import ScreenTransform
+    from bgi_touch.vision.game_ui import PAIMON_HUD, is_main_ui
+
+    template = PAIMON_HUD.template.bgr
+    gameplay = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    gameplay[40:40 + template.shape[0], 110:110 + template.shape[1]] = template
+    menu = np.zeros_like(gameplay)
+
+    class Context:
+        transform = ScreenTransform(1920, 1080)
+
+    ctx = Context()
+    assert is_main_ui(ctx, gameplay)
+    assert not is_main_ui(ctx, menu)
+
+    # AutoPick must share the same guard so a translucent menu cannot expose
+    # the minimap and trigger OCR interaction clicks behind it.
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+    trigger = AutoPickTrigger.__new__(AutoPickTrigger)
+    trigger.ctx = ctx
+    assert trigger._is_gameplay_frame(ImageRegion(ctx, gameplay))
+    assert not trigger._is_gameplay_frame(ImageRegion(ctx, menu))
+
+
 def test_trigger_loop_pause_waits_for_frame_and_resume_restores_trigger():
     from bgi_touch.triggers.loop import TriggerLoop
 

@@ -104,24 +104,9 @@ class GenshinApi:
         return False
 
     def _is_main_ui(self, bgr) -> bool:
-        import cv2
-        import numpy as np
+        from ..vision.game_ui import is_main_ui
 
-        mm = self.ctx.layout.buttons.get("minimapCenter")
-        if mm is None:
-            return False
-        t = self.ctx.transform
-        cx, cy = mm[0] * t.device_width, mm[1] * t.device_height
-        r = int(0.075 * t.device_width)
-        x0, y0 = max(0, int(cx - r)), max(0, int(cy - r))
-        crop = bgr[y0:y0 + 2 * r, x0:x0 + 2 * r]
-        if crop.size == 0:
-            return False
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1.5, minDist=r,
-                                   param1=120, param2=40,
-                                   minRadius=int(r * 0.55), maxRadius=int(r * 0.95))
-        return circles is not None
+        return is_main_ui(self.ctx, bgr)
 
     def chooseTalkOption(self, option: str, skip_times: int = 10, is_orange: bool = False) -> bool:
         """OCR 对话选项并点击包含指定文本的一项。"""

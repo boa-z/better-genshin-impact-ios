@@ -100,3 +100,35 @@ def test_device_client_portrait_mapper_preserves_landscape_dimensions():
     client = DeviceClient.__new__(DeviceClient)
     client._mapper = lambda x, y, iw=None, ih=None: (ih - y, x, ih, iw)
     assert client._map(100, 200, 2778, 1284) == (1084, 100, 1284, 2778)
+
+
+def test_device_client_selects_only_device_but_not_ambiguous_devices():
+    import pytest
+
+    from bgi_touch.device.client import DeviceClient, DeviceError, ToolResult
+
+    client = DeviceClient.__new__(DeviceClient)
+    connected = []
+    devices = [{
+        "active": False,
+        "id": "iphone::wifi",
+        "name": "iPhone 13 Pro Max",
+    }]
+
+    def fake_call(name, **kwargs):
+        if name == "status":
+            return ToolResult({"device_id": None, "active_udid": None}, None, None)
+        if name == "list_devices":
+            return ToolResult({"devices": devices}, None, None)
+        if name == "connect_device":
+            connected.append(kwargs["udid"])
+            return ToolResult({"connected": True}, None, None)
+        raise AssertionError(name)
+
+    client.call = fake_call
+    assert client.connect_device() == {"connected": True}
+    assert connected == ["iphone::wifi"]
+
+    devices.append({"active": False, "id": "tablet::wifi", "name": "Tablet"})
+    with pytest.raises(DeviceError, match="未返回可连接的设备 ID"):
+        client.connect_device()

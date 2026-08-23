@@ -21,7 +21,11 @@ from .layout import ControlLayout, normalize_key
 
 MOVE_CYCLE_MS = 1400
 JOYSTICK_OVERSHOOT = 2.2  # 终点超出摇杆半径，让大部分时长处于满偏移（跑步阈值以上）
-PROFILE_LEASE_MS = 3000
+# A native Wi-Fi screenshot on iPhone 13 Pro Max can hold the serialized MCP
+# channel for 5-6 seconds. The lease must outlive that call so movement is not
+# released while the next frame is being recognized. DeviceHub still provides
+# an automatic safety release if the process disappears.
+PROFILE_LEASE_MS = 15000
 PROFILE_REFRESH_INTERVAL_S = 1.0
 
 
@@ -100,14 +104,10 @@ class InputSimulator:
                         lease_ms=PROFILE_LEASE_MS,
                     )
                 except Exception as e:
-                    self._profile_failed = True
-                    self._profile_session_id = None
+                    recoverable = self._drop_profile_session(session_id, e)
                     failed = True
-                    print(f"[input] DeviceHub game session 租约刷新失败，回退触控：{e}")
-                    try:
-                        self.device.stop_game_session(session_id)
-                    except Exception:
-                        pass
+                    suffix = "；下次输入自动重建" if recoverable else ""
+                    print(f"[input] DeviceHub game session 租约刷新失败，回退触控{suffix}：{e}")
             if failed:
                 self._ensure_pump()
                 return
@@ -123,6 +123,19 @@ class InputSimulator:
     def _held_profile_keys(self) -> list[str]:
         with self._held_lock:
             return self._profile_raw_keys(list(self._held))
+
+    def _drop_profile_session(self, session_id: str, error: Exception) -> bool:
+        """Drop a failed session and report whether it may be rebuilt later."""
+        expired = "session not found" in str(error).casefold()
+        self._profile_failed = not expired
+        self._profile_session_id = None
+        try:
+            # DeviceClient clears its cached ID in finally even when the remote
+            # session has already expired.
+            self.device.stop_game_session(session_id)
+        except Exception:
+            pass
+        return expired
 
     def _sync_profile_keys(self, keys: list[str] | None = None) -> bool:
         if not self._ensure_profile_session():
@@ -140,12 +153,7 @@ class InputSimulator:
                 return True
             except Exception as e:
                 print(f"[input] DeviceHub game session 输入失败，回退手势泵：{e}")
-                self._profile_failed = True
-                try:
-                    self.device.stop_game_session(session_id)
-                except Exception:
-                    pass
-                self._profile_session_id = None
+                self._drop_profile_session(session_id, e)
                 return False
 
     def _profile_press_raw(self, raw_key: str, hold_ms: int = 80) -> bool:
@@ -166,12 +174,7 @@ class InputSimulator:
                 return True
             except Exception as e:
                 print(f"[input] DeviceHub profile 按键失败，回退触控：{e}")
-                self._profile_failed = True
-                try:
-                    self.device.stop_game_session(session_id)
-                except Exception:
-                    pass
-                self._profile_session_id = None
+                self._drop_profile_session(session_id, e)
                 return False
 
     def _profile_press(self, key: str, hold_ms: int = 80) -> bool:

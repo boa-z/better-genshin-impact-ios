@@ -137,9 +137,11 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
         def __init__(self):
             self.inputs = []
             self.stopped = []
+            self.start_kwargs = None
 
         def start_game_session(self, profile_name, **kwargs):
             assert profile_name == "test-profile"
+            self.start_kwargs = kwargs
             return "session-1"
 
         def set_game_input(self, session_id, keys, **kwargs):
@@ -172,6 +174,34 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
     ]
     simulator.release_all()
     assert device.stopped == ["session-1"]
+    assert device.start_kwargs["lease_ms"] >= 15000
+
+
+def test_expired_devicehub_game_session_can_be_rebuilt():
+    from bgi_touch.input.simulator import InputSimulator
+
+    class Device:
+        def __init__(self):
+            self.stopped = []
+
+        def stop_game_session(self, session_id):
+            self.stopped.append(session_id)
+
+    simulator = InputSimulator.__new__(InputSimulator)
+    simulator.device = Device()
+    simulator._profile_failed = False
+    simulator._profile_session_id = "expired"
+
+    assert simulator._drop_profile_session(
+        "expired", RuntimeError("game control session not found")
+    )
+    assert simulator._profile_session_id is None
+    assert simulator._profile_failed is False
+    assert simulator.device.stopped == ["expired"]
+
+    simulator._profile_session_id = "broken"
+    assert not simulator._drop_profile_session("broken", RuntimeError("HID unavailable"))
+    assert simulator._profile_failed is True
 
 
 def test_native_ui_layout_overlay_changes_space_semantics():
