@@ -281,6 +281,12 @@ bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 `pick_up_collect`、`fishing`、`use_gadget`、`stop_flying`、`up_down_grab_leaf`、
 `log_output` 和 `exit_and_relogin`。
 
+路线中的 `farming_info` 会按 BetterGI 语义写入每日锄地统计，日志位于
+`log/FarmingPlan/YYYYMMDD.json`，并以服务器时间凌晨 4 点切日。编辑
+`config/farming.json` 并设置 `enabled=true` 后，执行器会在路线启动前检查每日
+精英/小怪上限和 `primary_target`，达到上限的路线直接记为正常跳过。米游社字段可
+读取 BetterGI 已写入的统计数据并合并本地后续记录；iOS 端不会读取或上传 Cookie。
+
 Windows 专属的队伍自动识别、低血量回血、设置游戏时间和千星奇域流程不会在 iOS
 侧自动模拟；遇到这些动作会写入日志并继续保留路线控制权。`exit_and_relogin`
 会复用 iOS 侧的重登流程，执行前应确认账号已登录且允许较长等待。真机长路线完成后

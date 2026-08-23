@@ -101,13 +101,17 @@ class PathingTask:
     map_match_method: str = "SIFT"
     realtime_triggers: dict[str, bool] = field(default_factory=lambda: {"AutoPick": True})
     farming_info: dict = field(default_factory=dict)
+    source_path: str = ""
 
     @classmethod
     def load(cls, path: str | Path) -> "PathingTask":
         # BetterGI's bundled route set contains both plain UTF-8 and UTF-8 BOM
         # files. ``utf-8-sig`` accepts both without leaking U+FEFF into JSON.
-        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        return cls.parse(raw)
+        source = Path(path).expanduser()
+        raw = json.loads(source.read_text(encoding="utf-8-sig"))
+        task = cls.parse(raw)
+        task.source_path = str(source.resolve())
+        return task
 
     @classmethod
     def parse(cls, raw: dict) -> "PathingTask":
@@ -158,4 +162,5 @@ class PathingTask:
             "move_modes": dict(Counter(p.move_mode for p in self.positions)),
             "actions": dict(Counter(p.action for p in self.positions if p.action)),
             "realtime_triggers": dict(self.realtime_triggers),
+            "farming_info": dict(self.farming_info),
         }

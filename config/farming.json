@@ -1,0 +1,13 @@
+{
+  "$comment": "BetterGI 锄地规划。enabled 仅控制每日上限跳过；路线 farming_info 允许计数时仍会写入 log/FarmingPlan。",
+  "enabled": false,
+  "dailyEliteCap": 400,
+  "dailyMobCap": 2000,
+  "serverTimezone": "Asia/Shanghai",
+  "logDirectory": "../log/FarmingPlan",
+  "miyousheDataConfig": {
+    "enabled": false,
+    "dailyEliteCap": 400,
+    "dailyMobCap": 2000
+  }
+}

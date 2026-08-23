@@ -110,7 +110,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 小地图 SIFT 定位（官方特征库、局部/全局回退、跳点过滤） | ✅ 离线验证 |
 | 大地图传送 genshin.tp（SIFT 比例自适应拖动+OCR确认） | ⚠️ 已实现，待真机回归验证 |
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
-| pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路，待真机路线实测 |
+| pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路；已接入锄地日上限与统计，待真机路线实测 |
 | 实时触发器（AutoPick OCR拾取 / AutoSkip 剧情推进） | ⚠️ 已实现，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |

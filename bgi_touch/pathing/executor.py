@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 from typing import Callable, Optional, Protocol
 
 import cv2
@@ -21,6 +22,11 @@ import numpy as np
 
 from ..engine.context import GameContext
 from .actions import PathingActionRunner
+from .farming import (
+    FarmingRouteInfo,
+    FarmingSession,
+    FarmingStatsRecorder,
+)
 from .model import PathingTask, Waypoint
 
 
@@ -67,7 +73,10 @@ def camera_orientation_deg(ctx: GameContext, bgr: np.ndarray) -> Optional[float]
 class PathingExecutor:
     def __init__(self, ctx: GameContext, positioner: Positioner | None = None,
                  party_slots: dict[str, int] | None = None,
-                 log: Callable[[str], None] = print, map_name: str = "Teyvat"):
+                 log: Callable[[str], None] = print, map_name: str = "Teyvat",
+                 farming_config_path: str | Path | None = None,
+                 farming_route_info: dict | FarmingRouteInfo | None = None,
+                 farming_recorder: FarmingStatsRecorder | None = None):
         self.ctx = ctx
         self.positioner = positioner
         self._map_name = map_name
@@ -77,6 +86,30 @@ class PathingExecutor:
         self._cam_sign = 1.0
         self._last_mode_action_at = 0.0
         self.actions = PathingActionRunner(ctx, party_slots=party_slots, log=log)
+        self.farming = farming_recorder or FarmingStatsRecorder(
+            farming_config_path, log=log
+        )
+        self.farming_route_info = (
+            farming_route_info
+            if isinstance(farming_route_info, FarmingRouteInfo)
+            else FarmingRouteInfo.from_mapping(farming_route_info)
+        )
+
+    def _route_farming_info(self, task: PathingTask) -> FarmingRouteInfo:
+        configured = self.farming_route_info
+        source = Path(task.source_path) if task.source_path else None
+        group_name = configured.group_name or str(
+            task.info.get("group_name", task.info.get("groupName", "")) or ""
+        )
+        project_name = configured.project_name or (
+            source.name if source is not None else task.name
+        )
+        folder_name = configured.folder_name or (
+            source.parent.name if source is not None else str(
+                task.info.get("folder_name", task.info.get("folderName", "")) or ""
+            )
+        )
+        return FarmingRouteInfo(group_name, project_name, folder_name)
 
     def _ensure_positioner(self, map_name: str) -> None:
         if self.positioner is not None:
@@ -125,11 +158,18 @@ class PathingExecutor:
     def run(self, task: PathingTask) -> bool:
         task.validate()
         self.log(f"[pathing] {task.name}: {len(task.positions)} 个路点 @ {task.map_name}")
+        farming_session = FarmingSession.from_mapping(task.farming_info)
+        decision = self.farming.check_limit(farming_session)
+        if decision.skip:
+            route_name = task.name or self._route_farming_info(task).project_name
+            self.log(f"[pathing] {route_name}:{decision.message}，跳过此任务")
+            return True
         if task.map_match_method.lower() not in {"sift"}:
             self.log(f"[pathing] {task.map_match_method} 暂未移植，回退 SIFT")
         self._ensure_positioner(task.map_name)
         trigger_state = self._enable_realtime_triggers(task)
         retry_count = self._retry_count(task)
+        success = False
         try:
             for index, wp in enumerate(task.positions, start=1):
                 self.log(f"[pathing] 路点 {index}/{len(task.positions)} id={wp.id}")
@@ -159,10 +199,18 @@ class PathingExecutor:
 
                 if wp.action and wp.action not in {"force_tp", "log_output"}:
                     self._do_action(wp)
+            success = True
             return True
         finally:
             self.ctx.input.release_all()
             self._clear_realtime_triggers(trigger_state)
+            if success and farming_session.allow_farming_count:
+                try:
+                    self.farming.record(
+                        farming_session, self._route_farming_info(task)
+                    )
+                except Exception as error:
+                    self.log(f"[farming] 锄地进度记录失败：{error}")
 
     @staticmethod
     def _retry_count(task: PathingTask) -> int:
