@@ -243,6 +243,8 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 脚本提供 `file.mkdir` 别名；所有创建、写入和重命名仍限制在当前脚本目录内。
 脚本也可按上游方式直接 `new ImageRegion(mat, x, y)` 对本地图片做识别，或通过
 `new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先文本与点击延迟。
+`BvPage/BvLocator` 的 OCR、模板定位、等待重试、点击和“点击直到消失”链式 API 也已
+接入同一截图上下文；`OpenCvSharp.OpenCvSharp.Rect` 会映射为 1080p 参考坐标 ROI。
 
 ### 5.4 执行战斗策略 / 键鼠宏 / pathing
 

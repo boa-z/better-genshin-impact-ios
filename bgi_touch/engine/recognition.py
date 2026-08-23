@@ -155,17 +155,33 @@ class Region:
     def x(self) -> float:
         return self.ctx.transform.to_ref(self.dx, self.dy)[0]
 
+    @x.setter
+    def x(self, value: float) -> None:
+        self.dx = self.ctx.transform.to_device(float(value), self.y)[0]
+
     @property
     def y(self) -> float:
         return self.ctx.transform.to_ref(self.dx, self.dy)[1]
+
+    @y.setter
+    def y(self, value: float) -> None:
+        self.dy = self.ctx.transform.to_device(self.x, float(value))[1]
 
     @property
     def width(self) -> float:
         return self.dw / self.ctx.transform.scale
 
+    @width.setter
+    def width(self, value: float) -> None:
+        self.dw = self.ctx.transform.scale_len(float(value))
+
     @property
     def height(self) -> float:
         return self.dh / self.ctx.transform.scale
+
+    @height.setter
+    def height(self, value: float) -> None:
+        self.dh = self.ctx.transform.scale_len(float(value))
 
     def is_empty(self) -> bool:
         return self._empty
@@ -210,6 +226,17 @@ class Region:
     backgroundClick = background_click
     BackgroundClick = background_click
     Derive = derive
+    X = property(lambda self: self.x, lambda self, value: setattr(self, "x", value))
+    Y = property(lambda self: self.y, lambda self, value: setattr(self, "y", value))
+    Width = property(
+        lambda self: self.width,
+        lambda self, value: setattr(self, "width", value),
+    )
+    Height = property(
+        lambda self: self.height,
+        lambda self, value: setattr(self, "height", value),
+    )
+    Text = property(lambda self: self.text, lambda self, value: setattr(self, "text", str(value)))
     matchScore = property(
         lambda self: self.score,
         lambda self, value: setattr(self, "score", float(value)),

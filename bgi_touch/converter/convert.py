@@ -23,7 +23,8 @@ from ..pathing.model import PathingTask
 # JS 兼容性扫描：本移植版已实现 / 部分实现 / 未实现的 API
 SUPPORTED = [
     "sleep", "log.", "click", "keyPress", "keyDown", "keyUp", "captureGameRegion",
-    "RecognitionObject", "ImageRegion", "AutoSkipConfig", "TemplateMatch", "ocr",
+    "RecognitionObject", "ImageRegion", "BvPage", "BvLocator", "OpenCvSharp.Rect",
+    "AutoSkipConfig", "TemplateMatch", "ocr",
     "findMulti", ".find(", "isEmpty", "isExist",
     "file.read", "file.write", "file.mkdir", "renamePathSync", "readTextSync",
     "readImageMat", "settings.", "notification.",

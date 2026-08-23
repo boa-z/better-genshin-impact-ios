@@ -389,6 +389,38 @@ class JsScriptRuntime:
             "return factory(mat, x, y); }"
         )(_create_image_region)
 
+        from .bv import BvPage
+
+        to_region_collection = pm.eval(
+            "values => { const result = Array.from(values); "
+            "Object.defineProperty(result, 'count', { get: () => result.length }); "
+            "Object.defineProperty(result, 'Count', { get: () => result.length }); "
+            "return result; }"
+        )
+
+        def _create_bv_page():
+            return wrap(BvPage(
+                ctx,
+                to_collection=to_region_collection,
+                check_cancel=self._check_cancel,
+            ))
+
+        g["BvPage"] = pm.eval(
+            "factory => function BvPage() { return factory(); }"
+        )(_create_bv_page)
+        g["OpenCvSharp"] = pm.eval(
+            "(() => {"
+            "function Rect(x = 0, y = 0, width = 0, height = 0) {"
+            "this.x=Number(x);this.y=Number(y);this.width=Number(width);"
+            "this.height=Number(height);"
+            "Object.defineProperties(this,{X:{get:()=>this.x,set:v=>this.x=Number(v)},"
+            "Y:{get:()=>this.y,set:v=>this.y=Number(v)},"
+            "Width:{get:()=>this.width,set:v=>this.width=Number(v)},"
+            "Height:{get:()=>this.height,set:v=>this.height=Number(v)}}); }"
+            "return { OpenCvSharp: { Rect }, Rect };"
+            "})()"
+        )
+
         # genshin 助手
         from .genshin_api import GenshinApi
         expose("genshin", wrap(GenshinApi(ctx, log)), proxy=False)
