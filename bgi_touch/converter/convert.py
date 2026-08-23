@@ -29,6 +29,8 @@ SUPPORTED = [
     "file.read", "file.write", "file.mkdir", "renamePathSync", "strategyFile",
     "readTextSync",
     "readImageMat", "settings.", "notification.",
+    "htmlMask.show", "htmlMask.send", "htmlMask.request", "htmlMask.receive",
+    "htmlMask.poll", "htmlMask.close", "htmlMask.exists",
     "moveMouseBy", "keyMouseScript", "inputText", "http.request", "genshin.returnMainUi",
     "genshin.relogin", "chooseTalkOption", "runCombatScript", "leftButtonClick",
     "genshin.tp", "genshin.moveMapTo", "genshin.tpToStatueOfTheSeven",

@@ -13,6 +13,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import cv2
 from fastapi import FastAPI
@@ -20,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..converter.convert import convert_any
 from ..engine.context import GENSHIN_BUNDLE_ID, GameContext
+from ..engine.html_mask import html_mask_manager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
@@ -223,14 +225,22 @@ def index():
 
 @app.get("/api/status")
 def api_status():
+    if _ctx is None:
+        return {
+            "connected": False,
+            "device": {"status": "disconnected", "orientation": "unknown"},
+            "game": {"status": "unknown"},
+            "task": runner.status(),
+            "transform": {"w": 0, "h": 0, "scale": 0},
+        }
     try:
-        ctx = get_ctx()
+        ctx = _ctx
         st = ctx.device.status()
         try:
             game = ctx.device.app_status(GENSHIN_BUNDLE_ID)
         except Exception as e:
             game = {"error": str(e)}
-        return {"device": st, "game": game, "task": runner.status(),
+        return {"connected": True, "device": st, "game": game, "task": runner.status(),
                 "transform": {"w": ctx.transform.device_width, "h": ctx.transform.device_height,
                               "scale": round(ctx.transform.scale, 4)}}
     except Exception as e:
@@ -239,8 +249,10 @@ def api_status():
 
 @app.get("/api/screenshot")
 def api_screenshot(annotate: int = 0, w: int = 1408, q: int = 70):
+    if _ctx is None:
+        return _err(RuntimeError("设备尚未连接，请先点击“连接设备”"), 409)
     try:
-        ctx = get_ctx()
+        ctx = _ctx
         img, frame_age = _preview_frame(ctx)
         if annotate:
             _draw_layout(ctx, img)
@@ -273,6 +285,18 @@ def _draw_layout(ctx: GameContext, img) -> None:
 
 
 # ---- 手动控制 ----
+
+@app.post("/api/connect")
+def api_connect():
+    try:
+        ctx = get_ctx()
+        return {
+            "ok": True,
+            "w": ctx.transform.device_width,
+            "h": ctx.transform.device_height,
+        }
+    except Exception as e:
+        return _err(e)
 
 @app.post("/api/tap")
 def api_tap(body: dict):
@@ -387,6 +411,7 @@ def api_scripts():
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment",
         "OneDragon",
+        "Shell",
     ):
         out["task"].append({"path": name, "name": name})
     js_dir = SCRIPTS_DIR / "js"
@@ -458,8 +483,10 @@ def api_convert(body: dict):
 
 @app.get("/api/triggers")
 def api_triggers():
+    if _ctx is None:
+        return {"active": [], "connected": False}
     try:
-        ctx = get_ctx()
+        ctx = _ctx
         loop = ctx.triggers
         return {"active": [t.name for t in loop.triggers]}
     except Exception as e:
@@ -490,6 +517,110 @@ def api_triggers_set(body: dict):
 def api_logs(after: int = 0):
     with _log_lock:
         return {"logs": [l for l in _logs if l["i"] > after], "seq": _log_seq}
+
+
+# ---- BetterGI HTML 遮罩 ----
+
+def _mask_bridge(window_id: str) -> str:
+    identifier = json.dumps(str(window_id), ensure_ascii=False)
+    return f"""
+<script>
+(() => {{
+  const windowId = {identifier};
+  const callbacks = new Map();
+  let sequence = 0;
+  function post(url, data, requestId) {{
+    parent.postMessage({{type:'bgi-html-mask', windowId, url, data, requestId}}, location.origin);
+  }}
+  window.htmlMask = {{
+    onMessage: null,
+    send(url, data) {{ post(url, data ?? {{}}, null); }},
+    request(url, data) {{
+      const requestId = '__req_' + (++sequence);
+      return new Promise((resolve, reject) => {{
+        callbacks.set(requestId, {{resolve, reject}});
+        post(url, data ?? {{}}, requestId);
+      }});
+    }},
+    _dispatch(message) {{
+      const callback = message.requestId && callbacks.get(message.requestId);
+      if (callback) {{
+        callbacks.delete(message.requestId);
+        callback.resolve(message);
+        return;
+      }}
+      if (typeof this.onMessage !== 'function') return;
+      const result = this.onMessage(message);
+      if (message.requestId && result !== undefined) {{
+        Promise.resolve(result).then(data =>
+          post('/__response__', data ?? null, message.requestId));
+      }}
+    }}
+  }};
+  window.addEventListener('message', event => {{
+    if (event.origin !== location.origin) return;
+    const envelope = event.data || {{}};
+    if (envelope.type === 'bgi-html-mask-host' && envelope.windowId === windowId) {{
+      window.htmlMask._dispatch(envelope.message);
+    }}
+  }});
+}})();
+</script>
+"""
+
+
+@app.get("/api/html-masks/events")
+def api_html_mask_events(after: int = 0):
+    return html_mask_manager.events(after=after, timeout_s=20)
+
+
+@app.post("/api/html-masks/{window_id}/message")
+def api_html_mask_message(window_id: str, body: dict):
+    try:
+        html_mask_manager.post_from_html(
+            window_id,
+            str(body.get("url", "")),
+            body.get("data"),
+            str(body["requestId"]) if body.get("requestId") else None,
+        )
+        return {"ok": True}
+    except Exception as e:
+        return _err(e, 404)
+
+
+@app.post("/api/html-masks/{window_id}/close")
+def api_html_mask_close(window_id: str):
+    return {"ok": html_mask_manager.close(window_id)}
+
+
+@app.get("/api/html-masks/{window_id}/files/{asset_path:path}")
+def api_html_mask_file(window_id: str, asset_path: str):
+    try:
+        source = html_mask_manager.resolve_asset(window_id, asset_path)
+        if source.suffix.lower() not in {".html", ".htm"}:
+            return FileResponse(source)
+        content = source.read_text(encoding="utf-8", errors="replace")
+        parent = Path(asset_path).parent
+        encoded_parent = "/".join(quote(part, safe="") for part in parent.parts)
+        base_url = f"/api/html-masks/{quote(window_id, safe='')}/files/"
+        if encoded_parent and encoded_parent != ".":
+            base_url += encoded_parent.rstrip("/") + "/"
+        injection = f'<base href="{base_url}">' + _mask_bridge(window_id)
+        lowered = content.lower()
+        head_at = lowered.find("<head")
+        head_end = content.find(">", head_at) + 1 if head_at >= 0 else 0
+        content = (
+            content[:head_end] + injection + content[head_end:]
+            if head_end > 0 else injection + content
+        )
+        return Response(content, media_type="text/html",
+                        headers={"Cache-Control": "no-store"})
+    except PermissionError as e:
+        return _err(e, 403)
+    except FileNotFoundError as e:
+        return _err(e, 404)
+    except Exception as e:
+        return _err(e)
 
 
 def serve(

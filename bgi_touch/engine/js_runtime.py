@@ -264,6 +264,14 @@ class JsScriptRuntime:
         expose("notification", wrap(_Notification()), proxy=False)
         g["settings"] = pm.eval("(o) => o")(self.settings)
 
+        from .html_mask import HtmlMaskHost
+
+        self._html_mask_host = HtmlMaskHost(
+            self.script_dir,
+            cancelled=lambda: self.cancelled,
+        )
+        expose("htmlMask", wrap(self._html_mask_host), proxy=False)
+
         # file（沙箱）
         rt = self
 
@@ -900,3 +908,7 @@ class JsScriptRuntime:
         except ScriptCancelled:
             self.log("[runtime] 脚本已取消")
             return None
+        finally:
+            html_mask_host = getattr(self, "_html_mask_host", None)
+            if html_mask_host is not None:
+                html_mask_host.closeAll()
