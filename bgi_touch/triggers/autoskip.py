@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Callable
 
@@ -22,10 +23,21 @@ class AutoSkipTrigger:
     name = "AutoSkip"
 
     def __init__(self, ctx: GameContext, prefer_text: str | None = None,
+                 priority_texts: list[str] | None = None,
+                 click_option: str = "优先选择第一个选项",
+                 quickly_skip: bool = True,
+                 skip_built_in_options: bool = False,
+                 after_choose_delay_ms: int = 0,
+                 before_confirm_delay_ms: int = 0,
                  log: Callable[[str], None] = print):
         self.ctx = ctx
         self.enabled = True
-        self.prefer_text = prefer_text
+        self.priority_texts = list(priority_texts or ([prefer_text] if prefer_text else []))
+        self.click_option = click_option
+        self.quickly_skip = quickly_skip
+        self.skip_built_in_options = skip_built_in_options
+        self.after_choose_delay_ms = max(0, int(after_choose_delay_ms))
+        self.before_confirm_delay_ms = max(0, int(before_confirm_delay_ms))
         self.log = log
         # 选项图标出现在屏幕右侧偏下（ref 空间 ROI 收窄降误报）
         self.ro_option = RecognitionObject.template_match(
@@ -39,17 +51,34 @@ class AutoSkipTrigger:
     def on_frame(self, region: ImageRegion) -> None:
         options = region.find_multi(self.ro_option, limit=6)
         if options:
+            if self.skip_built_in_options or self.click_option == "不选择选项":
+                return
             chosen = options[0]
-            if self.prefer_text:
-                for o in options:
+            for preferred in self.priority_texts:
+                matched = None
+                for option in options:
                     # 选项文字在图标右侧：OCR 该行
-                    line = region.find(RecognitionObject.ocr(o.x + 30, o.y - 12, 800, 60))
-                    if line.is_exist() and self.prefer_text in line.text:
-                        chosen = o
+                    line = region.find(RecognitionObject.ocr(
+                        option.x + 30, option.y - 12, 800, 60
+                    ))
+                    if line.is_exist() and preferred in line.text:
+                        matched = option
                         break
+                if matched is not None:
+                    chosen = matched
+                    break
+            else:
+                if self.click_option == "优先选择最后一个选项":
+                    chosen = options[-1]
+                elif self.click_option == "随机选择选项":
+                    chosen = random.choice(options)
             self.log(f"[AutoSkip] 点击对话选项 @({chosen.x:.0f},{chosen.y:.0f})")
+            if self.after_choose_delay_ms:
+                self.ctx.sleep(self.after_choose_delay_ms)
             chosen.click()
             return
-        if region.find(self.ro_auto).is_exist():
+        if self.quickly_skip and region.find(self.ro_auto).is_exist():
             # 对话进行中且无选项 → 点中下部推进
+            if self.before_confirm_delay_ms:
+                self.ctx.sleep(self.before_confirm_delay_ms)
             self.ctx.input.click_ref(960, 820)

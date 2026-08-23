@@ -374,6 +374,21 @@ class JsScriptRuntime:
         expose("RecognitionObject", wrap(_RO()), proxy=False)
         expose("Point2f", Point2f, proxy=False)
 
+        def _create_image_region(mat, x=0, y=0):
+            value = getattr(mat, "__wrapped__", mat)
+            bgr = value.bgr if isinstance(value, Mat) else getattr(value, "bgr", None)
+            if bgr is None:
+                raise TypeError("ImageRegion 构造函数需要 Mat")
+            return wrap(ImageRegion(ctx, bgr, float(x), float(y)))
+
+        # Python callables are not constructable with JS ``new``. Wrap the
+        # sandboxed factory in a native JS constructor whose explicit object
+        # return value becomes the constructed ImageRegion.
+        g["ImageRegion"] = pm.eval(
+            "factory => function ImageRegion(mat, x = 0, y = 0) { "
+            "return factory(mat, x, y); }"
+        )(_create_image_region)
+
         # genshin 助手
         from .genshin_api import GenshinApi
         expose("genshin", wrap(GenshinApi(ctx, log)), proxy=False)
@@ -654,6 +669,41 @@ class JsScriptRuntime:
                 return caseInsensitive(this);
               }
 
+              function AutoSkipConfig() {
+                Object.assign(this, {
+                  enabled: true,
+                  quicklySkipConversationsEnabled: true,
+                  afterChooseOptionSleepDelay: 0,
+                  autoWaitDialogueOptionVoiceEnabled: false,
+                  dialogueOptionVoiceMaxWaitSeconds: 30,
+                  beforeClickConfirmDelay: 0,
+                  autoGetDailyRewardsEnabled: true,
+                  autoReExploreEnabled: true,
+                  autoReExploreCharacter: '',
+                  clickChatOption: '优先选择第一个选项',
+                  customPriorityOptionsEnabled: false,
+                  customPriorityOptions: '',
+                  autoHangoutEventEnabled: false,
+                  autoHangoutEndChoose: '',
+                  autoHangoutChooseOptionSleepDelay: 0,
+                  autoHangoutPressSkipEnabled: true,
+                  runBackgroundEnabled: false,
+                  bringGameToFrontAfterBackgroundDialogEnabled: false,
+                  submitGoodsEnabled: true,
+                  pictureInPictureEnabled: false,
+                  pictureInPictureSourceType: 'CaptureLoop',
+                  closePopupPagedEnabled: true,
+                  skipBuiltInClickOptions: false
+                });
+                this.isClickFirstChatOption = () =>
+                  this.clickChatOption === '优先选择第一个选项';
+                this.isClickRandomChatOption = () =>
+                  this.clickChatOption === '随机选择选项';
+                this.isClickNoneChatOption = () =>
+                  this.clickChatOption === '不选择选项';
+                return caseInsensitive(this);
+              }
+
               function CancellationTokenSource() {
                 this.cancelled = false;
                 this._callbacks = [];
@@ -713,14 +763,14 @@ class JsScriptRuntime:
               return {
                 FightFinishDetectConfig, AutoFightParam, AutoDomainParam,
                 AutoLeyLineOutcropParam, AutoStygianOnslaughtParam, AutoBossParam,
-                CancellationTokenSource, CancellationToken, PostMessage
+                AutoSkipConfig, CancellationTokenSource, CancellationToken, PostMessage
               };
             })()
         """)
         for name in (
             "FightFinishDetectConfig", "AutoFightParam", "AutoDomainParam",
             "AutoLeyLineOutcropParam", "AutoStygianOnslaughtParam", "AutoBossParam",
-            "CancellationTokenSource", "CancellationToken", "PostMessage",
+            "AutoSkipConfig", "CancellationTokenSource", "CancellationToken", "PostMessage",
         ):
             g[name] = constructors[name]
         pm.eval("""

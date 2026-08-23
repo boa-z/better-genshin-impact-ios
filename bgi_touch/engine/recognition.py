@@ -106,6 +106,39 @@ class RecognitionObject:
         ro.recognition_type = "Ocr"
         return ro
 
+    # ClearScript exposes Pascal/camel properties while the Python model uses
+    # snake_case internally. These aliases also survive when a result leaves
+    # the outer case-insensitive JS Proxy through another host method.
+    recognitionType = property(
+        lambda self: self.recognition_type,
+        lambda self, value: setattr(self, "recognition_type", str(value)),
+    )
+    regionOfInterest = property(
+        lambda self: self.roi,
+        lambda self, value: setattr(self, "roi", value),
+    )
+    templateImageMat = property(
+        lambda self: self.template,
+        lambda self, value: setattr(self, "template", value),
+    )
+    oneContainMatchText = property(
+        lambda self: self.one_contain_match_text,
+        lambda self, value: setattr(self, "one_contain_match_text", list(value)),
+    )
+    allContainMatchText = property(
+        lambda self: self.all_contain_match_text,
+        lambda self, value: setattr(self, "all_contain_match_text", list(value)),
+    )
+    regexMatchText = property(
+        lambda self: self.regex_match_text,
+        lambda self, value: setattr(self, "regex_match_text", list(value)),
+    )
+
+    def init_template(self) -> "RecognitionObject":
+        return self
+
+    initTemplate = init_template
+
 
 class Region:
     """已识别（或派生）的矩形。对脚本暴露 ref 坐标，内部持有设备像素矩形。"""
@@ -166,6 +199,22 @@ class Region:
     def empty_region(cls, ctx: "GameContext") -> "Region":
         return cls(ctx, 0, 0, 0, 0, empty=True)
 
+    isEmpty = is_empty
+    IsEmpty = is_empty
+    isExist = is_exist
+    IsExist = is_exist
+    Click = click
+    doubleClick = double_click
+    DoubleClick = double_click
+    Move = move
+    backgroundClick = background_click
+    BackgroundClick = background_click
+    Derive = derive
+    matchScore = property(
+        lambda self: self.score,
+        lambda self, value: setattr(self, "score", float(value)),
+    )
+
 
 class ImageRegion(Region):
     def __init__(self, ctx: "GameContext", bgr: np.ndarray, dx: float = 0, dy: float = 0):
@@ -191,18 +240,25 @@ class ImageRegion(Region):
         return x, y, int(min(w, w_img - x)), int(min(h, h_img - y))
 
     def find(self, ro: RecognitionObject) -> Region:
+        ro = getattr(ro, "__wrapped__", ro)
         results = self.find_multi(ro, limit=1)
         return results[0] if results else Region.empty_region(self.ctx)
 
     def find_multi(self, ro: RecognitionObject, limit: int = 10) -> list[Region]:
+        ro = getattr(ro, "__wrapped__", ro)
+        if not isinstance(ro, RecognitionObject):
+            raise TypeError("find/findMulti 需要 RecognitionObject")
         cx, cy, cw, ch = self._roi_to_device(ro.roi)
         crop = self.bgr[cy:cy + ch, cx:cx + cw]
         t = self.ctx.transform
 
         if ro.recognition_type == "TemplateMatch":
-            if ro.template is None:
+            template = getattr(ro.template, "__wrapped__", ro.template)
+            if template is None:
                 raise ValueError("TemplateMatch 缺少模板图像")
-            tpl = ro.template.gray()
+            if not isinstance(template, Mat):
+                raise TypeError("TemplateMatch 模板必须为 Mat")
+            tpl = template.gray()
             th, tw = tpl.shape[:2]
             tpl = cv2.resize(tpl, (max(1, round(tw * t.scale)), max(1, round(th * t.scale))),
                              interpolation=cv2.INTER_AREA if t.scale < 1 else cv2.INTER_LINEAR)
@@ -254,3 +310,15 @@ class ImageRegion(Region):
 
     def ocr_text(self) -> str:
         return " ".join(it.text for it in get_ocr().recognize(self.bgr))
+
+    srcMat = property(lambda self: self.src_mat)
+    SrcMat = property(lambda self: self.src_mat)
+    Find = find
+    findMulti = find_multi
+    FindMulti = find_multi
+    deriveCrop = derive_crop
+    DeriveCrop = derive_crop
+    deriveTo1080P = derive_to_1080p
+    DeriveTo1080P = derive_to_1080p
+    ocrText = ocr_text
+    OcrText = ocr_text

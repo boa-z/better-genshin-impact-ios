@@ -785,6 +785,33 @@ class TaskDispatcher:
                 health_roi=_tuple4(_value(config, "healthRoi", None), (720, 900, 480, 140)),
                 min_width_ref=int(_value(config, "minWidthRef", 55) or 55),
             )
+        elif name == "AutoSkip":
+            raw_priorities = str(_value(config, "customPriorityOptions", "") or "")
+            priority_texts = [
+                value.strip()
+                for value in raw_priorities.replace("\r", "\n").replace(";", "\n").split("\n")
+                if value.strip()
+            ] if bool(_value(config, "customPriorityOptionsEnabled", False)) else []
+            self.ctx.enable_trigger(
+                name,
+                click_option=str(
+                    _value(config, "clickChatOption", "优先选择第一个选项")
+                    or "优先选择第一个选项"
+                ),
+                priority_texts=priority_texts,
+                quickly_skip=bool(
+                    _value(config, "quicklySkipConversationsEnabled", True)
+                ),
+                skip_built_in_options=bool(
+                    _value(config, "skipBuiltInClickOptions", False)
+                ),
+                after_choose_delay_ms=max(
+                    0, int(_value(config, "afterChooseOptionSleepDelay", 0) or 0)
+                ),
+                before_confirm_delay_ms=max(
+                    0, int(_value(config, "beforeClickConfirmDelay", 0) or 0)
+                ),
+            )
         else:
             self.ctx.enable_trigger(name)
 

@@ -548,6 +548,10 @@ stygian.SetCombatStrategyPath("fight.txt");
 const boss = new AutoBossParam();
 boss.BossName = "急冻树";
 boss.RunCount = 4;
+const autoSkip = new AutoSkipConfig();
+autoSkip.ClickChatOption = "优先选择最后一个选项";
+autoSkip.CustomPriorityOptionsEnabled = true;
+autoSkip.CustomPriorityOptions = "优先项;备选项";
 
 let callbackCount = 0;
 const cts = new CancellationTokenSource();
@@ -572,6 +576,10 @@ const renamed = file.RenamePathSync("record/old.txt", "renamed/new.txt");
 const missingRename = file.renamePathSync("missing.txt", "renamed/missing.txt");
 const escaped = file.CreateDirectory("../outside-script");
 const mat = file.ReadImageMatWithResizeSync("source.png", 4, 5, 0);
+const imageRegion = new ImageRegion(file.ReadImageMatSync("source.png"), 3, 4);
+const imageFound = imageRegion.Find(
+  RecognitionObject.TemplateMatch(file.ReadImageMatSync("source.png"))
+).IsExist();
 const imageSaved = file.WriteImageSync("written.png", mat);
 const recognition = RecognitionObject.TemplateMatch(mat);
 recognition.Threshold = 0.61;
@@ -592,6 +600,8 @@ return JSON.stringify({
   combat: stygian.CombatScriptBagPath,
   boss: boss.bossName,
   bossRuns: boss.runCount,
+  autoSkipLast: autoSkip.isClickFirstChatOption() === false,
+  autoSkipPriority: autoSkip.customPriorityOptions,
   cancelled: cts.IsCancellationRequested,
   linkedCancelled: linked.isCancellationRequested,
   callbackCount,
@@ -604,6 +614,8 @@ return JSON.stringify({
   escaped,
   imageSaved,
   imageSize: [mat.Width, mat.Height],
+  imageRegion: [imageRegion.X, imageRegion.Y, imageRegion.Width, imageRegion.Height],
+  imageFound,
   recognitionThreshold: recognition.threshold,
   serverOffset: ServerTime.GetServerTimeZoneOffset()
 });
@@ -632,6 +644,8 @@ return JSON.stringify({
     assert result["leylineTimeout"] == 188
     assert result["leylineScan"] is True
     assert (result["boss"], result["bossRuns"]) == ("急冻树", 4)
+    assert result["autoSkipLast"] is True
+    assert result["autoSkipPriority"] == "优先项;备选项"
     assert result["cancelled"] is True
     assert result["linkedCancelled"] is True
     assert result["callbackCount"] == 1
@@ -644,6 +658,8 @@ return JSON.stringify({
     assert result["escaped"] is False
     assert result["imageSaved"] is True
     assert result["imageSize"] == [4, 5]
+    assert result["imageRegion"] == [3, 4, 8, 8]
+    assert result["imageFound"] is True
     assert result["recognitionThreshold"] == pytest.approx(0.61)
     assert isinstance(result["serverOffset"], int)
     assert (tmp_path / "callback.txt").read_text(encoding="utf-8") == "ok"
@@ -665,6 +681,37 @@ def test_genshin_teleport_to_statue_alias():
 
     assert api.teleportToStatue()
     api.tpToStatueOfTheSeven.assert_called_once_with()
+
+
+def test_dispatcher_maps_bettergi_auto_skip_config():
+    from unittest.mock import MagicMock
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    ctx = MagicMock()
+    TaskDispatcher(ctx).add_timer({
+        "name": "AutoSkip",
+        "config": {
+            "ClickChatOption": "优先选择最后一个选项",
+            "CustomPriorityOptionsEnabled": True,
+            "CustomPriorityOptions": "优先项; 备选项\n第三项",
+            "QuicklySkipConversationsEnabled": False,
+            "SkipBuiltInClickOptions": True,
+            "AfterChooseOptionSleepDelay": 120,
+            "BeforeClickConfirmDelay": 80,
+        },
+    })
+
+    ctx.triggers.clear.assert_called_once_with()
+    ctx.enable_trigger.assert_called_once_with(
+        "AutoSkip",
+        click_option="优先选择最后一个选项",
+        priority_texts=["优先项", "备选项", "第三项"],
+        quickly_skip=False,
+        skip_built_in_options=True,
+        after_choose_delay_ms=120,
+        before_confirm_delay_ms=80,
+    )
 
 
 def test_auto_fight_dispatcher_keeps_upstream_timeout_seconds():

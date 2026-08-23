@@ -241,6 +241,8 @@ bgi-touch run scripts/js/AutoCrystalfly --set 循环次数=5 --set 使用队伍=
 manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI 的
 `CreateDirectory`、`RenamePathSync` 和大小写不敏感调用，也为使用特性检测的社区
 脚本提供 `file.mkdir` 别名；所有创建、写入和重命名仍限制在当前脚本目录内。
+脚本也可按上游方式直接 `new ImageRegion(mat, x, y)` 对本地图片做识别，或通过
+`new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先文本与点击延迟。
 
 ### 5.4 执行战斗策略 / 键鼠宏 / pathing
 
