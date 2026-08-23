@@ -28,6 +28,7 @@ SUPPORTED = [
     "RecognitionObject", "Mat", "Point2f", "Region", "ImageRegion",
     "DesktopRegion", "Pen", "Color", "BvImage", "Mat.Get", "Vec3b",
     "CombatScenes", "Avatar",
+    "Task", "host.",
     "GameCaptureRegion", "GridScreenName", "ItemIconRecognitionMode",
     "BvPage", "BvLocator", "OpenCvSharp.Rect", "getVersion",
     "AutoSkipConfig", "TemplateMatch", "ocr",

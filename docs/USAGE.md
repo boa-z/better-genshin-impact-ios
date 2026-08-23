@@ -264,6 +264,8 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `CombatScenes` 与 `Avatar` 会从 `config/party.json`（或脚本 `TeamNames`）建立队伍，
 支持按名称/槽位选人、切人、技能/爆发/攻击/重击/冲刺/移动、技能 CD 和底层按键接口；
 所有持续输入都经同一 DeviceHub game session 执行，脚本结束会统一释放按住状态。
+ClearScript 的 `Task` 在 SpiderMonkey 中映射为原生 `Promise`；受限 `host` 对象提供
+`newObj/newArr/newVar/newVarOfArr/typeOf/isType/cast`，但不会暴露任意 Python 类型。
 社区脚本可直接使用静态 ES `import`/`export`（命名、默认、别名、图片和 JSON 模块），
 解析范围受脚本目录与 `manifest.library` 沙箱约束。转换 bettergi-scripts-list 包时，
 对仓库公共 `packages` 的相对导入会复制到包内 `.bgi-touch-vendor` 并重写路径，部署后

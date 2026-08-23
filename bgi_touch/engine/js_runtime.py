@@ -749,6 +749,32 @@ class JsScriptRuntime:
         )
         g["Avatar"] = avatar_type
 
+        # ClearScript exposes Microsoft.Extensions.Task and HostFunctions.
+        # Promise is the native SpiderMonkey equivalent for await/then, while
+        # the small host object retains the safe construction/array helpers
+        # scripts commonly use without exposing arbitrary Python types.
+        pm.eval(r"""
+            globalThis.Task = Promise;
+            globalThis.host = Object.freeze({
+              newObj(Type, ...args) {
+                if (typeof Type !== 'function') throw new TypeError('host.newObj 需要构造函数');
+                return new Type(...args);
+              },
+              newArr(_Type, length) {
+                return Array.from({length: Math.max(0, Number(length) | 0)}, () => null);
+              },
+              newVar(_Type, value = null) { return {value}; },
+              newVarOfArr(_Type, dimensions) {
+                const depth = Math.max(1, Number(dimensions) | 0);
+                const build = level => level >= depth ? null : [build(level + 1)];
+                return {value: build(0)};
+              },
+              typeOf(value) { return typeof value; },
+              isType(Type, value) { return typeof Type === 'function' && value instanceof Type; },
+              cast(_Type, value) { return value; }
+            });
+        """)
+
         from ..tasks.character_development import CharacterDevelopmentTask
         expose(
             "characterDevelopmentTask",

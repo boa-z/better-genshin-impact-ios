@@ -54,13 +54,17 @@ scenes.updateActionSchedulerByCd('钟离,12;夜兰,9;枫原万叶');
 const parsed = Avatar.parseActionSchedulerByCd('夜兰', '夜兰,6;钟离,12');
 const current = scenes.currentAvatar();
 scenes.afterTask();
+const taskValue = await new Task(resolve => resolve(42));
+const rect = host.newObj(OpenCvSharp.Rect, 1, 2, 3, 4);
+const hostArray = host.newArr(Number, 3);
 return JSON.stringify({
   count: avatars.Count,
   names: Array.from(avatars, x => x.name),
   current, active: scenes.lastActiveAvatarIndex,
   cdPositive: cd > 7.5 && cd <= 8,
   configuredCd: second.manualSkillCd,
-  parsed
+  parsed, taskValue, rect: [rect.X, rect.Y, rect.Width, rect.Height],
+  hostArrayLength: hostArray.length
 });
 """,
         encoding="utf-8",
@@ -88,6 +92,9 @@ return JSON.stringify({
         "cdPositive": True,
         "configuredCd": 9,
         "parsed": 6,
+        "taskValue": 42,
+        "rect": [1, 2, 3, 4],
+        "hostArrayLength": 3,
     }
     input_simulator.switch_party_slot.assert_called_once_with(2)
     assert input_simulator.key_press.call_args_list == [
