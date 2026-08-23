@@ -111,7 +111,8 @@ class ScriptCancelled(Exception):
 class JsScriptRuntime:
     def __init__(self, ctx: GameContext, script_dir: str | Path,
                  settings: dict | None = None, log: Callable[[str], None] = print,
-                 party_slots: dict[str, int] | None = None):
+                 party_slots: dict[str, int] | None = None,
+                 strategy_roots: list[str | Path] | None = None):
         import pythonmonkey as pm
 
         self.pm = pm
@@ -122,6 +123,11 @@ class JsScriptRuntime:
         self.manifest = self._load_manifest()
         self.settings = self._load_settings(settings or {})
         self.party_slots = party_slots or {}
+        default_strategy_root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
+        self.strategy_roots = [
+            Path(value).expanduser().resolve()
+            for value in (strategy_roots or [default_strategy_root])
+        ]
         self._install_globals()
 
     # ---- manifest / settings ----
@@ -340,6 +346,32 @@ class JsScriptRuntime:
             def isExists(self, p): return rt._resolve(p).exists()
         expose("file", wrap(_File()), proxy=False)
 
+        class _StrategyFile:
+            def __init__(self, root: Path):
+                self.root = root
+
+            def _resolve(self, path):
+                target = (self.root / str(path)).resolve()
+                if not target.is_relative_to(self.root):
+                    raise PermissionError(f"策略路径越出根目录: {path}")
+                return target
+
+            def readPathSync(self, folder="./"):
+                base = self._resolve(folder)
+                if not base.is_dir():
+                    return []
+                return [
+                    str(path.relative_to(self.root))
+                    for path in sorted(base.iterdir())
+                ]
+
+            def isFolder(self, path): return self._resolve(path).is_dir()
+            def isFile(self, path): return self._resolve(path).is_file()
+            def isExists(self, path): return self._resolve(path).exists()
+
+        strategy_root = self.strategy_roots[0]
+        expose("strategyFile", wrap(_StrategyFile(strategy_root)), proxy=False)
+
         # http
         class _Http:
             def request(self, method, url, body=None, headers_json=""):
@@ -456,6 +488,8 @@ class JsScriptRuntime:
             party_slots=self.party_slots,
             log=log,
             cancelled=lambda: rt.cancelled,
+            strategy_roots=[rt.script_dir, *rt.strategy_roots],
+            restrict_strategy_roots=True,
         )
 
         class _CTS:

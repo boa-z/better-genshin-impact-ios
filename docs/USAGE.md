@@ -245,6 +245,8 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先文本与点击延迟。
 `BvPage/BvLocator` 的 OCR、模板定位、等待重试、点击和“点击直到消失”链式 API 也已
 接入同一截图上下文；`OpenCvSharp.OpenCvSharp.Rect` 会映射为 1080p 参考坐标 ROI。
+`strategyFile` 以项目的 `scripts/combat` 为受限根目录；Dispatcher 会依次解析 JS
+脚本包内路径和该公共策略目录，因此浏览器返回的相对策略名可直接传给任务参数。
 
 ### 5.4 执行战斗策略 / 键鼠宏 / pathing
 

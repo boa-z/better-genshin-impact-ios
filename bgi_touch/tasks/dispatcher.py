@@ -90,17 +90,47 @@ class TaskDispatcher:
         party_slots: dict[str, int] | None = None,
         log: Callable[[str], None] = print,
         cancelled: Callable[[], bool] | None = None,
+        strategy_roots: list[str | Path] | None = None,
+        restrict_strategy_roots: bool = False,
     ):
         self.ctx = ctx
         self.party_slots = party_slots or {}
         self.log = log
         self.cancelled = cancelled or (lambda: False)
+        default_root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
+        self.strategy_roots = [
+            Path(value).expanduser().resolve()
+            for value in (strategy_roots or [default_root])
+        ]
+        self.restrict_strategy_roots = bool(restrict_strategy_roots)
 
     def _is_cancelled(self, token: Any = None) -> bool:
         return bool(self.cancelled()) or _requested(token)
 
     def _callback(self, token: Any = None) -> Callable[[], bool]:
         return lambda: self._is_cancelled(token)
+
+    def _resolve_strategy(self, value: Any, *, allow_directory: bool = False) -> str | None:
+        if value is None or not str(value).strip():
+            return None
+        raw = Path(str(value)).expanduser()
+        candidates = [] if self.restrict_strategy_roots else (
+            [raw] if raw.is_absolute() else [Path.cwd() / raw]
+        )
+        candidates.extend(root / raw for root in self.strategy_roots)
+        if not raw.suffix:
+            candidates.extend(
+                root / f"{raw}.txt" for root in self.strategy_roots
+            )
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if self.restrict_strategy_roots and not any(
+                resolved.is_relative_to(root) for root in self.strategy_roots
+            ):
+                continue
+            if resolved.is_file() or (allow_directory and resolved.is_dir()):
+                return str(resolved)
+        return None if self.restrict_strategy_roots else str(value)
 
     def run_task(self, task: Any, ct: Any = None) -> Any:
         name = str(_value(task, "name", task))
@@ -166,7 +196,7 @@ class TaskDispatcher:
 
     def run_auto_fight_task(self, param: Any = None, ct: Any = None) -> bool:
         from .auto_fight import AutoFightTask
-        strategy = _value(param, "combatStrategyPath", None)
+        strategy = self._resolve_strategy(_value(param, "combatStrategyPath", None))
         timeout = _value(param, "timeout", None)
         # BetterGI AutoFightParam.Timeout is expressed in seconds.
         timeout_s = float(timeout) if timeout else 120
@@ -222,7 +252,9 @@ class TaskDispatcher:
         return AutoDomainTask(
             self.ctx,
             rounds=int(_value(param, "domainRoundNum", _value(param, "rounds", 1)) or 1),
-            combat_strategy_path=_value(param, "combatStrategyPath", None),
+            combat_strategy_path=self._resolve_strategy(
+                _value(param, "combatStrategyPath", None)
+            ),
             use_condensed_resin=bool(_value(param, "useCondensedResin", True)),
             reward_recognition_enabled=bool(
                 _value(param, "rewardRecognitionEnabled", False)
@@ -404,6 +436,7 @@ class TaskDispatcher:
             "combatScriptBagPath",
             _value(param, "combatStrategyPath", None),
         )
+        strategy = self._resolve_strategy(strategy, allow_directory=True)
         raw_priority = _value(
             param, "resinPriorityList", ("浓缩树脂", "原粹树脂")
         )
@@ -505,19 +538,13 @@ class TaskDispatcher:
             )
             if explicit_route else None
         )
-        strategy = _value(param, "combatStrategyPath", None)
+        strategy = self._resolve_strategy(
+            _value(param, "combatStrategyPath", None)
+        )
         if not strategy:
             strategy_name = str(_value(param, "strategyName", "") or "")
             if strategy_name and strategy_name != "根据队伍自动选择":
-                root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
-                for candidate in (
-                    Path(strategy_name).expanduser(),
-                    root / strategy_name,
-                    root / f"{strategy_name}.txt",
-                ):
-                    if candidate.is_file():
-                        strategy = str(candidate)
-                        break
+                strategy = self._resolve_strategy(strategy_name)
         timeout = _value(param, "timeout", 240)
         return AutoBossTask(
             self.ctx,
@@ -551,17 +578,11 @@ class TaskDispatcher:
             param, "combatStrategyPath",
             _value(fight_config, "combatStrategyPath", None),
         )
+        strategy = self._resolve_strategy(strategy)
         if not strategy:
             strategy_name = str(_value(fight_config, "strategyName", "") or "")
             if strategy_name:
-                root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
-                for candidate in (
-                    Path(strategy_name).expanduser(), root / strategy_name,
-                    root / f"{strategy_name}.txt",
-                ):
-                    if candidate.is_file():
-                        strategy = str(candidate)
-                        break
+                strategy = self._resolve_strategy(strategy_name)
         timeout = _value(
             fight_config, "timeout", _value(param, "timeout", 120)
         )
