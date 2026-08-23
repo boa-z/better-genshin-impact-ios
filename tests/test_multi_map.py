@@ -61,6 +61,7 @@ def test_map_locator_discovers_independent_map_layers(tmp_path, monkeypatch):
 
     assert locator.map_name == "SeaOfBygoneEras"
     assert len(locator.layers) == 3
+    assert locator.layer_ids == [0, -1, -2]
     assert stores[0].keypoints.name == "SeaOfBygoneEras_0_1024_SIFT.kp.bin"
     assert locator.config.world_to_image(0, 0) == (6144, 3072)
 

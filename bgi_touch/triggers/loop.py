@@ -36,39 +36,63 @@ class TriggerLoop:
         self._generation = 0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._restart_requested = False
 
     def add(self, trigger: Trigger) -> None:
         with self._state_lock:
+            removed = [t for t in self.triggers if t.name == trigger.name and t is not trigger]
             self.triggers = [t for t in self.triggers if t.name != trigger.name] + [trigger]
             self._generation += 1
+        self._close(removed)
         self.log(f"[trigger] 启用 {trigger.name}")
 
     def clear(self) -> None:
         with self._state_lock:
+            removed = self.triggers
             self.triggers = []
             self._generation += 1
+        self._close(removed)
 
     def remove(self, name: str) -> None:
         with self._state_lock:
+            removed = [t for t in self.triggers if t.name == name]
             self.triggers = [t for t in self.triggers if t.name != name]
             self._generation += 1
+        self._close(removed)
 
     def replace(self, triggers: list[Trigger]) -> None:
         with self._state_lock:
+            retained = {id(trigger) for trigger in triggers}
+            removed = [trigger for trigger in self.triggers if id(trigger) not in retained]
             self.triggers = list(triggers)
             self._generation += 1
+        self._close(removed)
+
+    @staticmethod
+    def _close(triggers: list[Trigger]) -> None:
+        for trigger in triggers:
+            close = getattr(trigger, "close", None)
+            if callable(close):
+                close()
 
     def start(self) -> None:
         with self._state_lock:
             if self._thread and self._thread.is_alive():
+                if self._stop.is_set() and self.triggers:
+                    # A screenshot may still be finishing after stop(). Keep
+                    # the new trigger list and restart as soon as that producer
+                    # exits instead of silently leaving it inactive.
+                    self._restart_requested = True
                 return
             self._stop.clear()
+            self._restart_requested = False
             self._thread = threading.Thread(target=self._run, daemon=True, name="trigger-loop")
             self._thread.start()
 
     def stop(self) -> None:
         with self._state_lock:
             self._generation += 1
+            self._restart_requested = False
         self._stop.set()
 
     @property
@@ -76,6 +100,10 @@ class TriggerLoop:
         with self._state_lock:
             return bool(self.triggers and self._thread and self._thread.is_alive()
                         and not self._stop.is_set())
+
+    def get(self, name: str) -> Trigger | None:
+        with self._state_lock:
+            return next((trigger for trigger in self.triggers if trigger.name == name), None)
 
     def pause(self) -> TriggerState:
         """停止帧循环并等待当前截图/触发器调用退出。
@@ -89,6 +117,7 @@ class TriggerLoop:
                               and not self._stop.is_set())
             self.triggers = []
             self._stop.set()
+            self._restart_requested = False
             self._generation += 1
             generation = self._generation
             thread = self._thread
@@ -116,27 +145,37 @@ class TriggerLoop:
 
     def _run(self) -> None:
         self.log(f"[trigger] 帧循环启动（{1/self.interval:.1f} fps）")
-        while not self._stop.is_set():
-            t0 = time.monotonic()
-            with self._state_lock:
-                triggers = list(self.triggers)
-            if triggers:
-                try:
-                    region = self.ctx.capture_region()
-                    # pause() may have been called while capture_region was in
-                    # flight. Do not let that already captured frame send input.
-                    if self._stop.is_set():
-                        break
-                    for tr in triggers:
+        try:
+            while not self._stop.is_set():
+                t0 = time.monotonic()
+                with self._state_lock:
+                    triggers = list(self.triggers)
+                if triggers:
+                    try:
+                        region = self.ctx.capture_region()
+                        # pause() may have been called while capture_region was in
+                        # flight. Do not let that already captured frame send input.
                         if self._stop.is_set():
                             break
-                        if getattr(tr, "enabled", True):
-                            tr.on_frame(region)
-                except Exception as e:
-                    # 帧循环不因单帧失败而退出（截到竖屏/设备重连等）
-                    self.log(f"[trigger] 帧处理失败: {e}")
-                    self._stop.wait(1.0)
-            wait = self.interval - (time.monotonic() - t0)
-            if wait > 0 and self._stop.wait(wait):
-                break
-        self.log("[trigger] 帧循环停止")
+                        for tr in triggers:
+                            if self._stop.is_set():
+                                break
+                            if getattr(tr, "enabled", True):
+                                tr.on_frame(region)
+                    except Exception as e:
+                        # 帧循环不因单帧失败而退出（截到竖屏/设备重连等）
+                        self.log(f"[trigger] 帧处理失败: {e}")
+                        self._stop.wait(1.0)
+                wait = self.interval - (time.monotonic() - t0)
+                if wait > 0 and self._stop.wait(wait):
+                    break
+        finally:
+            self.log("[trigger] 帧循环停止")
+            current = threading.current_thread()
+            with self._state_lock:
+                if self._thread is current:
+                    self._thread = None
+                restart = self._restart_requested and bool(self.triggers)
+                self._restart_requested = False
+            if restart:
+                self.start()

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,14 @@ import numpy as np
 from .feature_store import SiftFeatureStore
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets" / "map"
+
+
+def map_layer_from_path(path: str | Path) -> int:
+    """Return the BetterGI map layer encoded in an asset file name."""
+
+    match = re.search(r"_(-?\d+)_\d+(?:_SIFT)?\.", Path(path).name)
+    return int(match.group(1)) if match else 0
+
 
 @dataclass(frozen=True)
 class MapDefinition:
@@ -113,12 +122,14 @@ class MapLocator:
             raise FileNotFoundError(
                 f"缺少地图特征资产 {base}。先运行 tools/fetch_map_assets.py")
         self.layers: list[SiftFeatureStore] = []
+        self.layer_ids: list[int] = []
         for keypoints in keypoint_paths:
             descriptors = keypoints.with_name(
                 keypoints.name.removesuffix(".kp.bin") + ".mat.png"
             )
             if descriptors.is_file():
                 self.layers.append(SiftFeatureStore(keypoints, descriptors))
+                self.layer_ids.append(map_layer_from_path(keypoints))
         if not self.layers:
             raise FileNotFoundError(f"地图描述子不完整: {base}")
         self.fine = self.layers[0]  # backward-compatible diagnostic handle
@@ -127,6 +138,7 @@ class MapLocator:
         self._sift = cv2.SIFT_create()
         self._lock = threading.Lock()
         self.prev: tuple[float, float] | None = None  # 当前地图原生特征尺度像素
+        self.last_layer: int | None = None
 
     # ---- 小地图帧处理 ----
 
@@ -149,20 +161,22 @@ class MapLocator:
             # ① 有历史位置：在每层的一个原生地图块半径内局部匹配。
             if self.prev is not None:
                 local_radius = float(self.definition.feature_scale)
-                for layer in self.layers:
+                for index, layer in enumerate(self.layers):
                     r = layer.locate(
                         desc, pts, center, prev=self.prev,
                         local_radius=local_radius,
                     )
                     if r is not None:
                         self.prev = (r.x, r.y)
+                        self.last_layer = self.layer_ids[index]
                         return self.prev
 
             # ② 全局回退：逐层全量匹配（较慢，仅在丢失时使用）。
-            for layer in self.layers:
+            for index, layer in enumerate(self.layers):
                 r = layer.locate(desc, pts, center)
                 if r is not None:
                     self.prev = (r.x, r.y)
+                    self.last_layer = self.layer_ids[index]
                     return self.prev
             return None
 
@@ -174,3 +188,4 @@ class MapLocator:
 
     def reset(self) -> None:
         self.prev = None
+        self.last_layer = None

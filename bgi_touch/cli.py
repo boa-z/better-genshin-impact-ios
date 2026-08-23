@@ -193,8 +193,8 @@ def cmd_pathing(args) -> int:
 def cmd_trigger(args) -> int:
     """长驻运行实时触发器（Ctrl-C 停止）。"""
     ctx = _context(args)
-    if not (args.pick or args.skip or args.eat):
-        print("未指定触发器（--pick / --skip / --eat）")
+    if not (args.pick or args.skip or args.eat or args.map_mask):
+        print("未指定触发器（--pick / --skip / --eat / --map-mask）")
         ctx.close()
         return 2
     try:
@@ -204,6 +204,8 @@ def cmd_trigger(args) -> int:
             ctx.enable_trigger("AutoSkip")
         if args.eat:
             ctx.enable_trigger("AutoEat")
+        if args.map_mask:
+            ctx.enable_trigger("MapMask", map_name=args.map_name)
         import time
         while True:
             time.sleep(1)
@@ -274,10 +276,12 @@ def main() -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8899)
     sub.add_parser("reconnect", help="重建设备通道（触控失效时使用）")
-    p = sub.add_parser("trigger", help="长驻实时触发器（自动拾取/自动剧情/自动吃药）")
+    p = sub.add_parser("trigger", help="长驻实时触发器（含地图遮罩追踪）")
     p.add_argument("--pick", action="store_true", help="自动拾取")
     p.add_argument("--skip", action="store_true", help="自动剧情推进")
     p.add_argument("--eat", action="store_true", help="自动吃药")
+    p.add_argument("--map-mask", action="store_true", help="地图遮罩与位置追踪")
+    p.add_argument("--map-name", default="Teyvat", help="追踪地图名称（默认 Teyvat）")
 
     args = parser.parse_args()
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,

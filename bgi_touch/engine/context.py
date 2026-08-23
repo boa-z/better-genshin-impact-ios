@@ -247,8 +247,13 @@ class GameContext:
         elif name in ("AutoEat", "自动吃药"):
             from ..tasks.auto_eat import AutoEatTrigger
             self.triggers.add(AutoEatTrigger(self, log=self.triggers.log, **kwargs))
+        elif name in ("MapMask", "地图遮罩"):
+            from ..triggers.map_mask import MapMaskTrigger
+            self.triggers.add(MapMaskTrigger(self, log=self.triggers.log, **kwargs))
         else:
-            raise ValueError(f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat）")
+            raise ValueError(
+                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask）"
+            )
         self.triggers.start()
 
     def close(self) -> None:

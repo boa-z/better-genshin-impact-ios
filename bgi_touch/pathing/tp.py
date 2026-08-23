@@ -23,7 +23,13 @@ from ..engine.context import GameContext
 from ..engine.recognition import Mat, RecognitionObject
 from ..vision.ocr import get_ocr
 from .feature_store import SiftFeatureStore
-from .map_locator import ASSETS, MapConfig, get_map_definition, resolve_map_name
+from .map_locator import (
+    ASSETS,
+    MapConfig,
+    get_map_definition,
+    map_layer_from_path,
+    resolve_map_name,
+)
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
 MIN_VIEW_PX_PER_FEATURE = 0.25
@@ -40,6 +46,7 @@ class BigMapLocator:
         base = ASSETS / self.map_name
         scale = self.definition.big_map_scale
         stores = []
+        layer_ids = []
         for keypoints in sorted(
             base.glob(f"{self.map_name}_*_{scale}_SIFT.kp.bin"),
             key=lambda path: ("_0_" not in path.name, path.name),
@@ -49,10 +56,13 @@ class BigMapLocator:
             )
             if descriptors.is_file():
                 stores.append(SiftFeatureStore(keypoints, descriptors))
+                layer_ids.append(map_layer_from_path(keypoints))
         if not stores:
             raise FileNotFoundError(f"缺少大地图特征资产: {base}")
         self.stores = stores
+        self.layer_ids = layer_ids
         self.store = stores[0]
+        self.last_layer: int | None = None
         self._sift = cv2.SIFT_create()
 
     def world_to_feature(self, wx: float, wy: float) -> tuple[float, float]:
@@ -80,7 +90,7 @@ class BigMapLocator:
             return None
         pts = np.float32([k.pt for k in kps])
         center = (small.shape[1] / 2, small.shape[0] / 2)
-        for store in self.stores:
+        for index, store in enumerate(self.stores):
             r = store.locate(desc, pts, center)
             if r is not None and r.scale > 1e-6:
                 px_per_feature = 1.0 / (resize * r.scale)
@@ -89,6 +99,7 @@ class BigMapLocator:
                 # one train point. Real map zoom levels stay within this very
                 # generous screen-pixels / feature-pixel range.
                 if MIN_VIEW_PX_PER_FEATURE <= px_per_feature <= MAX_VIEW_PX_PER_FEATURE:
+                    self.last_layer = self.layer_ids[index]
                     return r.x, r.y, px_per_feature
         return None
 

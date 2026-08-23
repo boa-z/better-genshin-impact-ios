@@ -833,6 +833,21 @@ class TaskDispatcher:
                     0, int(_value(config, "beforeClickConfirmDelay", 0) or 0)
                 ),
             )
+        elif name in ("MapMask", "地图遮罩"):
+            self.ctx.enable_trigger(
+                "MapMask",
+                map_name=str(
+                    _value(config, "mapName", _value(config, "map_name", "Teyvat"))
+                    or "Teyvat"
+                ),
+                mini_map_enabled=bool(
+                    _value(
+                        config,
+                        "miniMapMaskEnabled",
+                        _value(config, "mini_map_enabled", True),
+                    )
+                ),
+            )
         else:
             self.ctx.enable_trigger(name)
 

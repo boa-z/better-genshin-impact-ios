@@ -16,6 +16,7 @@ from ..engine.recognition import ImageRegion, Mat, RecognitionObject
 
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "stygian"
+TELEPORT_TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
 
 PAIMON_HUD = RecognitionObject.template_match(
     Mat.from_file(str(TEMPLATES / "paimon_menu.png")),
@@ -29,8 +30,23 @@ PAIMON_HUD = RecognitionObject.template_match(
 # and door screen stay below 0.40.
 PAIMON_HUD.threshold = 0.50
 
+MAP_CLOSE = RecognitionObject.template_match(
+    Mat.from_file(str(TELEPORT_TEMPLATES / "MapCloseButton.png")),
+    1600,
+    0,
+    320,
+    140,
+)
+MAP_CLOSE.threshold = 0.65
+
 
 def is_main_ui(ctx, bgr: np.ndarray) -> bool:
     """Return whether the normal gameplay HUD is visible."""
 
     return ImageRegion(ctx, bgr).find(PAIMON_HUD).is_exist()
+
+
+def is_big_map_ui(ctx, bgr: np.ndarray) -> bool:
+    """Return whether the safe-area-aware big-map close button is visible."""
+
+    return ImageRegion(ctx, bgr).find(MAP_CLOSE).is_exist()

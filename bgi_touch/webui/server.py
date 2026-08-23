@@ -528,6 +528,91 @@ def api_triggers_set(body: dict):
         return _err(e)
 
 
+# ---- BetterGI 地图遮罩 / 地图追踪 ----
+
+def _map_mask_trigger():
+    if _ctx is None:
+        return None
+    loop = getattr(_ctx, "_trigger_loop", None)
+    return None if loop is None else loop.get("MapMask")
+
+
+def _inactive_map_mask_state() -> dict:
+    return {
+        "active": False,
+        "mapName": "Teyvat",
+        "layer": 0,
+        "scene": "disabled",
+        "inBigMapUi": False,
+        "positionValid": False,
+        "position": None,
+        "viewport": None,
+        "error": None,
+        "sequence": 0,
+        "ageMs": 0,
+    }
+
+
+@app.get("/api/map-mask")
+def api_map_mask():
+    """Return cached tracking state without connecting or capturing a frame."""
+
+    trigger = _map_mask_trigger()
+    return _inactive_map_mask_state() if trigger is None else trigger.state.snapshot()
+
+
+@app.post("/api/map-mask")
+def api_map_mask_set(body: dict):
+    try:
+        enabled = bool(body.get("enabled", True))
+        if not enabled:
+            if _ctx is not None:
+                loop = getattr(_ctx, "_trigger_loop", None)
+                if loop is not None:
+                    loop.remove("MapMask")
+                    if not loop.triggers:
+                        loop.stop()
+            return _inactive_map_mask_state()
+
+        ctx = get_ctx()
+        ctx.enable_trigger(
+            "MapMask",
+            map_name=str(body.get("mapName", "Teyvat") or "Teyvat"),
+            mini_map_enabled=bool(body.get("miniMapMaskEnabled", True)),
+        )
+        trigger = ctx.triggers.get("MapMask")
+        return trigger.state.snapshot() if trigger is not None else _inactive_map_mask_state()
+    except ValueError as error:
+        return _err(error, 400)
+    except Exception as error:
+        return _err(error)
+
+
+@app.get("/api/map-mask/maps")
+def api_map_mask_maps():
+    from ..triggers.map_mask import map_catalog
+
+    try:
+        return {"maps": map_catalog()}
+    except Exception as error:
+        return _err(error)
+
+
+@app.get("/api/map-mask/maps/{map_name}/layers/{layer}/image")
+def api_map_mask_image(map_name: str, layer: int):
+    from ..triggers.map_mask import map_image_path
+
+    try:
+        path = map_image_path(map_name, layer)
+        if path is None:
+            return _err(FileNotFoundError(f"地图图像不存在: {map_name} layer {layer}"), 404)
+        return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+    except ValueError as error:
+        return _err(error, 404)
+    except Exception as error:
+        return _err(error)
+
+
 @app.get("/api/logs")
 def api_logs(after: int = 0):
     with _log_lock:

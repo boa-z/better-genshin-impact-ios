@@ -304,6 +304,9 @@ bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json --dry-run
 
 # 地图追踪：需要 tools/fetch_map_assets.py 安装的官方地图/SIFT 资产
 bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
+
+# 地图遮罩：持续输出小地图坐标或大地图当前视野，Ctrl-C 停止
+bgi-touch trigger --map-mask --map-name Teyvat
 ```
 
 地图追踪会按小地图 SIFT 的局部结果优先、全局结果回退策略更新坐标；连续跳点或
@@ -438,6 +441,9 @@ bgi-touch web --host 0.0.0.0 --port 8899   # 局域网访问（注意无鉴权�
   预览是否为缓存帧。
 - **手动控制**：WASD 按住式移动（按下=key_down，松开=key_up）、普攻/E/Q/跳/
   冲刺/F/菜单、1-4 切人、视角四方向。
+- **地图遮罩**：可选择 BetterGI 的七张地图；主界面显示玩家世界坐标，大地图显示
+  当前视野，且保留地下楼层编号。定位帧来自实时触发器已有的截图流，前端每秒只读取
+  小型 `/api/map-mask` 内存快照，底图由本地地图资产提供，不会干扰任务截图器。
 - **脚本面板**：列出 `scripts/` 下已转换的四类脚本及 BetterGI SoloTask（JS 包显示兼容结论），
   一键运行/停止；同一时刻只允许一个任务，顶部标签显示
   idle/running/done/error/cancelled。
@@ -512,5 +518,6 @@ run <脚本目录> [--set k=v]   运行 JS 脚本包
 combat <文件.txt>            执行战斗策略 DSL
 macro <宏.json>              回放键鼠宏（自动翻译为触控）
 pathing <文件.json> [--dry-run]  解析/执行 pathing 路线
+trigger [--pick|--skip|--eat|--map-mask]  长驻实时触发器
 web [--host H] [--port P]    启动 WebUI 控制台（默认 127.0.0.1:8899）
 ```

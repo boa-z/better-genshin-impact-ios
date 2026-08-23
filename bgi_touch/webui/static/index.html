@@ -41,6 +41,9 @@
   ul.scripts li .v { color:var(--dim); font-size:11px; }
   #logs { height:200px; overflow:auto; background:#0c0f13; border-radius:6px; padding:8px;
           font:12px/1.5 ui-monospace,Menlo,monospace; white-space:pre-wrap; }
+  #mapCanvas { display:block; width:100%; aspect-ratio:16/9; border-radius:8px;
+               background:#0c0f13; border:1px solid var(--line); }
+  #mapInfo { color:var(--dim); font-size:12px; margin-top:6px; min-height:18px; }
   .tag { padding:1px 8px; border-radius:10px; font-size:11px; }
   .tag.running { background:var(--warn); color:#111; }
   .tag.idle, .tag.done { background:#2a323c; color:var(--dim); }
@@ -109,6 +112,18 @@
         <label><input type="checkbox" id="trigSkip" onchange="setTrigger()"> 自动剧情</label>
         <label><input type="checkbox" id="trigEat" onchange="setTrigger()"> 自动吃药</label>
       </div>
+    </section>
+
+    <section class="panel">
+      <h2>地图遮罩 · 缓存帧追踪</h2>
+      <div class="row">
+        <label><input type="checkbox" id="trigMap" onchange="setMapMask()"> 启用追踪</label>
+        <select id="mapName" onchange="mapSelectionChanged()">
+          <option value="Teyvat">提瓦特</option>
+        </select>
+      </div>
+      <canvas id="mapCanvas" width="640" height="360"></canvas>
+      <div id="mapInfo">追踪未启用；地图面板不会主动请求设备截图。</div>
     </section>
 
     <section class="panel">
@@ -298,6 +313,132 @@ async function setTrigger() {
     $('#trigEat').checked = (d.active||[]).includes('AutoEat');
   } catch {}
 })();
+
+// ---- 地图遮罩：只轮询定位快照与本地地图，不触碰 DeviceHub 截图器 ----
+let mapCatalog = [];
+let mapState = null;
+let mapImageKey = '';
+let mapImageFailed = false;
+const mapImage = new Image();
+mapImage.decoding = 'async';
+mapImage.onload = () => { mapImageFailed = false; drawMap(); };
+mapImage.onerror = () => {
+  mapImageFailed = true;
+  $('#mapInfo').textContent = '地图图像加载失败';
+  drawMap();
+};
+
+async function loadMapCatalog() {
+  try {
+    const data = await (await fetch('/api/map-mask/maps')).json();
+    if (data.error) throw new Error(data.error);
+    mapCatalog = data.maps || [];
+    const select = $('#mapName'); select.innerHTML = '';
+    mapCatalog.forEach(item => {
+      const option = document.createElement('option');
+      option.value = item.name;
+      option.textContent = item.displayName + (item.available ? '' : '（无显示图）');
+      select.append(option);
+    });
+  } catch (error) {
+    $('#mapInfo').textContent = `地图目录失败: ${error.message}`;
+  }
+}
+
+function activeMapLayer(state) {
+  const map = mapCatalog.find(item => item.name === state?.mapName);
+  if (!map) return null;
+  return (map.layers || []).find(item => item.id === state.layer) ||
+         (map.layers || []).find(item => item.id === 0) || map.layers?.[0] || null;
+}
+
+function ensureMapImage(state) {
+  const layer = activeMapLayer(state);
+  if (!layer) {
+    mapImageKey = `${state?.mapName || 'unknown'}:none`;
+    mapImageFailed = true;
+    return;
+  }
+  const key = `${state.mapName}:${layer.id}`;
+  if (key === mapImageKey) return;
+  mapImageKey = key; mapImageFailed = false; mapImage.src = layer.url;
+}
+
+function drawMap() {
+  const canvas = $('#mapCanvas');
+  const cssWidth = Math.max(320, Math.round(canvas.clientWidth || 640));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const width = Math.round(cssWidth * dpr), height = Math.round(cssWidth * 9 / 16 * dpr);
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width; canvas.height = height;
+  }
+  const context = canvas.getContext('2d');
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = '#0c0f13'; context.fillRect(0, 0, width, height);
+  if (!mapState?.active || mapImageFailed || !mapImage.complete || !mapImage.naturalWidth) return;
+
+  const position = mapState.position;
+  const viewport = mapState.viewport;
+  if (!position || !viewport || !mapState.positionValid) return;
+  let sx = viewport.x, sy = viewport.y;
+  let sw = Math.max(1, viewport.width), sh = Math.max(1, viewport.height);
+  const targetRatio = width / height;
+  if (sw / sh < targetRatio) {
+    const expanded = sh * targetRatio; sx -= (expanded - sw) / 2; sw = expanded;
+  } else {
+    const expanded = sw / targetRatio; sy -= (expanded - sh) / 2; sh = expanded;
+  }
+  if (sw > mapImage.naturalWidth) { sx = 0; sw = mapImage.naturalWidth; }
+  else sx = Math.max(0, Math.min(sx, mapImage.naturalWidth - sw));
+  if (sh > mapImage.naturalHeight) { sy = 0; sh = mapImage.naturalHeight; }
+  else sy = Math.max(0, Math.min(sy, mapImage.naturalHeight - sh));
+  context.drawImage(mapImage, sx, sy, sw, sh, 0, 0, width, height);
+
+  const px = (position.imageX - sx) / sw * width;
+  const py = (position.imageY - sy) / sh * height;
+  context.beginPath(); context.arc(px, py, 8 * dpr, 0, Math.PI * 2);
+  context.fillStyle = '#4da3ff'; context.fill();
+  context.lineWidth = 3 * dpr; context.strokeStyle = '#fff'; context.stroke();
+}
+
+function applyMapState(state) {
+  const redraw = !mapState || state.sequence !== mapState.sequence ||
+                 state.active !== mapState.active || state.mapName !== mapState.mapName ||
+                 state.layer !== mapState.layer;
+  mapState = state;
+  $('#trigMap').checked = !!state.active;
+  if (state.active && $('#mapName').value !== state.mapName) $('#mapName').value = state.mapName;
+  ensureMapImage(state); if (redraw) drawMap();
+  if (!state.active) {
+    $('#mapInfo').textContent = '追踪未启用；地图面板不会主动请求设备截图。'; return;
+  }
+  const scene = {waiting:'等待帧', gameplay:'主界面', bigMap:'大地图', other:'其他界面'}[state.scene] || state.scene;
+  const p = state.position;
+  const noImage = activeMapLayer(state) ? '' : ' · 无本地底图';
+  $('#mapInfo').textContent = p && state.positionValid
+    ? `${scene} · ${state.mapName} 层 ${state.layer} · 世界坐标 (${p.worldX.toFixed(1)}, ${p.worldY.toFixed(1)}) · 状态龄 ${state.ageMs} ms${noImage}`
+    : `${scene} · 等待有效定位${state.error ? ` · ${state.error}` : ''}${noImage}`;
+}
+
+async function setMapMask() {
+  const response = await post('/api/map-mask', {
+    enabled: $('#trigMap').checked,
+    mapName: $('#mapName').value,
+    miniMapMaskEnabled: true
+  });
+  if (response.ok) applyMapState(await response.json());
+}
+function mapSelectionChanged() { if ($('#trigMap').checked) setMapMask(); }
+
+async function pollMapMask() {
+  try {
+    const state = await (await fetch('/api/map-mask', {cache:'no-store'})).json();
+    if (!state.error || 'active' in state) applyMapState(state);
+  } catch {}
+  setTimeout(pollMapMask, 1000);
+}
+loadMapCatalog().then(pollMapMask);
+window.addEventListener('resize', () => { if (mapState?.active) drawMap(); });
 
 // ---- 日志轮询 ----
 let logSeq = 0;
