@@ -56,11 +56,40 @@ class Mat:
     def empty(self) -> bool:
         return self.bgr.size == 0
 
+    def channels(self) -> int:
+        if self.bgr.ndim < 3:
+            return 1
+        return int(self.bgr.shape[2])
+
+    def get(self, _pixel_type, row: int, column: int):
+        """Return one pixel using OpenCvSharp's ``Mat.Get<T>`` shape.
+
+        Community scripts pass ``OpenCvSharp.Vec3b`` as the first argument
+        and consume the returned value through ``Item0``/``Item1``/``Item2``.
+        The type token is intentionally only a compatibility marker: the
+        actual channel count comes from the matrix.
+        """
+        y, x = int(row), int(column)
+        if y < 0 or x < 0 or y >= self.rows or x >= self.cols:
+            raise IndexError(f"Mat.Get 坐标越界: row={y}, column={x}")
+        pixel = self.bgr[y, x]
+        if np.isscalar(pixel):
+            values = [int(pixel)]
+        else:
+            values = [int(value) for value in np.asarray(pixel).reshape(-1)]
+        return {
+            **{f"Item{index}": value for index, value in enumerate(values)},
+            **{f"item{index}": value for index, value in enumerate(values)},
+        }
+
     def dispose(self) -> None:
         self.bgr = np.empty((0, 0, 3), dtype=np.uint8)
         self._gray = None
 
     Dispose = dispose
+    Empty = empty
+    Channels = channels
+    Get = get
 
 
 class Point2f:
@@ -142,6 +171,20 @@ class RecognitionObject:
         lambda self: self.regex_match_text,
         lambda self, value: setattr(self, "regex_match_text", list(value)),
     )
+    RecognitionType = recognitionType
+    RegionOfInterest = regionOfInterest
+    TemplateImageMat = templateImageMat
+    Name = property(
+        lambda self: self.name,
+        lambda self, value: setattr(self, "name", str(value)),
+    )
+    Threshold = property(
+        lambda self: self.threshold,
+        lambda self, value: setattr(self, "threshold", float(value)),
+    )
+    OneContainMatchText = oneContainMatchText
+    AllContainMatchText = allContainMatchText
+    RegexMatchText = regexMatchText
 
     def init_template(self) -> "RecognitionObject":
         return self
@@ -294,6 +337,52 @@ class Region:
         lambda self: self.score,
         lambda self, value: setattr(self, "score", float(value)),
     )
+
+
+class DesktopRegion(Region):
+    """Touch equivalent of BetterGI's unscaled desktop coordinate region."""
+
+    def __init__(self, ctx: "GameContext", width: float | None = None,
+                 height: float | None = None):
+        # Script-visible desktop coordinates use the same 1920x1080 reference
+        # space as every other BetterGI host region. Device pixels stay internal.
+        ref_width = float(width) if width is not None else 1920.0
+        ref_height = float(height) if height is not None else 1080.0
+        super().__init__(
+            ctx, 0, 0,
+            ctx.transform.scale_len(ref_width),
+            ctx.transform.scale_len(ref_height),
+        )
+
+    def desktop_region_click(self, x: float, y: float, width: float = 0,
+                             height: float = 0) -> None:
+        self.click_to(x, y, width, height)
+
+    def desktop_region_move(self, _x: float, _y: float, _width: float = 0,
+                            _height: float = 0) -> None:
+        # iOS has no persistent mouse pointer. Keeping this a no-op matches the
+        # global moveMouseTo compatibility contract.
+        return None
+
+    def derive_capture(self, mat: Mat, x: float, y: float) -> "ImageRegion":
+        value = getattr(mat, "__wrapped__", mat)
+        if not isinstance(value, Mat):
+            raise TypeError("DesktopRegion.Derive 需要 Mat")
+        dx, dy = self.ctx.transform.to_device(float(x), float(y))
+        return ImageRegion(self.ctx, value.bgr, dx, dy)
+
+    def derive(self, *args):
+        if args and isinstance(getattr(args[0], "__wrapped__", args[0]), Mat):
+            if len(args) != 3:
+                raise TypeError("DesktopRegion.Derive(Mat, x, y) 需要三个参数")
+            return self.derive_capture(args[0], args[1], args[2])
+        return super().derive(*args)
+
+    desktopRegionClick = desktop_region_click
+    DesktopRegionClick = desktop_region_click
+    desktopRegionMove = desktop_region_move
+    DesktopRegionMove = desktop_region_move
+    Derive = derive
 
 
 class ImageRegion(Region):

@@ -258,6 +258,9 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `Point2f`、`Region`、`ImageRegion` 与 `GameCaptureRegion` 均支持 HostType 构造语义。
 `GameCaptureRegion.gameRegion1080PPosClick()` 会直接使用 1920×1080 参考坐标触控，
 背包任务相关的 `GridScreenName` 和 `ItemIconRecognitionMode` 枚举也已暴露。
+`DesktopRegion`、`Color`、`Pen`、`BvImage` 以及 `OpenCvSharp.Vec3b` 已提供；其中
+`BvImage("Feature:file.png")` 可读取脚本 `assets/Feature` 或本项目内置任务素材，
+`Mat.Get(Vec3b, row, column)` 返回兼容 `Item0/Item1/Item2` 的 BGR 像素值。
 社区脚本可直接使用静态 ES `import`/`export`（命名、默认、别名、图片和 JSON 模块），
 解析范围受脚本目录与 `manifest.library` 沙箱约束。转换 bettergi-scripts-list 包时，
 对仓库公共 `packages` 的相对导入会复制到包内 `.bgi-touch-vendor` 并重写路径，部署后

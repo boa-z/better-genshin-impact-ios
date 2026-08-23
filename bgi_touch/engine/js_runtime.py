@@ -26,7 +26,14 @@ from ..pathing.executor import PathingExecutor
 from ..pathing.model import PathingTask
 from .context import GameContext
 from .keymouse_hook import KeyMouseHookManager
-from .recognition import ImageRegion, Mat, Point2f, RecognitionObject, Region
+from .recognition import (
+    DesktopRegion,
+    ImageRegion,
+    Mat,
+    Point2f,
+    RecognitionObject,
+    Region,
+)
 
 CASE_PROXY = """
 (function (target) {
@@ -480,6 +487,80 @@ class JsScriptRuntime:
             "return factory(x, y, w, h); }"
         )(_create_region)
 
+        def _create_desktop_region(width=None, height=None):
+            return wrap(DesktopRegion(ctx, width, height))
+
+        def _desktop_click(x, y, width=0, height=0):
+            ctx.input.click_ref(
+                float(x) + float(width) / 2,
+                float(y) + float(height) / 2,
+            )
+
+        desktop_region_type = pm.eval(r"""
+            (factory, click, moveBy) => {
+              function DesktopRegion(width, height) {
+                return factory(width, height);
+              }
+              Object.assign(DesktopRegion, {
+                desktopRegionClick: click, DesktopRegionClick: click,
+                desktopRegionMove: () => {}, DesktopRegionMove: () => {},
+                desktopRegionMoveBy: moveBy, DesktopRegionMoveBy: moveBy
+              });
+              return DesktopRegion;
+            }
+        """)(_create_desktop_region, _desktop_click, lambda dx, dy: ctx.input.move_camera_by(
+            float(dx), float(dy)
+        ))
+        g["DesktopRegion"] = desktop_region_type
+
+        pm.eval(r"""
+            (() => {
+              function makeColor(a, r, g, b, name = '') {
+                const value = { a:Number(a), r:Number(r), g:Number(g), b:Number(b), name:String(name) };
+                Object.defineProperties(value, {
+                  A:{get:()=>value.a}, R:{get:()=>value.r},
+                  G:{get:()=>value.g}, B:{get:()=>value.b}, Name:{get:()=>value.name},
+                  isEmpty:{get:()=>false}, IsEmpty:{get:()=>false}
+                });
+                return Object.freeze(value);
+              }
+              function Color(a = 255, r = 0, g = 0, b = 0) {
+                if (arguments.length === 3) return makeColor(255, a, r, g);
+                return makeColor(a, r, g, b);
+              }
+              Color.fromArgb = Color.FromArgb = (...args) => {
+                if (args.length === 1) {
+                  const argb = Number(args[0]) >>> 0;
+                  return makeColor(argb >>> 24, argb >>> 16 & 255, argb >>> 8 & 255, argb & 255);
+                }
+                if (args.length === 3) return makeColor(255, ...args);
+                if (args.length === 4) return makeColor(...args);
+                throw new TypeError('Color.FromArgb 需要 1、3 或 4 个参数');
+              };
+              const palette = {
+                Transparent:[0,255,255,255], Black:[255,0,0,0], White:[255,255,255,255],
+                Red:[255,255,0,0], Green:[255,0,128,0], Blue:[255,0,0,255],
+                Yellow:[255,255,255,0], Orange:[255,255,165,0],
+                Coral:[255,255,127,80], Lime:[255,0,255,0],
+                LimeGreen:[255,50,205,50], Cyan:[255,0,255,255],
+                Magenta:[255,255,0,255], Gray:[255,128,128,128]
+              };
+              for (const [name, rgba] of Object.entries(palette)) {
+                Object.defineProperty(Color, name, {value:makeColor(...rgba, name), enumerable:true});
+              }
+              function Pen(color = Color.Red, width = 1) {
+                this.color = color; this.width = Number(width);
+                Object.defineProperties(this, {
+                  Color:{get:()=>this.color,set:v=>this.color=v},
+                  Width:{get:()=>this.width,set:v=>this.width=Number(v)}
+                });
+              }
+              Pen.prototype.dispose = Pen.prototype.Dispose = function () {};
+              globalThis.Color = Color;
+              globalThis.Pen = Pen;
+            })()
+        """)
+
         def _create_image_region(mat, x=0, y=0):
             value = getattr(mat, "__wrapped__", mat)
             bgr = value.bgr if isinstance(value, Mat) else getattr(value, "bgr", None)
@@ -551,7 +632,7 @@ class JsScriptRuntime:
             "Object.freeze({GridIcon:'GridIcon',Item:'Item'})"
         )
 
-        from .bv import BvPage
+        from .bv import BvImage, BvPage
 
         to_region_collection = pm.eval(
             "values => { const result = Array.from(values); "
@@ -570,8 +651,53 @@ class JsScriptRuntime:
         g["BvPage"] = pm.eval(
             "factory => function BvPage() { return factory(); }"
         )(_create_bv_page)
+
+        asset_aliases = {
+            "UseRedeemCode": "redeem",
+            "QuickSereniteaPot": "quick_serenitea",
+            "AutoArtifactSalvage": "artifact_salvage",
+            "AutoCook": "autocook",
+            "AutoFishing": "autofishing",
+            "AutoMusicGame": "automusic",
+            "AutoOpenChest": "autoopenchest",
+            "AutoPick": "autopick",
+            "AutoSkip": "autoskip",
+            "CharacterDevelopment": "character_development",
+            "QuickClaimReward": "quick_claim",
+            "QuickTeleport": "teleport",
+        }
+        builtin_template_root = Path(__file__).resolve().parents[2] / "assets" / "templates"
+
+        def _resolve_bv_asset(value: str) -> Mat:
+            name = str(value)
+            if ":" not in name:
+                raise ValueError("BvImage 素材名称必须为 Feature:file.png")
+            feature, relative = name.split(":", 1)
+            safe_relative = Path(relative.replace("\\", "/"))
+            if safe_relative.is_absolute() or ".." in safe_relative.parts:
+                raise PermissionError(f"BvImage 素材路径越界: {name}")
+            roots = [
+                rt.script_dir / "assets" / feature,
+                builtin_template_root / asset_aliases.get(feature, feature.lower()),
+            ]
+            for root in roots:
+                candidate = (root / safe_relative).resolve()
+                if candidate.is_relative_to(root.resolve()) and candidate.is_file():
+                    return Mat.from_file(str(candidate))
+            raise FileNotFoundError(f"未找到 BvImage 素材: {name}")
+
+        def _create_bv_image(template_asset, roi=None, threshold=0.8):
+            return wrap(BvImage(
+                str(template_asset), _resolve_bv_asset, roi, float(threshold)
+            ))
+
+        g["BvImage"] = pm.eval(
+            "factory => function BvImage(asset, roi, threshold = 0.8) { "
+            "return factory(asset, roi, threshold); }"
+        )(_create_bv_image)
         g["OpenCvSharp"] = pm.eval(
             "(() => {"
+            "function Vec3b() {}"
             "function Rect(x = 0, y = 0, width = 0, height = 0) {"
             "this.x=Number(x);this.y=Number(y);this.width=Number(width);"
             "this.height=Number(height);"
@@ -579,7 +705,7 @@ class JsScriptRuntime:
             "Y:{get:()=>this.y,set:v=>this.y=Number(v)},"
             "Width:{get:()=>this.width,set:v=>this.width=Number(v)},"
             "Height:{get:()=>this.height,set:v=>this.height=Number(v)}}); }"
-            "return { OpenCvSharp: { Rect }, Rect };"
+            "return { OpenCvSharp: { Rect, Vec3b }, Rect, Vec3b };"
             "})()"
         )
 

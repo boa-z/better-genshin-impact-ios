@@ -7,7 +7,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .recognition import ImageRegion, RecognitionObject, Region
+from .recognition import ImageRegion, Mat, RecognitionObject, Region
 
 
 @dataclass
@@ -54,6 +54,32 @@ def _rect(value: Any) -> tuple[float, float, float, float] | None:
         )
     result = tuple(float(part) for part in parts)
     return None if result == (0.0, 0.0, 0.0, 0.0) else result
+
+
+class BvImage:
+    """BetterGI image locator descriptor backed by a RecognitionObject."""
+
+    def __init__(self, template_asset: str, asset_resolver: Callable[[str], Any],
+                 roi: Any = None, threshold: float = 0.8):
+        name = str(template_asset)
+        resolved = _unwrap(asset_resolver(name))
+        if isinstance(resolved, (str, bytes)):
+            resolved = Mat.from_file(str(resolved))
+        if not isinstance(resolved, Mat):
+            raise TypeError("BvImage 素材解析器必须返回 Mat 或文件路径")
+        self.recognition_object = RecognitionObject.template_match(resolved)
+        self.recognition_object.name = name
+        self.recognition_object.roi = _rect(roi)
+        self.recognition_object.threshold = float(threshold)
+
+    recognitionObject = property(lambda self: self.recognition_object)
+    RecognitionObject = recognitionObject
+
+    def to_recognition_object(self) -> RecognitionObject:
+        return self.recognition_object
+
+    toRecognitionObject = to_recognition_object
+    ToRecognitionObject = to_recognition_object
 
 
 class BvLocator:
@@ -274,13 +300,19 @@ class BvPage:
                 self.ctx, ro, to_collection=self.to_collection,
                 check_cancel=self.check_cancel, text=target,
             )
+        elif isinstance(target, BvImage):
+            locator = BvLocator(
+                self.ctx, target.to_recognition_object(),
+                to_collection=self.to_collection,
+                check_cancel=self.check_cancel,
+            )
         elif isinstance(target, RecognitionObject):
             locator = BvLocator(
                 self.ctx, target, to_collection=self.to_collection,
                 check_cancel=self.check_cancel,
             )
         else:
-            raise TypeError("BvPage.Locator 需要文字或 RecognitionObject")
+            raise TypeError("BvPage.Locator 需要文字、BvImage 或 RecognitionObject")
         locator.timeout = self.default_timeout
         locator.retry_interval = self.default_retry_interval
         return locator

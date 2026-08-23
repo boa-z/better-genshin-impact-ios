@@ -26,6 +26,7 @@ from ..engine.js_modules import rewrite_import_specifiers
 SUPPORTED = [
     "sleep", "log.", "click", "keyPress", "keyDown", "keyUp", "captureGameRegion",
     "RecognitionObject", "Mat", "Point2f", "Region", "ImageRegion",
+    "DesktopRegion", "Pen", "Color", "BvImage", "Mat.Get", "Vec3b",
     "GameCaptureRegion", "GridScreenName", "ItemIconRecognitionMode",
     "BvPage", "BvLocator", "OpenCvSharp.Rect", "getVersion",
     "AutoSkipConfig", "TemplateMatch", "ocr",
