@@ -521,10 +521,10 @@ def api_triggers():
 
 @app.post("/api/triggers")
 def api_triggers_set(body: dict):
-    """body: {"AutoPick": true, "AutoSkip": false, "AutoEat": false}"""
+    """Toggle realtime triggers without creating extra capture producers."""
     try:
         ctx = get_ctx()
-        for name in ("AutoPick", "AutoSkip", "AutoEat"):
+        for name in ("AutoPick", "AutoSkip", "AutoEat", "SkillCd"):
             if name not in body:
                 continue
             if body[name]:
@@ -537,6 +537,84 @@ def api_triggers_set(body: dict):
         return {"active": [t.name for t in ctx.triggers.triggers]}
     except Exception as e:
         return _err(e)
+
+
+# ---- BetterGI 技能冷却提示 ----
+
+def _skill_cd_trigger():
+    if _ctx is None:
+        return None
+    loop = getattr(_ctx, "_trigger_loop", None)
+    return None if loop is None else loop.get("SkillCd")
+
+
+def _inactive_skill_cd_state() -> dict:
+    return {
+        "active": False,
+        "scene": "disabled",
+        "visible": False,
+        "activeSlot": 1,
+        "team": [],
+        "config": {
+            "pX": 1520.0,
+            "pY": 245.0,
+            "gap": 91.2,
+            "scale": 1.0,
+            "backgroundNormalColor": "#FFFFFFFF",
+            "textNormalColor": "#DA4A23FF",
+            "backgroundReadyColor": "#FFFFFFFF",
+            "textReadyColor": "#5DCC17FF",
+            "hideWhenZero": False,
+            "triggerOnSkillUse": False,
+        },
+        "sequence": 0,
+        "ageMs": 0,
+    }
+
+
+@app.get("/api/skill-cd")
+def api_skill_cd():
+    """Return the cached cooldown snapshot without connecting or capturing."""
+
+    trigger = _skill_cd_trigger()
+    return _inactive_skill_cd_state() if trigger is None else trigger.state.snapshot()
+
+
+@app.post("/api/skill-cd")
+def api_skill_cd_set(body: dict):
+    try:
+        enabled = bool(body.get("enabled", True))
+        if not enabled:
+            if _ctx is not None:
+                loop = getattr(_ctx, "_trigger_loop", None)
+                if loop is not None:
+                    loop.remove("SkillCd")
+                    if not loop.triggers:
+                        loop.stop()
+            return _inactive_skill_cd_state()
+
+        ctx = get_ctx()
+        ctx.enable_trigger(
+            "SkillCd",
+            party_slots=body.get("partySlots"),
+            custom_cd_list=body.get("customCdList", []),
+            trigger_on_skill_use=bool(body.get("triggerOnSkillUse", False)),
+            hide_when_zero=bool(body.get("hideWhenZero", False)),
+            p_x=body.get("pX", 1520.0),
+            p_y=body.get("pY", 245.0),
+            gap=body.get("gap", 91.2),
+            scale=body.get("scale", 1.0),
+            background_normal_color=body.get("backgroundNormalColor", "#FFFFFFFF"),
+            text_normal_color=body.get("textNormalColor", "#DA4A23FF"),
+            background_ready_color=body.get("backgroundReadyColor", "#FFFFFFFF"),
+            text_ready_color=body.get("textReadyColor", "#5DCC17FF"),
+        )
+        trigger = ctx.triggers.get("SkillCd")
+        return trigger.state.snapshot() if trigger is not None else _inactive_skill_cd_state()
+    except (TypeError, ValueError) as error:
+        return _err(error, 400)
+    except Exception as error:
+        return _err(error)
 
 
 # ---- BetterGI 地图遮罩 / 地图追踪 ----

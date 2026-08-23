@@ -250,14 +250,18 @@ class GameContext:
         elif name in ("MapMask", "地图遮罩"):
             from ..triggers.map_mask import MapMaskTrigger
             self.triggers.add(MapMaskTrigger(self, log=self.triggers.log, **kwargs))
+        elif name in ("SkillCd", "技能冷却"):
+            from ..triggers.skill_cd import SkillCdTrigger
+            self.triggers.add(SkillCdTrigger(self, log=self.triggers.log, **kwargs))
         else:
             raise ValueError(
-                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask）"
+                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask/SkillCd）"
             )
         self.triggers.start()
 
     def close(self) -> None:
         if self._trigger_loop is not None:
             self._trigger_loop.stop()
+            self._trigger_loop.clear()
         self.input.release_all()
         self.device.close()

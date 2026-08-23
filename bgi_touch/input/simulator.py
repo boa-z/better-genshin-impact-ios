@@ -14,6 +14,8 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 from ..device.client import DeviceClient
 from ..vision.coordinate import ScreenTransform
@@ -48,6 +50,9 @@ class InputSimulator:
         self._profile_heartbeat: threading.Thread | None = None
         # 移动端队伍列表只显示 3 个非当前角色的行，切人需按当前活跃槽位换算行号
         self._active_slot = 1
+        self._event_lock = threading.Lock()
+        self._event_listeners: dict[int, Callable[[dict[str, Any]], None]] = {}
+        self._next_listener_id = 1
 
     # ---- helpers ----
 
@@ -239,38 +244,79 @@ class InputSimulator:
         finally:
             self._after_direct_input()
 
+    def subscribe(self, listener: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+        """Subscribe to completed BetterGI input edges.
+
+        Listeners are deliberately local to the simulator: they observe the
+        same semantic actions scripts send to DeviceHub without polling the
+        keyboard or requesting another screenshot.  A broken listener must
+        never interrupt game input.
+        """
+        if not callable(listener):
+            raise TypeError("input listener 必须可调用")
+        with self._event_lock:
+            listener_id = self._next_listener_id
+            self._next_listener_id += 1
+            self._event_listeners[listener_id] = listener
+
+        def unsubscribe() -> None:
+            with self._event_lock:
+                self._event_listeners.pop(listener_id, None)
+
+        return unsubscribe
+
+    def _emit(self, event_type: str, **values: Any) -> None:
+        lock = getattr(self, "_event_lock", None)
+        if lock is None:
+            return
+        event = {"type": event_type, "timestamp": time.monotonic(), **values}
+        with lock:
+            listeners = list(self._event_listeners.values())
+        for listener in listeners:
+            try:
+                listener(dict(event))
+            except Exception as error:
+                print(f"[input] 事件监听器失败（已忽略）：{error}")
+
     # ---- key API（BetterGI 语义）----
 
     def switch_party_slot(self, slot: int) -> None:
         """切换到队伍槽位 1-4（PC 数字键语义）。"""
         if slot == self._active_slot:
             return
-        others = [s for s in (1, 2, 3, 4) if s != self._active_slot]
+        from_slot = self._active_slot
+        others = [s for s in (1, 2, 3, 4) if s != from_slot]
         if slot not in others:
             return
         if self._profile_press(str(slot)):
             self._active_slot = slot
+            self._emit("party_switch", from_slot=from_slot, to_slot=slot)
             return
         row = others.index(slot) + 1
         x, y = self._button_pos(f"partyRow{row}")
         self._direct_input(lambda: self.device.tap(x, y, **self._wh))
         self._active_slot = slot
+        self._emit("party_switch", from_slot=from_slot, to_slot=slot)
 
     def key_press(self, key: str, hold_ms: int = 80) -> None:
+        canonical = normalize_key(key)
         b = self.layout.binding(key)
         if b is None:
             if self._profile_press(key, hold_ms):
+                self._emit("key_press", key=canonical)
                 return
             return  # 未映射按键在触控端为空操作
         if b["type"] == "party":
             self.switch_party_slot(int(b["slot"]))
         elif self._profile_press(key, hold_ms):
+            self._emit("key_press", key=canonical)
             return
         elif b["type"] == "button":
             x, y = self._button_pos(b["button"])
             self._direct_input(
                 lambda: self.device.tap(x, y, hold_ms=hold_ms, **self._wh)
             )
+            self._emit("key_press", key=canonical)
         else:
             contact = self._joystick_contact([b])
             if contact:
@@ -279,8 +325,10 @@ class InputSimulator:
                         [contact], duration_ms=max(150, hold_ms), **self._wh
                     )
                 )
+                self._emit("key_press", key=canonical)
 
     def key_down(self, key: str) -> None:
+        canonical = normalize_key(key)
         b = self.layout.binding(key)
         if b is None:
             return
@@ -288,9 +336,12 @@ class InputSimulator:
             self.switch_party_slot(int(b["slot"]))
             return
         with self._held_lock:
-            self._held[normalize_key(key)] = b
+            was_held = canonical in self._held
+            self._held[canonical] = b
         if not self._sync_profile_keys():
             self._ensure_pump()
+        if not was_held:
+            self._emit("key_down", key=canonical)
 
     def key_up(self, key: str) -> None:
         with self._held_lock:

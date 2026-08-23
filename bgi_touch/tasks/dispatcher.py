@@ -849,6 +849,30 @@ class TaskDispatcher:
                     )
                 ),
             )
+        elif name in ("SkillCd", "技能冷却"):
+            self.ctx.enable_trigger(
+                "SkillCd",
+                party_slots=self.party_slots or None,
+                custom_cd_list=_value(config, "customCdList", []),
+                trigger_on_skill_use=bool(_value(config, "triggerOnSkillUse", False)),
+                hide_when_zero=bool(_value(config, "hideWhenZero", False)),
+                p_x=float(_value(config, "pX", 1520.0) or 0),
+                p_y=float(_value(config, "pY", 245.0) or 0),
+                gap=float(_value(config, "gap", 91.2) or 0),
+                scale=float(_value(config, "scale", 1.0) or 0),
+                background_normal_color=str(
+                    _value(config, "backgroundNormalColor", "#FFFFFFFF") or "#FFFFFFFF"
+                ),
+                text_normal_color=str(
+                    _value(config, "textNormalColor", "#DA4A23FF") or "#DA4A23FF"
+                ),
+                background_ready_color=str(
+                    _value(config, "backgroundReadyColor", "#FFFFFFFF") or "#FFFFFFFF"
+                ),
+                text_ready_color=str(
+                    _value(config, "textReadyColor", "#5DCC17FF") or "#5DCC17FF"
+                ),
+            )
         else:
             self.ctx.enable_trigger(name)
 

@@ -20,6 +20,11 @@
   #screenwrap { position:relative; }
   #screen { width:100%; border-radius:8px; display:block; cursor:crosshair;
             background:#000; min-height:200px; user-select:none; -webkit-user-drag:none; }
+  #skillCdLayer { position:absolute; inset:0; overflow:hidden; border-radius:8px;
+                  pointer-events:none; }
+  .skill-cd { position:absolute; min-width:42px; padding:2px 7px; border-radius:12px;
+              text-align:center; font:700 20px/1.25 ui-monospace,Menlo,monospace;
+              box-shadow:0 1px 4px #0008; }
   .toolbar { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
   button, select, input[type=text] { background:#232a33; color:var(--fg); border:1px solid var(--line);
            border-radius:6px; padding:6px 12px; font-size:13px; cursor:pointer; }
@@ -74,7 +79,7 @@
 <main>
   <section class="panel">
     <h2>屏幕 · 点击=点按 拖拽=滑动</h2>
-    <div id="screenwrap"><img id="screen" alt="screen"></div>
+    <div id="screenwrap"><img id="screen" alt="screen"><div id="skillCdLayer"></div></div>
     <div class="toolbar">
       <label><input type="checkbox" id="annotate"> 布局标注</label>
       <label>刷新
@@ -111,6 +116,7 @@
         触发器：<label><input type="checkbox" id="trigPick" onchange="setTrigger()"> 自动拾取</label>
         <label><input type="checkbox" id="trigSkip" onchange="setTrigger()"> 自动剧情</label>
         <label><input type="checkbox" id="trigEat" onchange="setTrigger()"> 自动吃药</label>
+        <label><input type="checkbox" id="trigSkillCd" onchange="setSkillCd()"> 技能冷却</label>
       </div>
     </section>
 
@@ -311,8 +317,54 @@ async function setTrigger() {
     $('#trigPick').checked = (d.active||[]).includes('AutoPick');
     $('#trigSkip').checked = (d.active||[]).includes('AutoSkip');
     $('#trigEat').checked = (d.active||[]).includes('AutoEat');
+    $('#trigSkillCd').checked = (d.active||[]).includes('SkillCd');
   } catch {}
 })();
+
+// ---- 技能冷却：只轮询内存快照，不触碰 DeviceHub 截图器 ----
+let skillCdState = null;
+function refXToPreview(x, width, height) {
+  const scale = height / 1080;
+  if (x < 640) return x * scale;
+  if (x > 1280) return width - (1920 - x) * scale;
+  return width / 2 + (x - 960) * scale;
+}
+function renderSkillCd(state) {
+  skillCdState = state;
+  $('#trigSkillCd').checked = !!state.active;
+  const layer = $('#skillCdLayer'); layer.innerHTML = '';
+  if (!state.active || !state.visible || !img.clientWidth || !img.clientHeight) return;
+  const config = state.config || {};
+  const factor = img.clientHeight / 1080;
+  const baseX = refXToPreview(+config.pX || 0, img.clientWidth, img.clientHeight);
+  const baseY = (+config.pY || 0) * factor;
+  (state.team || []).forEach((avatar, index) => {
+    if (!avatar.visible) return;
+    const ready = !!avatar.ready;
+    const value = document.createElement('div'); value.className = 'skill-cd';
+    value.textContent = Number(avatar.remaining || 0).toFixed(1);
+    value.title = `${avatar.slot}. ${avatar.name}`;
+    value.style.left = `${baseX}px`;
+    value.style.top = `${baseY + index * (+config.gap || 0) * factor}px`;
+    value.style.transform = `scale(${+config.scale || 0})`;
+    value.style.transformOrigin = 'top left';
+    value.style.background = ready ? config.backgroundReadyColor : config.backgroundNormalColor;
+    value.style.color = ready ? config.textReadyColor : config.textNormalColor;
+    layer.append(value);
+  });
+}
+async function setSkillCd() {
+  const response = await post('/api/skill-cd', {enabled: $('#trigSkillCd').checked});
+  if (response.ok) renderSkillCd(await response.json());
+}
+async function pollSkillCd() {
+  try {
+    const state = await (await fetch('/api/skill-cd', {cache:'no-store'})).json();
+    if (!state.error) renderSkillCd(state);
+  } catch {}
+  setTimeout(pollSkillCd, 500);
+}
+pollSkillCd();
 
 // ---- 地图遮罩：只轮询定位快照与本地地图，不触碰 DeviceHub 截图器 ----
 let mapCatalog = [];
@@ -438,7 +490,10 @@ async function pollMapMask() {
   setTimeout(pollMapMask, 1000);
 }
 loadMapCatalog().then(pollMapMask);
-window.addEventListener('resize', () => { if (mapState?.active) drawMap(); });
+window.addEventListener('resize', () => {
+  if (mapState?.active) drawMap();
+  if (skillCdState) renderSkillCd(skillCdState);
+});
 
 // ---- 日志轮询 ----
 let logSeq = 0;
