@@ -313,6 +313,28 @@ class JsScriptRuntime:
             def readPathSync(self, folder):
                 base = rt._resolve(folder)
                 return [str(p.relative_to(rt.script_dir)) for p in sorted(base.iterdir())]
+            def createDirectory(self, folder):
+                try:
+                    rt._resolve(folder).mkdir(parents=True, exist_ok=True)
+                    return True
+                except (OSError, ValueError, PermissionError) as error:
+                    log(f"[file] CreateDirectory 失败: {error}")
+                    return False
+            # A few community packages feature-detect ``file.mkdir`` even
+            # though BetterGI names the host method CreateDirectory.
+            def mkdir(self, folder): return self.createDirectory(folder)
+            def renamePathSync(self, old_path, new_path):
+                try:
+                    source = rt._resolve(old_path)
+                    target = rt._resolve(new_path)
+                    if not source.exists() or target.exists():
+                        return False
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    source.rename(target)
+                    return True
+                except (OSError, ValueError, PermissionError) as error:
+                    log(f"[file] RenamePathSync 失败: {error}")
+                    return False
             def isFolder(self, p): return rt._resolve(p).is_dir()
             def isFile(self, p): return rt._resolve(p).is_file()
             def isExists(self, p): return rt._resolve(p).exists()

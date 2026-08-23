@@ -565,6 +565,12 @@ await file.WriteText("callback.txt", "ok", (error, success) => {
   if (error) throw new Error(error);
   writeCallback = success;
 });
+const created = file.CreateDirectory("record/nested");
+const mkdirAlias = file.mkdir("alias-dir");
+file.WriteTextSync("record/old.txt", "rename me");
+const renamed = file.RenamePathSync("record/old.txt", "renamed/new.txt");
+const missingRename = file.renamePathSync("missing.txt", "renamed/missing.txt");
+const escaped = file.CreateDirectory("../outside-script");
 const mat = file.ReadImageMatWithResizeSync("source.png", 4, 5, 0);
 const imageSaved = file.WriteImageSync("written.png", mat);
 const recognition = RecognitionObject.TemplateMatch(mat);
@@ -591,6 +597,11 @@ return JSON.stringify({
   callbackCount,
   readCallback,
   writeCallback,
+  created,
+  mkdirAlias,
+  renamed,
+  missingRename,
+  escaped,
   imageSaved,
   imageSize: [mat.Width, mat.Height],
   recognitionThreshold: recognition.threshold,
@@ -626,13 +637,34 @@ return JSON.stringify({
     assert result["callbackCount"] == 1
     assert result["readCallback"] == "兼容文本"
     assert result["writeCallback"] is True
+    assert result["created"] is True
+    assert result["mkdirAlias"] is True
+    assert result["renamed"] is True
+    assert result["missingRename"] is False
+    assert result["escaped"] is False
     assert result["imageSaved"] is True
     assert result["imageSize"] == [4, 5]
     assert result["recognitionThreshold"] == pytest.approx(0.61)
     assert isinstance(result["serverOffset"], int)
     assert (tmp_path / "callback.txt").read_text(encoding="utf-8") == "ok"
+    assert (tmp_path / "record" / "nested").is_dir()
+    assert (tmp_path / "alias-dir").is_dir()
+    assert (tmp_path / "renamed" / "new.txt").read_text(encoding="utf-8") == "rename me"
+    assert not (tmp_path.parent / "outside-script").exists()
     input_simulator.key_down.assert_called_once_with("W")
     input_simulator.key_up.assert_called_once_with("W")
+
+
+def test_genshin_teleport_to_statue_alias():
+    from unittest.mock import MagicMock
+
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    api = GenshinApi(MagicMock())
+    api.tpToStatueOfTheSeven = MagicMock(return_value=True)
+
+    assert api.teleportToStatue()
+    api.tpToStatueOfTheSeven.assert_called_once_with()
 
 
 def test_auto_fight_dispatcher_keeps_upstream_timeout_seconds():

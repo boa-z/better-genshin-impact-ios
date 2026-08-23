@@ -24,10 +24,12 @@ from ..pathing.model import PathingTask
 SUPPORTED = [
     "sleep", "log.", "click", "keyPress", "keyDown", "keyUp", "captureGameRegion",
     "RecognitionObject", "TemplateMatch", "ocr", "findMulti", ".find(", "isEmpty", "isExist",
-    "file.read", "file.write", "readTextSync", "readImageMat", "settings.", "notification.",
+    "file.read", "file.write", "file.mkdir", "renamePathSync", "readTextSync",
+    "readImageMat", "settings.", "notification.",
     "moveMouseBy", "keyMouseScript", "inputText", "http.request", "genshin.returnMainUi",
     "genshin.relogin", "chooseTalkOption", "runCombatScript", "leftButtonClick",
     "genshin.tp", "genshin.moveMapTo", "genshin.tpToStatueOfTheSeven",
+    "genshin.teleportToStatue",
     "getPositionFromBigMap", "getPositionFromMap", "genshin.getBigMapZoomLevel",
     "genshin.claimMailRewards", "genshin.claimBattlePassRewards",
     "genshin.claimEncounterPointsRewards",

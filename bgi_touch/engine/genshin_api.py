@@ -193,6 +193,10 @@ class GenshinApi:
     def tpToStatueOfTheSeven(self):
         return self._tp_for().tp_to_statue()
 
+    def teleportToStatue(self):
+        """Community-script alias for BetterGI's TpToStatueOfTheSeven."""
+        return self.tpToStatueOfTheSeven()
+
     def getPositionFromBigMap(self, map_name=None):
         """大地图打开状态下，返回视野中心的世界坐标（Point2f）；失败抛错。"""
         from ..pathing.tp import BigMapLocator
