@@ -281,7 +281,9 @@ bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 会被保留。当前可执行的常用路点动作包括 `combat_script`、`fight`、`mining`、
 `normal_attack`、`elemental_skill`、`nahida_collect`、元素采集、`pick_around`、
 `pick_up_collect`、`fishing`、`use_gadget`、`stop_flying`、`up_down_grab_leaf`、
-`log_output` 和 `exit_and_relogin`。
+`set_time`、`wonderland_cycle`、`log_output` 和 `exit_and_relogin`。`set_time` 的
+`action_params` 支持 `07:00`，也兼容上游的 `07:00:false` 动画开关格式；省略第三段
+时按 BetterGI 默认跳过时间拨盘动画。
 
 路线中的 `farming_info` 会按 BetterGI 语义写入每日锄地统计，日志位于
 `log/FarmingPlan/YYYYMMDD.json`，并以服务器时间凌晨 4 点切日。编辑
@@ -289,8 +291,8 @@ bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 精英/小怪上限和 `primary_target`，达到上限的路线直接记为正常跳过。米游社字段可
 读取 BetterGI 已写入的统计数据并合并本地后续记录；iOS 端不会读取或上传 Cookie。
 
-Windows 专属的队伍自动识别、低血量回血、设置游戏时间和千星奇域流程不会在 iOS
-侧自动模拟；遇到这些动作会写入日志并继续保留路线控制权。`exit_and_relogin`
+Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模拟；路线设置游戏时间和
+千星奇域进入退出流程已转换为 DeviceHub 触控。`exit_and_relogin`
 会复用 iOS 侧的重登流程，执行前应确认账号已登录且允许较长等待。真机长路线完成后
 请执行 `bgi-touch close-game`，App Store 版无法强杀时命令会退回 Home 挂起原神。
 

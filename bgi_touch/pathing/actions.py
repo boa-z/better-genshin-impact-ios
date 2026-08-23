@@ -8,6 +8,7 @@ BetterGI 的 Windows 动作处理器依赖桌面窗口、键盘扫描和角色�
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable
 
 import numpy as np
@@ -26,7 +27,7 @@ class PathingActionRunner:
         "linnea_mining", "nahida_collect", "hydro_collect", "electro_collect",
         "anemo_collect", "pyro_collect", "pick_around", "pick_up_collect",
         "fishing", "use_gadget", "up_down_grab_leaf", "log_output", "force_tp",
-        "exit_and_relogin",
+        "exit_and_relogin", "set_time", "wonderland_cycle",
     })
 
     def __init__(
@@ -190,3 +191,39 @@ class PathingActionRunner:
 
         self.log("[pathing] 退出并重新登录原神")
         GenshinApi(self.ctx, log=self.log).relogin()
+
+    def _action_set_time(self, waypoint: Waypoint) -> None:
+        from ..engine.genshin_api import GenshinApi
+
+        raw = waypoint.action_params.strip()
+        matched = re.fullmatch(
+            r"(?P<hour>\d{1,2}):(?P<minute>\d{2})(?::(?P<skip>true|false))?",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if matched is None:
+            raise ValueError(
+                "set_time action_params 必须为 H:mm、HH:mm 或 HH:mm:true/false"
+            )
+        hour = int(matched.group("hour"))
+        minute = int(matched.group("minute"))
+        if not 0 <= hour <= 24 or not 0 <= minute <= 59:
+            raise ValueError("set_time 时间必须为 hour 0-24、minute 0-59")
+        skip_value = matched.group("skip")
+        # BetterGI's SetTimeHandler defaults to skipping the clock animation.
+        skip_animation = skip_value is None or skip_value.lower() == "true"
+        self.log(
+            f"[pathing] 设置游戏时间 {hour:02d}:{minute:02d}"
+            f"（跳过动画：{'是' if skip_animation else '否'}）"
+        )
+        if not GenshinApi(self.ctx, log=self.log).setTime(
+            hour, minute, skip_animation
+        ):
+            raise RuntimeError("set_time 失败：未能打开或确认游戏时间界面")
+
+    def _action_wonderland_cycle(self, waypoint: Waypoint) -> None:
+        from ..engine.genshin_api import GenshinApi
+
+        self.log("[pathing] 进入并退出千星奇域")
+        if not GenshinApi(self.ctx, log=self.log).wonderlandCycle():
+            raise RuntimeError("wonderland_cycle 失败：未能完成千星奇域进入退出流程")
