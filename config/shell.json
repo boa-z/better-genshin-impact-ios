@@ -1,0 +1,9 @@
+{
+  "$comment": "Shell 在 macOS/Linux 主机执行任意命令，与 iPhone 无关。启用前请确认脚本来源可信。",
+  "enabled": false,
+  "timeoutSeconds": 60,
+  "noWindow": true,
+  "output": true,
+  "workingDirectory": "..",
+  "maxOutputChars": 200000
+}

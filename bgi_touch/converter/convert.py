@@ -48,7 +48,7 @@ PARTIAL = {
     "rightButton": "近似映射为 E 技能",
     "middleButton": "PC 重置视角，触控端为空操作",
     "verticalScroll": "触控端为空操作",
-    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
+    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
     "runAutoFightTask": "支持 combatStrategyPath；掉落拾取等附加参数忽略",
     "runAutoBossTask": "支持 BetterGI AutoBoss 官方路线、树脂策略、征讨之花导航、奖励汇总和 routePath/pathingFile 覆盖",
     "runAutoLeyLine": "支持 269 个官方地脉点位、632 份路线、树脂耗尽策略、奖励树脂优先级和 routePath/pathingFile 覆盖",
@@ -64,6 +64,7 @@ PARTIAL = {
     "dispatcher.runQuickClaimRewardTask": "使用原版领取模板并将滚轮操作转换为触控上滑",
     "dispatcher.runUseRedemptionCodeTask": "使用 OCR 导航设置界面，并通过 DeviceHub 输入兑换码",
     "dispatcher.runAutoArtifactSalvageTask": "支持低星快速选择、五星 OCR+JavaScript 筛选；最终分解需要显式确认参数",
+    "Shell": "跨平台宿主命令已支持；必须先在 config/shell.json 显式启用，且应只运行可信脚本",
     "dispatcher.runCountInventoryItemTask": "遍历 iOS 背包网格，通过详情名称和数量区域 OCR 返回单项或多项计数",
 }
 UNSUPPORTED = {

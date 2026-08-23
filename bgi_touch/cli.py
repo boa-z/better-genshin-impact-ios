@@ -131,6 +131,10 @@ def cmd_task(args) -> int:
         config = json.loads(Path(args.config_file).read_text(encoding="utf-8"))
     else:
         config = json.loads(args.config)
+    if args.name == "Shell":
+        result = TaskDispatcher(None).run_task({"name": args.name, "config": config})
+        print(json.dumps({"task": args.name, "result": result}, ensure_ascii=False))
+        return 0 if result.get("status") not in {"failed", "timeout"} else 1
     ctx = _context(args)
     try:
         result = TaskDispatcher(ctx, party_slots=_load_party()).run_task(

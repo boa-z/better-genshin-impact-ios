@@ -81,7 +81,7 @@ class TaskDispatcher:
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
-        "CharacterDevelopment", "OneDragon",
+        "CharacterDevelopment", "OneDragon", "Shell",
     })
 
     def __init__(
@@ -158,6 +158,8 @@ class TaskDispatcher:
             return self.run_character_development_task(cfg, ct)
         if name in ("OneDragon", "OneDragonFlow"):
             return self.run_one_dragon_task(cfg, ct)
+        if name == "Shell":
+            return self.run_shell_task(cfg, ct)
         raise NotImplementedError(
             f"SoloTask {name} 尚未移植；当前已支持 {', '.join(sorted(self.IMPLEMENTED))}"
         )
@@ -192,6 +194,26 @@ class TaskDispatcher:
             close_game_on_completion=bool(
                 _value(param, "closeGameOnCompletion", True)
             ),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_shell_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
+        from .shell_task import ShellTask
+
+        command = param if isinstance(param, str) else _value(
+            param, "command", _value(param, "shell", "")
+        )
+        raw_timeout = _value(param, "timeoutSeconds", _value(param, "timeout", None))
+        raw_no_window = _value(param, "noWindow", None)
+        raw_output = _value(param, "output", None)
+        return ShellTask(
+            str(command or ""),
+            config_path=_value(param, "shellConfigPath", None),
+            timeout_s=None if raw_timeout is None else float(raw_timeout),
+            no_window=None if raw_no_window is None else bool(raw_no_window),
+            output=None if raw_output is None else bool(raw_output),
+            disable=bool(_value(param, "disable", False)),
+            working_directory=_value(param, "workingDirectory", None),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

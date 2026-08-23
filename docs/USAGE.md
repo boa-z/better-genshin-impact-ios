@@ -262,6 +262,8 @@ bgi-touch task CountInventoryItem --config \
   '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
 bgi-touch task CharacterDevelopment --config \
   '{"characterNames":["钟离","那维莱特"],"categories":"属性;武器;天赋"}'
+# Shell 默认禁用；确认脚本可信并启用 config/shell.json 后才会在 Mac 主机执行
+bgi-touch task Shell --config '{"command":"echo BetterGI","timeoutSeconds":10}'
 
 # 键鼠宏：直接给原始宏 JSON，运行时自动翻译为触控
 bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹-塔拉塔海谷.json
@@ -301,6 +303,11 @@ Windows 专属的队伍自动识别、低血量回血、设置游戏时间和千
 `scrollDown` 后会把原版滚轮下滑语义转换为奖励列表内的触控上滑。
 `UseRedemptionCode` 会从主界面打开设置和账户页，使用 DeviceHub 文本输入逐个提交
 `codes`；任务结束会返回主界面。兑换结果保存在任务返回对象中并写入日志。
+
+`Shell` 对齐上游 `command`、`timeoutSeconds`、`noWindow`、`output` 和 `disable`
+语义：超时大于 0 时等待并支持任务取消，等于或小于 0 时启动后立即返回。命令运行在
+macOS/Linux 宿主而不是 iPhone；为避免第三方脚本执行任意主机命令，默认由
+`config/shell.json` 的 `enabled=false` 全局禁用，启用前必须确认脚本来源可信。
 
 `AutoArtifactSalvage` 对齐上游 `star`、`javaScript`、`artifactSetFilter`、
 `maxNumToCheck` 和 `recognitionFailurePolicy` 参数。低星部分使用原版背包页签和分解按钮

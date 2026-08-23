@@ -123,6 +123,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |
 | 一条龙 OneDragonFlowConfig | ⚠️ 顺序、重复任务 ID、NextTaskId、内置任务与安全完成动作已迁移，待真机回归 |
+| ShellTask | ✅ 跨平台超时/取消/输出兼容；任意主机命令默认由安全配置禁用 |
 
 ## 已知约束
 
