@@ -995,7 +995,19 @@ class JsScriptRuntime:
 
     def run(self, entry: str | None = None) -> Any:
         main = entry or self.manifest.get("main") or "main.js"
-        code = _unwrap_async_iife((self.script_dir / main).read_text(encoding="utf-8"))
+        main_path = self._resolve(main)
+        from .js_modules import JsModuleLoader, extract_imports
+
+        module_loader = JsModuleLoader(
+            self.pm, self.script_dir, self.manifest, self._wrap,
+        )
+        import_code, source = extract_imports(
+            main_path.read_text(encoding="utf-8-sig")
+        )
+        code = import_code + "\n" + _unwrap_async_iife(source)
+        self.pm.eval("globalThis")["__bgi_require"] = (
+            lambda value: module_loader.require(str(value), main_path)
+        )
         import asyncio
 
         async def _drive():

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -19,6 +20,7 @@ from pathlib import Path
 from ..combat.dsl import parse_combat_script
 from ..macro.keymouse import convert_keymouse
 from ..pathing.model import PathingTask
+from ..engine.js_modules import rewrite_import_specifiers
 
 # JS 兼容性扫描：本移植版已实现 / 部分实现 / 未实现的 API
 SUPPORTED = [
@@ -143,11 +145,55 @@ def scan_js_compat(pkg_dir: Path) -> dict:
     return findings
 
 
+def _resolve_import_file(importer: Path, specifier: str) -> Path | None:
+    if not specifier.startswith(("./", "../")):
+        return None
+    path = (importer.parent / specifier).resolve()
+    for candidate in (path, path.with_suffix(".js") if not path.suffix else path,
+                      path / "index.js"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _vendor_shared_modules(src: Path, dest: Path) -> int:
+    """Vendor bettergi-scripts-list ``packages`` imports into one script."""
+    packages_root = next((
+        ancestor / "packages" for ancestor in src.parents
+        if (ancestor / "packages").is_dir() and (ancestor / "repo" / "js").is_dir()
+    ), None)
+    if packages_root is None:
+        return 0
+    rewrites = 0
+    vendor_root = dest / ".bgi-touch-vendor" / "packages"
+    for source_js in src.rglob("*.js"):
+        destination_js = dest / source_js.relative_to(src)
+
+        def rewrite(specifier: str) -> str:
+            nonlocal rewrites
+            resolved = _resolve_import_file(source_js, specifier)
+            if resolved is None or not resolved.is_relative_to(packages_root):
+                return specifier
+            target = vendor_root / resolved.relative_to(packages_root)
+            value = os.path.relpath(target, destination_js.parent).replace(os.sep, "/")
+            rewrites += 1
+            return value if value.startswith(".") else f"./{value}"
+
+        content = destination_js.read_text(encoding="utf-8-sig")
+        rewritten = rewrite_import_specifiers(content, rewrite)
+        if rewritten != content:
+            destination_js.write_text(rewritten, encoding="utf-8")
+    if rewrites:
+        shutil.copytree(packages_root, vendor_root, dirs_exist_ok=True)
+    return rewrites
+
+
 def convert_js_package(src: Path, out_dir: Path) -> tuple[Path, dict]:
     dest = out_dir / src.name
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
+    vendored_imports = _vendor_shared_modules(src.resolve(), dest)
     findings = scan_js_compat(dest)
 
     macro_count = 0
@@ -169,6 +215,7 @@ def convert_js_package(src: Path, out_dir: Path) -> tuple[Path, dict]:
         f"- 来源：`{src}`",
         f"- 结论：{verdict}",
         f"- 内嵌键鼠宏：{macro_count} 个（已转出 .touch.json）",
+        f"- 共享模块导入：{vendored_imports} 个（已沙箱内置）",
         "",
     ]
     if findings["unsupported"]:
@@ -176,7 +223,12 @@ def convert_js_package(src: Path, out_dir: Path) -> tuple[Path, dict]:
     if findings["partial"]:
         report += ["## 近似/部分实现", *[f"- {f}" for f in sorted(set(findings["partial"]))], ""]
     (dest / "COMPAT.md").write_text("\n".join(report), encoding="utf-8")
-    return dest, {"verdict": verdict, **{k: len(set(v)) for k, v in findings.items()}, "macros": macro_count}
+    return dest, {
+        "verdict": verdict,
+        **{k: len(set(v)) for k, v in findings.items()},
+        "macros": macro_count,
+        "vendored_imports": vendored_imports,
+    }
 
 
 def convert_any(src: str | Path, out_dir: str | Path) -> dict:
