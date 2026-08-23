@@ -713,6 +713,42 @@ class JsScriptRuntime:
         from .genshin_api import GenshinApi
         expose("genshin", wrap(GenshinApi(ctx, log)), proxy=False)
 
+        from .combat_host import Avatar, CombatScenes
+
+        def _create_combat_scenes(*_args):
+            return wrap(CombatScenes(
+                ctx, self.party_slots, log, to_collection=to_region_collection,
+            ))
+
+        def _create_avatar(scenes, name, index, name_rect=None, manual_skill_cd=-1):
+            value = getattr(scenes, "__wrapped__", scenes)
+            if not isinstance(value, CombatScenes):
+                raise TypeError("Avatar 构造函数需要 CombatScenes")
+            return wrap(Avatar(
+                value, str(name), int(index), name_rect, float(manual_skill_cd)
+            ))
+
+        g["CombatScenes"] = pm.eval(
+            "factory => function CombatScenes(...args) { return factory(...args); }"
+        )(_create_combat_scenes)
+        avatar_type = pm.eval(r"""
+            (factory, parseCd, tpForRecover) => {
+              function Avatar(scenes, name, index, nameRect, manualSkillCd = -1) {
+                return factory(scenes, name, index, nameRect, manualSkillCd);
+              }
+              Avatar.parseActionSchedulerByCd = parseCd;
+              Avatar.ParseActionSchedulerByCd = parseCd;
+              Avatar.throwWhenDefeated = Avatar.ThrowWhenDefeated = () => {};
+              Avatar.tpForRecover = Avatar.TpForRecover = tpForRecover;
+              return Avatar;
+            }
+        """)(
+            _create_avatar,
+            Avatar.parse_action_scheduler_by_cd,
+            lambda token=None, error=None: GenshinApi(ctx, log).teleportToStatue(),
+        )
+        g["Avatar"] = avatar_type
+
         from ..tasks.character_development import CharacterDevelopmentTask
         expose(
             "characterDevelopmentTask",
