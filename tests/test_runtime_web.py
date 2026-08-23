@@ -5,6 +5,24 @@ import numpy as np
 import pytest
 
 
+def test_webui_shutdown_closes_shared_context_once(monkeypatch):
+    from unittest.mock import Mock
+
+    from bgi_touch.webui import server
+
+    context = Mock()
+    runner = Mock()
+    monkeypatch.setattr(server, "_ctx", context)
+    monkeypatch.setattr(server, "runner", runner)
+
+    server._shutdown_context()
+    server._shutdown_context()
+
+    assert runner.stop.call_count == 2
+    context.close.assert_called_once_with()
+    assert server._ctx is None
+
+
 def test_game_context_cached_frame_returns_copy_without_device_access():
     from bgi_touch.engine.context import GameContext
 

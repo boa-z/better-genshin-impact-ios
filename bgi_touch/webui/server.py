@@ -70,6 +70,17 @@ def _err(e: Exception, code: int = 503) -> JSONResponse:
     return JSONResponse({"error": str(e)}, status_code=code)
 
 
+def _shutdown_context() -> None:
+    """Release automation input, the MCP session, and owned headless process."""
+    global _ctx
+    runner.stop()
+    with _ctx_lock:
+        ctx = _ctx
+        _ctx = None
+    if ctx is not None:
+        ctx.close()
+
+
 # ---- 后台任务（同时只跑一个）----
 
 class TaskCancelled(Exception):
@@ -745,4 +756,7 @@ def serve(
     _mcp_url = mcp_url
     _devicehub_config_path = devicehub_config_path
     weblog(f"[web] 控制台 http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    finally:
+        _shutdown_context()
