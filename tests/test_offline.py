@@ -282,6 +282,140 @@ def test_auto_album_dispatcher_maps_bettergi_parameters():
     assert kwargs["track_timeout_s"] == 30
 
 
+def test_redeem_code_normalizer_accepts_bettergi_objects_and_text():
+    from bgi_touch.tasks.redeem_code import normalize_redeem_codes
+
+    assert [item.code for item in normalize_redeem_codes("AAA\nBBB,AAA\n")] == [
+        "AAA", "BBB"
+    ]
+    items = normalize_redeem_codes([
+        {"Code": "CCC", "Items": "原石"},
+        {"code": "DDD", "items": "摩拉"},
+        "",
+    ])
+    assert [(item.code, item.items) for item in items] == [
+        ("CCC", "原石"), ("DDD", "摩拉")
+    ]
+
+
+def test_quick_claim_candidates_keep_upstream_top_left_order():
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.quick_claim import QuickClaimRewardTask
+
+    task = QuickClaimRewardTask.__new__(QuickClaimRewardTask)
+    text = [SimpleNamespace(dx=500, dy=300), SimpleNamespace(dx=100, dy=100)]
+    gifts = [SimpleNamespace(dx=50, dy=300)]
+    task._find_multi = lambda region, name, threshold: text if name == "claim_text" else gifts
+    candidates = task._find_candidates(object())
+    assert [(name, hit.dx, hit.dy) for name, hit in candidates] == [
+        ("领取", 100, 100),
+        ("礼物领取", 50, 300),
+        ("领取", 500, 300),
+    ]
+
+
+def test_new_quick_tasks_are_declared_and_validate_redeem_codes():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    assert TaskDispatcher.IMPLEMENTED >= {
+        "QuickSereniteaPot", "QuickClaimReward", "UseRedemptionCode"
+    }
+    with pytest.raises(ValueError, match="至少一个"):
+        TaskDispatcher(object()).run_use_redemption_code_task({"codes": []})
+
+
+def test_artifact_stat_parser_preserves_bettergi_contract():
+    from bgi_touch.tasks.artifact_salvage import parse_artifact_stat_text
+
+    artifact = parse_artifact_stat_text([
+        "异种的期许", "生之花", "生命值", "717", "+0",
+        "元素精通+16", "元素充能效率+6.5%", "攻击力+5.8%", "防御力+23",
+        "深廊终曲（2）",
+    ])
+    assert artifact.Name == "异种的期许"
+    assert (artifact.MainAffix.Type, artifact.MainAffix.Value) == ("HP", 717)
+    assert [(item.Type, item.Value) for item in artifact.MinorAffixes] == [
+        ("ElementalMastery", 16),
+        ("EnergyRecharge", 6.5),
+        ("ATKPercent", 5.8),
+        ("DEF", 23),
+    ]
+    assert artifact.Level == 0
+
+
+def test_artifact_javascript_uses_output_contract_and_timeout():
+    from bgi_touch.tasks.artifact_salvage import (
+        ArtifactAffix,
+        ArtifactStat,
+        evaluate_artifact_javascript,
+    )
+
+    artifact = ArtifactStat(
+        "test",
+        ArtifactAffix("HP", 717),
+        (ArtifactAffix("ATKPercent", 5.8), ArtifactAffix("DEF", 23)),
+        0,
+    )
+    rule = """
+var hasATK = Array.from(ArtifactStat.MinorAffixes).some(a => a.Type == 'ATKPercent');
+var hasDEF = Array.from(ArtifactStat.MinorAffixes).some(a => a.Type == 'DEF');
+Output = ArtifactStat.Level == 0 && hasATK && hasDEF;
+"""
+    assert evaluate_artifact_javascript(artifact, rule)
+    with pytest.raises(RuntimeError, match="Output"):
+        evaluate_artifact_javascript(artifact, "const answer = true;")
+    with pytest.raises(RuntimeError, match="timed out|Script execution timed out"):
+        evaluate_artifact_javascript(artifact, "while (true) {}", timeout_ms=20)
+
+
+def test_artifact_status_detector_matches_upstream_hsv_markers():
+    import cv2
+    import numpy as np
+
+    from bgi_touch.tasks.artifact_salvage import ArtifactStatus, detect_artifact_status
+
+    def bgr(hue_degrees, saturation):
+        hsv = np.uint8([[[round(hue_degrees / 360 * 255), round(saturation * 255), 255]]])
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR_FULL)[0, 0]
+
+    locked = np.zeros((180, 140, 3), dtype=np.uint8)
+    locked[2:25, 2:18] = bgr(9, 0.54)
+    assert detect_artifact_status(locked) == ArtifactStatus.LOCKED
+
+    selected = np.zeros((180, 140, 3), dtype=np.uint8)
+    selected[1:33, 90:135] = bgr(80, 0.76)
+    assert detect_artifact_status(selected) == ArtifactStatus.SELECTED
+
+
+def test_artifact_dispatcher_maps_upstream_and_safety_parameters():
+    from unittest.mock import patch
+
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.artifact_salvage.AutoArtifactSalvageTask") as task:
+        task.return_value.run.return_value = {"ok": True}
+        result = TaskDispatcher(object()).run_task({
+            "name": "AutoArtifactSalvage",
+            "config": {
+                "maxArtifactStar": "3",
+                "javaScript": "Output = true;",
+                "artifactSetFilter": "绝缘之旗印",
+                "maxNumToCheck": 12,
+                "recognitionFailurePolicy": "Abort",
+                "confirmQuickSalvage": True,
+                "confirmSalvage": False,
+            },
+        })
+    assert result == {"ok": True}
+    kwargs = task.call_args.kwargs
+    assert kwargs["star"] == 3
+    assert kwargs["max_num_to_check"] == 12
+    assert kwargs["recognition_failure_policy"] == "Abort"
+    assert kwargs["confirm_quick_salvage"] is True
+    assert kwargs["confirm_salvage"] is False
+
+
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
 

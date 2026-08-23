@@ -381,7 +381,9 @@ def api_scripts():
         "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing",
         "AutoOpenChest", "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat",
         "AutoMusicGame", "AutoAlbum",
-        "AutoGeniusInvokation", "AutoStygianOnslaught",
+        "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
+        "QuickClaimReward", "UseRedemptionCode",
+        "AutoArtifactSalvage",
     ):
         out["task"].append({"path": name, "name": name})
     js_dir = SCRIPTS_DIR / "js"

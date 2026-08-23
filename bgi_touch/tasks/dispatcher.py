@@ -78,7 +78,8 @@ class TaskDispatcher:
     IMPLEMENTED = frozenset({
         "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest",
         "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat", "AutoMusicGame", "AutoAlbum",
-        "AutoGeniusInvokation", "AutoStygianOnslaught",
+        "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
+        "QuickClaimReward", "UseRedemptionCode", "AutoArtifactSalvage",
     })
 
     def __init__(
@@ -135,6 +136,14 @@ class TaskDispatcher:
             return self.run_auto_boss_task(cfg, ct)
         if name in ("AutoLeyLine", "AutoLeyLineOutcrop"):
             return self.run_auto_leyline_task(cfg, ct)
+        if name in ("QuickSereniteaPot", "SereniteaPot"):
+            return self.run_quick_serenitea_pot_task(cfg, ct)
+        if name in ("QuickClaimReward", "OneKeyClaimReward"):
+            return self.run_quick_claim_reward_task(cfg, ct)
+        if name in ("UseRedemptionCode", "UseRedeemCode", "AutoRedeemCode"):
+            return self.run_use_redemption_code_task(cfg, ct)
+        if name in ("AutoArtifactSalvage", "ArtifactSalvage"):
+            return self.run_auto_artifact_salvage_task(cfg, ct)
         raise NotImplementedError(
             f"SoloTask {name} 尚未移植；当前已支持 {', '.join(sorted(self.IMPLEMENTED))}"
         )
@@ -385,6 +394,61 @@ class TaskDispatcher:
             combat_strategy_path=str(strategy) if strategy else None,
             timeout_s=float(timeout),
             party_slots=self.party_slots,
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_quick_serenitea_pot_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .quick_serenitea import QuickSereniteaPotTask
+
+        return QuickSereniteaPotTask(
+            self.ctx,
+            timeout_s=float(_value(param, "timeoutSeconds", 35) or 35),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_quick_claim_reward_task(self, param: Any = None, ct: Any = None) -> int:
+        from .quick_claim import QuickClaimRewardTask
+
+        mode = str(_value(param, "mode", _value(param, "hotkeyMode", "点按一次")) or "")
+        scroll = bool(_value(param, "scrollDown", _value(param, "scrollDownEnabled", False)))
+        return QuickClaimRewardTask(
+            self.ctx,
+            max_clicks=int(_value(param, "maxClicks", 30) or 30),
+            scroll_down=scroll or mode in ("按住持续", "hold", "continuous"),
+            max_scrolls=int(_value(param, "maxScrolls", 3) or 3),
+            timeout_s=float(_value(param, "timeoutSeconds", 30) or 30),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_use_redemption_code_task(self, param: Any = None, ct: Any = None) -> dict[str, bool]:
+        from .redeem_code import UseRedemptionCodeTask
+
+        codes = _value(param, "codes", _value(param, "list", _value(param, "code", None)))
+        return UseRedemptionCodeTask(
+            self.ctx,
+            codes,
+            timeout_s=float(_value(param, "timeoutSeconds", 120) or 120),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_artifact_salvage_task(self, param: Any = None, ct: Any = None) -> dict:
+        from .artifact_salvage import AutoArtifactSalvageTask
+
+        return AutoArtifactSalvageTask(
+            self.ctx,
+            star=int(_value(param, "star", _value(param, "maxArtifactStar", 4)) or 4),
+            javascript=_value(param, "javaScript", _value(param, "javascript", None)),
+            artifact_set_filter=_value(param, "artifactSetFilter", None),
+            max_num_to_check=int(_value(param, "maxNumToCheck", 100) or 100),
+            recognition_failure_policy=str(
+                _value(param, "recognitionFailurePolicy", "Skip") or "Skip"
+            ),
+            confirm_quick_salvage=bool(
+                _value(param, "confirmQuickSalvage", _value(param, "confirmLowStarSalvage", False))
+            ),
+            confirm_salvage=bool(_value(param, "confirmSalvage", False)),
+            max_pages=int(_value(param, "maxPages", 12) or 12),
+            timeout_s=float(_value(param, "timeoutSeconds", 300) or 300),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

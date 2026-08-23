@@ -435,6 +435,20 @@ class GenshinApi:
         self.ctx.input.key_press("ESCAPE")
         return claimed
 
+    def claimMailRewards(self):
+        """Open the Paimon mail page and claim all available attachments."""
+        self._open_paimon_menu()
+        opened = self._tap_text("邮件", "Mail", timeout_s=5)
+        if not opened:
+            self.ctx.input.key_press("ESCAPE")
+            return False
+        claimed = self._tap_text("全部领取", "领取全部", "Claim All", timeout_s=6)
+        # Reward popups and the mail page can each require one close action.
+        self.ctx.input.key_press("ESCAPE")
+        self.ctx.sleep(400)
+        self.returnMainUi(max_tries=4)
+        return claimed
+
     def goToAdventurersGuild(self, country):
         return self._run_poi_route("冒险家协会", str(country), "凯瑟琳", "冒险家协会", "Catherine")
 

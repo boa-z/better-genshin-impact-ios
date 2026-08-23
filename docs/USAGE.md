@@ -251,6 +251,12 @@ bgi-touch task AutoDomain --config '{"domainRoundNum":1}'
 bgi-touch task AutoOpenChest --config '{"timeoutSeconds":60}'
 # 在千音雅集的国家主题专辑页运行；musicLevel 也支持“所有”/normal/master 等别名
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说","songCount":13}'
+# 快捷尘歌壶、一键领取当前页面、兑换码
+bgi-touch task QuickSereniteaPot
+bgi-touch task QuickClaimReward --config '{"scrollDown":true,"maxScrolls":3}'
+bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
+# 安全预览：选择 1~4 星后停在复查页，不会执行最终分解
+bgi-touch task AutoArtifactSalvage --config '{"star":4}'
 
 # 键鼠宏：直接给原始宏 JSON，运行时自动翻译为触控
 bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹-塔拉塔海谷.json
@@ -279,6 +285,44 @@ Windows 专属的队伍自动识别、低血量回血、设置游戏时间和千
 默认处理传说难度的 13 首曲目；`musicLevel` 可设为“普通”“困难”“大师”“传说”或
 “所有”，`mustCanorusLevel` 可改为只跳过已经获得“大音天籁”的曲目。每首歌结束后
 程序通过列表按钮回到专辑页，再点击原版相同的下一曲位置。
+
+`QuickClaimReward` 复用 BetterGI 的“领取/礼物领取/点击空白继续”模板；开启
+`scrollDown` 后会把原版滚轮下滑语义转换为奖励列表内的触控上滑。
+`UseRedemptionCode` 会从主界面打开设置和账户页，使用 DeviceHub 文本输入逐个提交
+`codes`；任务结束会返回主界面。兑换结果保存在任务返回对象中并写入日志。
+
+`AutoArtifactSalvage` 对齐上游 `star`、`javaScript`、`artifactSetFilter`、
+`maxNumToCheck` 和 `recognitionFailurePolicy` 参数。低星部分使用原版背包页签和分解按钮
+模板；五星部分按 4 行 9 列网格逐件选择，OCR 右侧详情卡，并按上游约定读取 JavaScript
+布尔变量 `Output`。五星规则通过隔离的 Node.js VM 执行，并带单件超时限制；使用
+`javaScript` 时需保证系统可找到 `node`。
+
+该任务默认只完成选择并停在复查界面。只有显式设置 `confirmQuickSalvage=true` 才会
+最终分解 1~4 星；五星规则选中的圣遗物还需要单独设置 `confirmSalvage=true` 才会执行
+最终分解。例如：
+
+```bash
+# 明确允许分解 1~3 星；4 星会在快速选择弹层中反选
+bgi-touch task AutoArtifactSalvage --config \
+  '{"star":3,"confirmQuickSalvage":true}'
+
+# 先分解低星，再按 BetterGI JavaScript 筛选五星圣遗物，停在人工复查页
+bgi-touch task AutoArtifactSalvage --config-file artifact-salvage.json
+```
+
+`artifact-salvage.json` 示例：
+
+```json
+{
+  "star": 4,
+  "confirmQuickSalvage": true,
+  "javaScript": "var hasCR = Array.from(ArtifactStat.MinorAffixes).some(a => a.Type == 'CRITRate'); Output = ArtifactStat.Level == 0 && !hasCR;",
+  "artifactSetFilter": "绝缘之旗印,逐影猎人",
+  "maxNumToCheck": 100,
+  "recognitionFailurePolicy": "Skip",
+  "confirmSalvage": false
+}
+```
 
 战斗 DSL 语法速查（与原版一致）：
 

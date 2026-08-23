@@ -70,6 +70,9 @@ bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼�
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
 bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑页完成未演奏曲目
+bgi-touch task QuickSereniteaPot       # 从背包部署并进入/离开尘歌壶
+bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
+bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
@@ -109,6 +112,8 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ 视觉逻辑已迁移，需在对应游戏状态真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ 已迁移；Boss、地脉、幽境需路线，七圣召唤需策略 |
+| 快捷任务：尘歌壶 / 一键领取 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
+| SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
 
 ## 已知约束
 

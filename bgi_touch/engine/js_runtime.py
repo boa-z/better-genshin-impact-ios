@@ -366,6 +366,14 @@ class JsScriptRuntime:
             def runAutoBossTask(self, param=None): return task_dispatcher.run_auto_boss_task(param)
             def runAutoLeyLineTask(self, param=None): return task_dispatcher.run_auto_leyline_task(param)
             def runAutoLeyLineOutcropTask(self, param=None): return task_dispatcher.run_auto_leyline_task(param)
+            def runQuickSereniteaPotTask(self, param=None, ct=None):
+                return task_dispatcher.run_quick_serenitea_pot_task(param, ct)
+            def runQuickClaimRewardTask(self, param=None, ct=None):
+                return task_dispatcher.run_quick_claim_reward_task(param, ct)
+            def runUseRedemptionCodeTask(self, param=None, ct=None):
+                return task_dispatcher.run_use_redemption_code_task(param, ct)
+            def runAutoArtifactSalvageTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_artifact_salvage_task(param, ct)
             def runCombatScript(self, script, avatar=None):
                 return task_dispatcher.run_combat_script(str(script), avatar)
             def addTimer(self, timer):
