@@ -32,6 +32,7 @@ from .map_locator import (
     resolve_map_name,
     resolve_country_name,
 )
+from .teleport_points import TeleportPoint, default_teleport_point_store
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
 MIN_VIEW_PX_PER_FEATURE = 0.25
@@ -125,6 +126,7 @@ class TpTask:
         self.map_name = resolve_map_name(map_name)
         self.big = BigMapLocator(self.map_name)
         self.config = MapConfig.for_map(self.map_name)
+        self._teleport_points = default_teleport_point_store()
         # Touch zoom has no reliable semantic level from DeviceHub. Keep the
         # BetterGI 1..6 scale in-process and use pinch gestures for changes.
         self._zoom_level = 3.0
@@ -771,16 +773,26 @@ class TpTask:
         force: bool = False,
     ) -> bool:
         """传送到世界坐标 (wx, wy) 附近的锚点。"""
-        self.log(f"[tp] 目标世界坐标 ({wx:.1f}, {wy:.1f})")
+        target_x, target_y, target_country, target_point = self._resolve_tp_target(
+            wx, wy, force=force,
+        )
+        self.log(f"[tp] 目标世界坐标 ({target_x:.1f}, {target_y:.1f})")
+        if target_point is not None:
+            label = target_point.name or target_point.point_type or "传送点"
+            distance = math.hypot(float(wx) - target_point.x, float(wy) - target_point.y)
+            self.log(
+                f"[tp] force=false 吸附最近传送点：{label}"
+                f"（距离 {distance:.1f}）"
+            )
         if force:
             self.log("[tp] 使用 force 坐标，不吸附到最近传送点")
-        tx, ty = self.big.world_to_feature(wx, wy)
+        tx, ty = self.big.world_to_feature(target_x, target_y)
         t = self.ctx.transform
         view = self._move_map_view_to(
-            wx,
-            wy,
+            target_x,
+            target_y,
             timeout_s,
-            area_name=None,
+            area_name=target_country,
             log_prefix="[tp] 迭代",
             max_iterations=TP_MOVE_MAX_ITERATIONS,
             error_message="传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）",
@@ -800,6 +812,26 @@ class TpTask:
         self.log("[tp] 已确认传送，等待加载…")
         self._wait_for_teleport_completion()
         return True
+
+    def _resolve_tp_target(
+        self,
+        wx: float,
+        wy: float,
+        *,
+        force: bool,
+    ) -> tuple[float, float, str | None, TeleportPoint | None]:
+        """Apply BetterGI's nearest-point rule unless ``force`` is enabled."""
+        request_x, request_y = float(wx), float(wy)
+        if force:
+            return request_x, request_y, None, None
+        point = self._teleport_points.nearest_point(
+            self.map_name, request_x, request_y,
+        )
+        if point is None:
+            # Keep routes usable with an older checkout that has no tp.json.
+            self.log("[tp] 未找到传送点索引，force=false 回退原始坐标")
+            return request_x, request_y, None, None
+        return point.x, point.y, point.country, point
 
     def _is_clickable_map_point(self, x: float, y: float) -> bool:
         width = float(self.ctx.transform.device_width)

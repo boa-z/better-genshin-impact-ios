@@ -69,6 +69,8 @@
    - 当前支持短缓存、上次位置附近的局部搜索、全局回退和跳点过滤；相机朝向检测仍为简化实现。
 2. **大地图传送**（`PathingExecutor._teleport`）
    - 打开地图 → OCR 切换目标区域 → 按该地图坐标系拖动 → 点传送锚点 → OCR/模板确认。
+   - 已接入上游 `tp.json` 传送点索引；`force=false` 会按最近点语义吸附并选择国家，
+     `force=true` 保留原始坐标点击。
    - `genshin.moveMapTo`、`set/getBigMapZoomLevel` 和可见七天神像传送已接入；
      pinch 缩放仍需在真机上校准等级与手势增益。
 

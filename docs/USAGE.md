@@ -377,6 +377,9 @@ bgi-touch trigger --map-mask --map-name Teyvat
 `SeaOfBygoneEras`、`AncientSacredMountain`、`TempleOfSpace` 和 `MoonCanon`，
 也接受对应中文名称。执行器会按路线的 `map_name` 自动切换区域、坐标系和多楼层
 SIFT 特征库；跨地图路线不需要手工重启任务。
+`genshin.tp(x, y)` 会读取项目内置的上游 `assets/data/tp.json`，按 `force=false`
+语义吸附到最近传送点并自动选择其国家；传入 `force=true` 时保留原始坐标，适合
+必须点击非传送点地图位置的脚本。缺少该索引时会记录日志并回退到原始坐标。
 
 DeviceHub Wi-Fi HID 偶发失效时，大地图按键或连续拖动会自动重建设备通道一次；
 建议长路线仍使用 USB。若游戏版本新增区域早于 `BetterGI.Assets.Map` 更新，该区域会
