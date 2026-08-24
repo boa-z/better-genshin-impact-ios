@@ -28,6 +28,7 @@ SUPPORTED = [
     "sleep", "log.", "click", "keyPress", "keyDown", "keyUp", "captureGameRegion",
     "RecognitionObject", "Mat", "Point2f", "Region", "ImageRegion",
     "DesktopRegion", "Pen", "Color", "BvImage", "Mat.Get", "Vec3b",
+    "OpenCvSharp.Scalar", "ColorMatch", "ColorRangeAndOcr",
     "CombatScenes", "Avatar",
     "Task", "host.",
     "GameCaptureRegion", "GridScreenName", "ItemIconRecognitionMode",

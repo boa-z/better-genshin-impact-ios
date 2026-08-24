@@ -33,6 +33,7 @@ from .recognition import (
     Point2f,
     RecognitionObject,
     Region,
+    Scalar,
     SearchAnchorMode,
     SearchExpandRatio,
     SearchOptions,
@@ -795,8 +796,15 @@ class JsScriptRuntime:
             "factory => function BvImage(asset, roi, threshold = 0.8) { "
             "return factory(asset, roi, threshold); }"
         )(_create_bv_image)
+        def _create_scalar(*values):
+            values = list(values)
+            if len(values) == 1 and isinstance(values[0], (list, tuple)):
+                values = list(values[0])
+            values = (values[:4] + [0, 0, 0, 0])[:4]
+            return wrap(Scalar(*values))
+
         g["OpenCvSharp"] = pm.eval(
-            "(() => {"
+            "scalarFactory => {"
             "function Vec3b() {}"
             "function Rect(x = 0, y = 0, width = 0, height = 0) {"
             "this.x=Number(x);this.y=Number(y);this.width=Number(width);"
@@ -809,9 +817,10 @@ class JsScriptRuntime:
             "this.width=Number(width);this.height=Number(height);"
             "Object.defineProperties(this,{Width:{get:()=>this.width,set:v=>this.width=Number(v)},"
             "Height:{get:()=>this.height,set:v=>this.height=Number(v)}}); }"
-            "return { OpenCvSharp: { Rect, Size, Vec3b }, Rect, Size, Vec3b };"
-            "})()"
-        )
+            "function Scalar(...values) { return scalarFactory(...values); }"
+            "return { OpenCvSharp: { Rect, Size, Vec3b, Scalar }, Rect, Size, Vec3b, Scalar };"
+            "}"
+        )(_create_scalar)
 
         # genshin 助手
         from .genshin_api import GenshinApi

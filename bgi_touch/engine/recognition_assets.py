@@ -17,7 +17,12 @@ from typing import Any, Callable, Mapping
 
 import cv2
 
-from .recognition import Mat, RecognitionObject, SearchOptions
+from .recognition import (
+    Mat,
+    RecognitionObject,
+    SearchOptions,
+    _color_conversion_code,
+)
 
 
 class RecognitionJsonError(ValueError):
@@ -106,6 +111,19 @@ def _match_mode(value: Any) -> int:
     if normalized not in modes:
         raise RecognitionJsonError(f"不支持的 templateMatchMode: {value}")
     return modes[normalized]
+
+
+def _color_code(value: Any, field: str) -> int:
+    try:
+        return _color_conversion_code(value)
+    except (TypeError, ValueError) as error:
+        raise RecognitionJsonError(f"{field} 不是有效的 OpenCV 颜色转换方式") from error
+
+
+def _scalar(value: Any, field: str) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)) or not 1 <= len(value) <= 4:
+        raise RecognitionJsonError(f"{field} 必须包含 1 到 4 个数字")
+    return tuple(_number(item, field) for item in value)
 
 
 class _ExpressionEvaluator:
@@ -307,6 +325,20 @@ def load_recognition_object(
         ro.MaskColor = _parse_color(raw["maskColor"])
     if raw.get("maxMatchCount") is not None:
         ro.MaxMatchCount = int(_number(raw["maxMatchCount"], f"objects.{object_name}.maxMatchCount"))
+    if raw.get("colorCode") is not None:
+        ro.ColorConversionCode = _color_code(
+            raw["colorCode"], f"objects.{object_name}.colorCode",
+        )
+    if raw.get("lowerColor") is not None:
+        ro.LowerColor = _scalar(
+            raw["lowerColor"], f"objects.{object_name}.lowerColor",
+        )
+    if raw.get("upperColor") is not None:
+        ro.UpperColor = _scalar(
+            raw["upperColor"], f"objects.{object_name}.upperColor",
+        )
+    if raw.get("matchCount") is not None:
+        ro.MatchCount = int(_number(raw["matchCount"], f"objects.{object_name}.matchCount"))
     for key, target in (
         ("allContains", ro.AllContainMatchText),
         ("oneContains", ro.OneContainMatchText),

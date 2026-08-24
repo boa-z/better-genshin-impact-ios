@@ -290,13 +290,18 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `Point2f`、`Region`、`ImageRegion` 与 `GameCaptureRegion` 均支持 HostType 构造语义。
 `ImageRegion.Find(Ocr/OcrMatch)` 与原版一样返回整个 ROI 的去空白合并文本，跨 OCR
 文本块执行包含/正则匹配；`Find/FindMulti` 的成功和失败回调重载也会同步触发。
+颜色识别支持 `ColorMatch` 与 `ColorRangeAndOcr`，可设置 `ColorConversionCode`、
+`LowerColor`、`UpperColor` 和 `MatchCount`；`ColorRangeAndOcr` 会把 `InRange` 二值
+掩码交给 OCR。`Recognition.json` 同样支持 `colorCode`、`lowerColor`、`upperColor`
+和 `matchCount` 字段。
 模板识别会遵循 `Use3Channels`、`UseMask`（默认忽略纯绿色背景）、
 `TemplateMatchMode` 与 `MaxMatchCount`，并兼容 `TemplateMatch(mat, true)` 构造重载。
 `RecognitionObject.Ocr(Rect)`、`Region.Derive(Rect)`、`ImageRegion.DeriveCrop(Rect)`
 及 Region/GameCapture 坐标转换重载可直接接收 `OpenCvSharp.Rect`。
 `GameCaptureRegion.gameRegion1080PPosClick()` 会直接使用 1920×1080 参考坐标触控，
 背包任务相关的 `GridScreenName` 和 `ItemIconRecognitionMode` 枚举也已暴露。
-`DesktopRegion`、`Color`、`Pen`、`BvImage` 以及 `OpenCvSharp.Vec3b` 已提供；其中
+`DesktopRegion`、`Color`、`Pen`、`BvImage`、`OpenCvSharp.Vec3b` 以及
+`OpenCvSharp.Scalar` 已提供；其中
 `BvImage("Feature:file.png")` 可读取脚本 `assets/Feature` 或本项目内置任务素材，
 `Mat.Get(Vec3b, row, column)` 返回兼容 `Item0/Item1/Item2` 的 BGR 像素值。
 `CombatScenes` 与 `Avatar` 会从 `config/party.json`（或脚本 `TeamNames`）建立队伍，

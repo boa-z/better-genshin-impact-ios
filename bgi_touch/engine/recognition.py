@@ -113,6 +113,126 @@ class Size:
         return f"Size({self.width:g}, {self.height:g})"
 
 
+def _scalar_tuple(value, *, default=(0.0, 0.0, 0.0, 0.0)) -> tuple[float, ...]:
+    """Read an OpenCvSharp.Scalar-like value as up to four components."""
+    unwrapped = getattr(value, "__wrapped__", None)
+    if unwrapped is not None:
+        value = unwrapped
+    if value is None:
+        return tuple(float(item) for item in default)
+    if isinstance(value, dict):
+        folded = {str(key).casefold(): item for key, item in value.items()}
+        values = []
+        for index in range(4):
+            values.append(folded.get(
+                f"val{index}", folded.get(f"item{index}", default[index]),
+            ))
+    elif isinstance(value, (list, tuple, np.ndarray)):
+        values = list(value)[:4]
+    else:
+        values = []
+        for index in range(4):
+            found = False
+            for name in (
+                f"val{index}", f"Val{index}",
+                f"item{index}", f"Item{index}",
+            ):
+                try:
+                    values.append(value[name])
+                    found = True
+                    break
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                try:
+                    values.append(getattr(value, name))
+                    found = True
+                    break
+                except (AttributeError, TypeError):
+                    pass
+            if not found:
+                values.append(default[index])
+    if len(values) < 4:
+        values.extend(default[len(values):4])
+    try:
+        return tuple(float(item) for item in values[:4])
+    except (TypeError, ValueError) as error:
+        raise TypeError("Scalar 的四个分量必须是数字") from error
+
+
+class Scalar:
+    """Small OpenCvSharp.Scalar-compatible value object for host properties."""
+
+    def __init__(self, val0: float = 0, val1: float = 0,
+                 val2: float = 0, val3: float = 0):
+        self.val0 = float(val0)
+        self.val1 = float(val1)
+        self.val2 = float(val2)
+        self.val3 = float(val3)
+
+    Val0 = property(
+        lambda self: self.val0,
+        lambda self, value: setattr(self, "val0", float(value)),
+    )
+    Val1 = property(
+        lambda self: self.val1,
+        lambda self, value: setattr(self, "val1", float(value)),
+    )
+    Val2 = property(
+        lambda self: self.val2,
+        lambda self, value: setattr(self, "val2", float(value)),
+    )
+    Val3 = property(
+        lambda self: self.val3,
+        lambda self, value: setattr(self, "val3", float(value)),
+    )
+    Item0 = Val0
+    Item1 = Val1
+    Item2 = Val2
+    Item3 = Val3
+
+    def __iter__(self):
+        yield from (self.val0, self.val1, self.val2, self.val3)
+
+    def __getitem__(self, index: int) -> float:
+        return tuple(self)[index]
+
+    def __repr__(self) -> str:
+        return (
+            f"Scalar({self.val0:g}, {self.val1:g}, "
+            f"{self.val2:g}, {self.val3:g})"
+        )
+
+
+def _color_conversion_code(value) -> int:
+    """Normalize OpenCV color-conversion enum names and numeric values."""
+    raw = getattr(value, "value", value)
+    raw = getattr(raw, "__wrapped__", raw)
+    if isinstance(raw, str):
+        normalized = raw.strip()
+        if not normalized:
+            return int(cv2.COLOR_BGR2RGB)
+        name = normalized if normalized.startswith("COLOR_") else f"COLOR_{normalized}"
+        code = getattr(cv2, name, None)
+        if code is None:
+            # OpenCV's Python constants are upper-case while enum names in
+            # BetterGI JSON are conventionally PascalCase.
+            folded = name.casefold()
+            code = next(
+                (
+                    candidate for candidate in dir(cv2)
+                    if candidate.casefold() == folded
+                ), None,
+            )
+            if code is None:
+                raise ValueError(f"不支持的颜色转换方式: {value}")
+            return int(getattr(cv2, code))
+        return int(code)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"颜色转换方式必须是 OpenCV 枚举名或数字: {value}") from error
+
+
 class SearchAnchorMode:
     """BetterGI ``SearchAnchorMode`` enum values exposed to Python and JS."""
 
@@ -396,6 +516,10 @@ class RecognitionObject:
         self.mask_mat: Mat | None = None
         self.draw_on_window = False
         self.max_match_count = -1
+        self.color_conversion_code = int(cv2.COLOR_BGR2RGB)
+        self.lower_color = Scalar()
+        self.upper_color = Scalar()
+        self.match_count = 1
         self.one_contain_match_text: list[str] = []
         self.all_contain_match_text: list[str] = []
         self.regex_match_text: list[str] = []
@@ -536,6 +660,28 @@ class RecognitionObject:
         lambda self: self.max_match_count,
         lambda self, value: setattr(self, "max_match_count", int(value)),
     )
+    colorConversionCode = property(
+        lambda self: self.color_conversion_code,
+        lambda self, value: setattr(
+            self, "color_conversion_code", _color_conversion_code(value),
+        ),
+    )
+    lowerColor = property(
+        lambda self: self.lower_color,
+        lambda self, value: setattr(
+            self, "lower_color", Scalar(*_scalar_tuple(value)),
+        ),
+    )
+    upperColor = property(
+        lambda self: self.upper_color,
+        lambda self, value: setattr(
+            self, "upper_color", Scalar(*_scalar_tuple(value)),
+        ),
+    )
+    matchCount = property(
+        lambda self: self.match_count,
+        lambda self, value: setattr(self, "match_count", int(value)),
+    )
     oneContainMatchText = property(
         lambda self: self.one_contain_match_text,
         lambda self, value: setattr(self, "one_contain_match_text", list(value)),
@@ -574,6 +720,10 @@ class RecognitionObject:
     MaskMat = maskMat
     DrawOnWindow = drawOnWindow
     MaxMatchCount = maxMatchCount
+    ColorConversionCode = colorConversionCode
+    LowerColor = lowerColor
+    UpperColor = upperColor
+    MatchCount = matchCount
     OneContainMatchText = oneContainMatchText
     AllContainMatchText = allContainMatchText
     RegexMatchText = regexMatchText
@@ -1061,13 +1211,54 @@ class ImageRegion(Region):
             and all(re.search(pattern, text) for pattern in ro.regex_match_text)
         )
 
+    @staticmethod
+    def _color_bounds(ro: RecognitionObject, channels: int) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Adapt OpenCvSharp's four-component Scalar to the converted image."""
+        if channels <= 0:
+            raise ValueError("颜色识别得到的图像通道数无效")
+        lower = _scalar_tuple(ro.lower_color)
+        upper = _scalar_tuple(ro.upper_color)
+        if channels > len(lower):
+            lower += (0.0,) * (channels - len(lower))
+            upper += (0.0,) * (channels - len(upper))
+        return lower[:channels], upper[:channels]
+
+    @classmethod
+    def _color_mask(cls, crop: np.ndarray, ro: RecognitionObject) -> np.ndarray:
+        """Convert a BGR crop and retain pixels inside the configured range."""
+        source = crop
+        code = int(ro.color_conversion_code)
+        # BetterGI receives BGR captures. BGRA2BGR is its sentinel for
+        # "already BGR" in the color-range path, so do not reject it because
+        # the portable capture has no alpha channel.
+        if code != int(getattr(cv2, "COLOR_BGRA2BGR", 1)):
+            try:
+                source = cv2.cvtColor(source, code)
+            except cv2.error as error:
+                raise ValueError(
+                    f"颜色识别无法执行 OpenCV 转换 {code}: {error}"
+                ) from error
+        channels = 1 if source.ndim == 2 else int(source.shape[2])
+        lower, upper = cls._color_bounds(ro, channels)
+        try:
+            return cv2.inRange(source, lower, upper)
+        except cv2.error as error:
+            raise ValueError(
+                f"颜色识别上下界与图像通道不匹配: {lower}..{upper}"
+            ) from error
+
+    def _ocr_source(self, crop: np.ndarray, ro: RecognitionObject) -> np.ndarray:
+        if ro.recognition_type == "ColorRangeAndOcr":
+            return self._color_mask(crop, ro)
+        return crop
+
     def find(self, ro: RecognitionObject, success_action=None,
              fail_action=None) -> Region:
         ro = getattr(ro, "__wrapped__", ro)
         if not isinstance(ro, RecognitionObject):
             raise TypeError("find/findMulti 需要 RecognitionObject")
 
-        if ro.recognition_type in ("Ocr", "OcrMatch"):
+        if ro.recognition_type in ("Ocr", "OcrMatch", "ColorRangeAndOcr"):
             resolved = self._resolve_search_region(ro)
             if resolved is None:
                 if callable(fail_action):
@@ -1079,7 +1270,7 @@ class ImageRegion(Region):
                     fail_action()
                 return Region.empty_region(self.ctx)
             crop = self.bgr[cy:cy + ch, cx:cx + cw]
-            items = get_ocr().recognize(crop)
+            items = get_ocr().recognize(self._ocr_source(crop, ro))
             text = self._compact_ocr_text(items)
             matched = bool(text)
             if ro.recognition_type == "OcrMatch":
@@ -1192,8 +1383,28 @@ class ImageRegion(Region):
                 fail_action()
             return out
 
-        if ro.recognition_type in ("Ocr", "OcrMatch"):
-            items = get_ocr().recognize(crop)
+        if ro.recognition_type == "ColorMatch":
+            if limit <= 0:
+                if callable(fail_action):
+                    fail_action()
+                return []
+            mask = self._color_mask(crop, ro)
+            match_count = int(cv2.countNonZero(mask))
+            if match_count < int(ro.match_count):
+                if callable(fail_action):
+                    fail_action()
+                return []
+            result = Region(
+                self.ctx, self.dx + cx, self.dy + cy, cw, ch,
+                score=float(match_count),
+            )
+            results = [result]
+            if callable(success_action):
+                success_action(results)
+            return results
+
+        if ro.recognition_type in ("Ocr", "OcrMatch", "ColorRangeAndOcr"):
+            items = get_ocr().recognize(self._ocr_source(crop, ro))
             if (ro.recognition_type == "OcrMatch" or ro.one_contain_match_text
                     or ro.all_contain_match_text or ro.regex_match_text):
                 def keep(it) -> bool:
