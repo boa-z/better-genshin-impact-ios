@@ -452,6 +452,44 @@ class InputSimulator:
 
         self._direct_input(swipe_all)
 
+    def vertical_scroll(self, amount: float) -> None:
+        """Translate BetterGI mouse-wheel clicks into safe vertical swipes.
+
+        Positive wheel values scroll toward the top (finger moves down), while
+        negative values scroll toward the bottom. Large wheel bursts are split
+        so every gesture stays inside the central menu-safe region.
+        """
+        try:
+            clicks = float(amount)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(clicks) or abs(clicks) < 1e-3:
+            return
+        steps = max(1, int(math.ceil(abs(clicks) / 3.0)))
+        per_step = clicks / steps
+        width, height = self.t.device_width, self.t.device_height
+        x = width * 0.62
+        distance = min(height * 0.42, height * (0.16 + 0.08 * abs(per_step)))
+        direction = 1.0 if per_step > 0 else -1.0
+
+        def swipe_all() -> None:
+            for index in range(steps):
+                center_y = height * 0.52
+                y1 = center_y - direction * distance / 2
+                y2 = center_y + direction * distance / 2
+                self.device.swipe(
+                    x, y1, x, y2,
+                    duration_ms=int(min(600, max(220, distance * 0.55))),
+                    **self._wh,
+                )
+                if index + 1 < steps:
+                    time.sleep(0.12)
+
+        self._direct_input(swipe_all)
+        self._emit("vertical_scroll", amount=clicks)
+
+    verticalScroll = vertical_scroll
+
     def tap_button(self, name: str, hold_ms: int = 80) -> None:
         raw = self.layout.profile_key_for_button(name)
         if raw is not None and self._profile_press_raw(raw, hold_ms):

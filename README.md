@@ -29,6 +29,7 @@ bettergi-scripts-list 脚本 ──bgi-touch convert──▶ 可运行脚本 + 
 - **手势泵**：devicehub-mask 触控手势原子且 ≤5s，"按住 W"由后台线程连发 multi_touch 维持；W+Shift 等组合合并进同一手势的多个触点。
 - **坐标系**：脚本/模板资产按 1920×1080 基准；按高度等比缩放 + 依元素所在三分位做左/中/右锚点重定位（原神移动端 HUD 贴边锚定，iPhone 19.5:9 比 16:9 宽）。
 - **朝向自适应**（真机实测）：游戏横屏时截图流仍是竖屏帧（内容旋转 90°），而 tap 坐标空间跟随 `status.orientation` 动态变化。截图按帧宽高自动旋转；点按映射按 status 动态启停。
+- **滚轮兼容**：JS `verticalScroll`、战斗 DSL `scroll(...)` 与键鼠宏滚轮统一转换为菜单安全区竖向滑动；连续滚轮事件先合并，避免产生不必要的 DeviceHub 请求。
 
 ## DeviceHub profile
 

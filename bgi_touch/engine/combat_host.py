@@ -186,9 +186,8 @@ class Avatar:
     def move_by(self, x: float, y: float) -> None:
         self.move_camera(x, y)
 
-    def scroll(self, _amount: int) -> None:
-        # No wheel on touch. Scripts use this for PC-only list navigation.
-        return None
+    def scroll(self, amount: int) -> None:
+        self.ctx.input.vertical_scroll(float(amount))
 
     def key_down(self, key: str) -> None:
         self.ctx.input.key_down(str(key))

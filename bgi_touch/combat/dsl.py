@@ -203,7 +203,9 @@ class CombatExecutor:
                 deadline = time.monotonic() + 8
                 while time.monotonic() < deadline and not self.skill_ready():
                     self.sleep(300)
-        elif a in ("scroll", "fly", "check"):
+        elif a == "scroll":
+            self.input.vertical_scroll(self._sec(p, 0, 0))
+        elif a in ("fly", "check"):
             pass
         else:
             self.log(f"[combat] 未知动作 {a}，已跳过")

@@ -8,7 +8,7 @@
 - 连续的相对移动按 ≤120ms 窗口合并为一次相机滑动
 - 绝对移动 + 左键按下/抬起 → 在该坐标 tap（按 info 记录分辨率归一到 1080p）
 - 无预先移动的左键点击 → 普攻按钮
-- 滚轮 → 触控端无对应，忽略并告警一次
+- 滚轮 → 合并相邻滚轮增量并转换为菜单安全区竖向滑动
 """
 
 from __future__ import annotations
@@ -33,10 +33,11 @@ def vk_to_key(code: int) -> str | None:
 @dataclass
 class TouchEvent:
     t: float  # ms since start
-    kind: str  # keyDown / keyUp / keyPress / cameraBy / tapRef / attackDown / attackUp
+    kind: str  # keyDown / keyUp / cameraBy / verticalScroll / tapRef / attackDown / attackUp
     key: str | None = None
     x: float = 0
     y: float = 0
+    amount: float = 0
 
 
 def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
@@ -51,7 +52,7 @@ def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
     cam: list[float] | None = None  # [t0, dx, dy, t_last]
     cursor: tuple[float, float] | None = None
     cursor_fresh = False
-    wheel_warned = False
+    wheel: list[float] | None = None  # [t0, raw_delta, t_last]
 
     def flush_cam() -> None:
         nonlocal cam
@@ -59,10 +60,20 @@ def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
             events.append(TouchEvent(t=cam[0], kind="cameraBy", x=cam[1] * sx, y=cam[2] * sy))
         cam = None
 
+    def flush_wheel() -> None:
+        nonlocal wheel
+        if wheel and abs(wheel[1]) > 1e-3:
+            # Windows wheel delta 120 equals one BetterGI scroll click.
+            events.append(TouchEvent(
+                t=wheel[0], kind="verticalScroll", amount=wheel[1] / 120.0,
+            ))
+        wheel = None
+
     for ev in macro.get("macroEvents", []):
         etype = ev.get("type")
         t = float(ev.get("time", 0))
         if etype == 3:  # 相对移动：合并窗口
+            flush_wheel()
             if cam and t - cam[3] <= 120:
                 cam[1] += ev.get("mouseX", 0)
                 cam[2] += ev.get("mouseY", 0)
@@ -72,6 +83,18 @@ def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
                 cam = [t, float(ev.get("mouseX", 0)), float(ev.get("mouseY", 0)), t]
             continue
         flush_cam()
+        if etype == 6:
+            delta = float(ev.get("mouseY", 0) or 0)
+            if abs(delta) < 1e-3:
+                flush_wheel()
+            elif wheel and t - wheel[2] <= 120:
+                wheel[1] += delta
+                wheel[2] = t
+            else:
+                flush_wheel()
+                wheel = [t, delta, t]
+            continue
+        flush_wheel()
         if etype in (0, 1):
             key = vk_to_key(int(ev.get("keyCode", 0)))
             if key is None:
@@ -94,10 +117,8 @@ def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
                 if events and events[-1].kind == "attackDown":
                     # down/up 配对 → 由回放端按时长决定普攻或蓄力
                     events.append(TouchEvent(t=t, kind="attackUp"))
-        elif etype == 6 and not wheel_warned:
-            wheel_warned = True
-            warnings.append("宏包含滚轮事件，触控端无对应操作，已忽略")
     flush_cam()
+    flush_wheel()
     return events, warnings
 
 
@@ -128,6 +149,8 @@ class MacroPlayer:
                 self.input.key_up(ev.key)
             elif ev.kind == "cameraBy":
                 self.input.move_camera_by(ev.x, ev.y)
+            elif ev.kind == "verticalScroll":
+                self.input.vertical_scroll(ev.amount)
             elif ev.kind == "tapRef":
                 self.input.click_ref(ev.x, ev.y)
             elif ev.kind == "attackDown":

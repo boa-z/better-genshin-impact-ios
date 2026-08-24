@@ -277,7 +277,7 @@ class JsScriptRuntime:
         expose("middleButtonClick", lambda: None)
         expose("middleButtonDown", lambda: None)
         expose("middleButtonUp", lambda: None)
-        expose("verticalScroll", lambda n: None)
+        expose("verticalScroll", lambda n: ctx.input.vertical_scroll(float(n)))
 
         # log / notification / settings
         class _Log:
