@@ -28,7 +28,9 @@ from .map_locator import (
     MapConfig,
     get_map_definition,
     map_layer_from_path,
+    nearest_teyvat_country,
     resolve_map_name,
+    resolve_country_name,
 )
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
@@ -131,6 +133,7 @@ class TpTask:
         # transient SIFT miss does not reopen the area selector and disturb a
         # gesture that is already in progress.
         self._area_ready = False
+        self._selected_area: str | None = None
         self._go_teleport = RecognitionObject.template_match(
             Mat.from_file(str(TEMPLATES / "GoTeleport.png")), 1440, 960, 100, 120
         )
@@ -172,18 +175,51 @@ class TpTask:
             self.log(f"[tp] 设备输入通道重建失败：{error}")
             return False
 
-    def open_map(self) -> bool:
+    def _target_area(
+        self,
+        wx: float | None = None,
+        wy: float | None = None,
+        area_name: str | None = None,
+    ) -> str | None:
+        """Resolve the map selector entry needed for a target coordinate."""
+        if self.map_name == "Teyvat":
+            if area_name:
+                return resolve_country_name(area_name)
+            if wx is not None and wy is not None:
+                return nearest_teyvat_country(wx, wy)
+            return None
+        return self.map_name
+
+    def open_map(
+        self,
+        *,
+        wx: float | None = None,
+        wy: float | None = None,
+        area_name: str | None = None,
+    ) -> bool:
+        """Open the requested map and, when needed, its area selector entry.
+
+        ``area_name`` is a country for Teyvat and a map name for an independent
+        map.  With no target arguments this preserves the old lightweight
+        behavior used by zoom/statue helpers: recognize the currently visible
+        map without opening the area selector.
+        """
+        target_area = self._target_area(wx, wy, area_name)
         recovered = False
         for attempt in range(3):
             frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
-                self._area_ready = True
-                return True
-            if self._is_map_ui():
-                if self._area_ready and self._wait_for_target_map(timeout_s=1.0):
+                if target_area is None or self._selected_area == target_area:
+                    self._area_ready = True
                     return True
-                if self._switch_area():
+                if self._switch_area(target_area):
                     return self._wait_for_target_map()
+                return False
+            if self._is_map_ui():
+                if target_area is not None and self._switch_area(target_area):
+                    return self._wait_for_target_map()
+                if target_area is None and self._area_ready and self._wait_for_target_map(timeout_s=1.0):
+                    return True
                 return False
             self.ctx.input.tap_button("map")
             self.ctx.sleep(900)
@@ -194,13 +230,18 @@ class TpTask:
             except Exception:
                 frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
-                self._area_ready = True
-                return True
-            if self._is_map_ui() and self._switch_area():
+                if target_area is None or self._selected_area == target_area:
+                    self._area_ready = True
+                    return True
+                if self._switch_area(target_area):
+                    return self._wait_for_target_map()
+                return False
+            if self._is_map_ui() and target_area is not None and self._switch_area(target_area):
                 return self._wait_for_target_map()
             if attempt == 0 and not recovered:
                 recovered = self._recover_device_channel("地图按键未生效")
-        return self.big.locate_view(self.ctx.capture_bgr()) is not None
+        view = self.big.locate_view(self.ctx.capture_bgr())
+        return view is not None and (target_area is None or self._selected_area == target_area)
 
     def _is_map_ui(self) -> bool:
         try:
@@ -219,12 +260,23 @@ class TpTask:
             .replace("娜塔", "纳塔")
         )
 
-    def _switch_area(self, timeout_s: float = 2.5) -> bool:
-        """Open the area list and select this locator's map by OCR."""
+    def _switch_area(
+        self,
+        area_name: str | None = None,
+        timeout_s: float = 2.5,
+    ) -> bool:
+        """Open the area list and select a country/map entry by OCR."""
         definition = get_map_definition(self.map_name)
-        wanted = [self._normalize_area_text(value) for value in (
-            definition.name, *definition.aliases,
-        )]
+        if self.map_name == "Teyvat":
+            selected_area = resolve_country_name(area_name)
+            if selected_area is None:
+                self.log("[tp] 切换地图区域失败：未指定提瓦特国家")
+                return False
+            wanted_values = (selected_area,)
+        else:
+            selected_area = self.map_name
+            wanted_values = (definition.name, *definition.aliases)
+        wanted = [self._normalize_area_text(value) for value in wanted_values]
         self.ctx.input.click_ref(1760, 1020)
         self.ctx.sleep(250)
         deadline = time.monotonic() + timeout_s
@@ -246,10 +298,12 @@ class TpTask:
                 self.log(f"[tp] 切换地图区域：{target.text.strip()}")
                 target.click()
                 self.ctx.sleep(700)
+                self._selected_area = selected_area
+                self._area_ready = False
                 return True
             self.ctx.sleep(150)
         candidates = " / ".join(dict.fromkeys(seen[:12])) or "无"
-        self.log(f"[tp] 切换地图区域失败：{self.map_name}，OCR候选：{candidates}")
+        self.log(f"[tp] 切换地图区域失败：{selected_area}，OCR候选：{candidates}")
         return False
 
     def _wait_for_target_map(self, timeout_s: float = 4.0) -> bool:
@@ -334,6 +388,7 @@ class TpTask:
         wy: float,
         timeout_s: float,
         *,
+        area_name: str | None = None,
         log_prefix: str,
         max_iterations: int,
         error_message: str,
@@ -346,7 +401,7 @@ class TpTask:
         useful for older DeviceHub profiles and is harmless for the current
         fixed 16:9 profile.
         """
-        if not self.open_map():
+        if not self.open_map(wx=wx, wy=wy, area_name=area_name):
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
         tx, ty = self.big.world_to_feature(wx, wy)
         deadline = time.monotonic() + timeout_s
@@ -430,16 +485,30 @@ class TpTask:
                 self.log("[tp] 未取得拖动后的新截图，等待下一帧")
         raise RuntimeError(error_message)
 
-    def move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+    def move_map_to(
+        self,
+        wx: float,
+        wy: float,
+        timeout_s: float = 90,
+        force_country: str | None = None,
+    ) -> bool:
         with self.exclusive_triggers():
-            return self._move_map_to(wx, wy, timeout_s)
+            return self._move_map_to(wx, wy, timeout_s, force_country=force_country)
 
-    def _move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+    def _move_map_to(
+        self,
+        wx: float,
+        wy: float,
+        timeout_s: float = 90,
+        *,
+        force_country: str | None = None,
+    ) -> bool:
         """Center the visible map on a world coordinate without selecting it."""
         self._move_map_view_to(
             wx,
             wy,
             timeout_s,
+            area_name=force_country,
             log_prefix="[map] 迭代",
             max_iterations=MAP_MOVE_MAX_ITERATIONS,
             error_message="大地图移动失败：迭代/超时耗尽",
@@ -478,12 +547,18 @@ class TpTask:
         self._zoom_level = target
         return self._zoom_level
 
-    def click_map_point(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+    def click_map_point(
+        self,
+        wx: float,
+        wy: float,
+        timeout_s: float = 90,
+        force_country: str | None = None,
+    ) -> bool:
         """Center a world coordinate and click the nearest map point once."""
         with self.exclusive_triggers():
-            if not self.open_map():
+            if not self.open_map(wx=wx, wy=wy, area_name=force_country):
                 raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
-            self._move_map_to(wx, wy, timeout_s)
+            self._move_map_to(wx, wy, timeout_s, force_country=force_country)
             frame = self.ctx.capture_bgr()
             view = self.big.locate_view(frame)
             if view is None:
@@ -506,13 +581,14 @@ class TpTask:
             return True
 
     def move_independent_map_to(self, wx: float, wy: float, map_name: str,
-                                timeout_s: float = 90) -> bool:
+                                timeout_s: float = 90,
+                                force_country: str | None = None) -> bool:
         """Move a named map when its local feature assets are available."""
         if resolve_map_name(map_name) != self.map_name:
             return TpTask(self.ctx, self.log, map_name).move_map_to(
-                wx, wy, timeout_s,
+                wx, wy, timeout_s, force_country=force_country,
             )
-        return self.move_map_to(wx, wy, timeout_s)
+        return self.move_map_to(wx, wy, timeout_s, force_country=force_country)
 
     def tp_to_statue(self, timeout_s: float = 30) -> bool:
         with self.exclusive_triggers():
@@ -668,10 +744,17 @@ class TpTask:
             0.25 * t.device_width,
         )
 
-    def tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+    def tp(
+        self,
+        wx: float,
+        wy: float,
+        timeout_s: float = 90,
+        *,
+        force: bool = False,
+    ) -> bool:
         with self.exclusive_triggers():
             try:
-                return self._tp(wx, wy, timeout_s)
+                return self._tp(wx, wy, timeout_s, force=force)
             except RuntimeError:
                 # Keep direct PathingExecutor callers safe as well as the
                 # genshin API retry wrapper: a failed point panel must not
@@ -679,15 +762,25 @@ class TpTask:
                 self._dismiss_teleport_panel()
                 raise
 
-    def _tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+    def _tp(
+        self,
+        wx: float,
+        wy: float,
+        timeout_s: float = 90,
+        *,
+        force: bool = False,
+    ) -> bool:
         """传送到世界坐标 (wx, wy) 附近的锚点。"""
         self.log(f"[tp] 目标世界坐标 ({wx:.1f}, {wy:.1f})")
+        if force:
+            self.log("[tp] 使用 force 坐标，不吸附到最近传送点")
         tx, ty = self.big.world_to_feature(wx, wy)
         t = self.ctx.transform
         view = self._move_map_view_to(
             wx,
             wy,
             timeout_s,
+            area_name=None,
             log_prefix="[tp] 迭代",
             max_iterations=TP_MOVE_MAX_ITERATIONS,
             error_message="传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）",

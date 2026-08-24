@@ -255,7 +255,7 @@ class PathingExecutor:
         if self._tp_task is None:
             from .tp import TpTask
             self._tp_task = TpTask(self.ctx, log=self.log, map_name=self._map_name)
-        self._tp_task.tp(wp.x, wp.y)
+        self._tp_task.tp(wp.x, wp.y, force=wp.action == "force_tp")
         if self.positioner is not None:
             # 传送落点≈目标锚点：直接设为局部搜索先验（白天/城内全局匹配不稳）
             if hasattr(self.positioner, "set_prior"):

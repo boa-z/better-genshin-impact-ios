@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import threading
 from dataclasses import dataclass
@@ -64,6 +65,61 @@ MAP_DEFINITIONS = {
                       aliases=("霜月",)),
     )
 }
+
+# The game centers the Teyvat area selector at these world coordinates.  Keep
+# this small table alongside map coordinate conversion instead of embedding it
+# in the touch task so API callers and route executors use the same country
+# selection rule.  Values are the upstream BetterGI MapLazyAssets centers.
+TEYVAT_COUNTRY_CENTERS: dict[str, tuple[float, float]] = {
+    "蒙德": (-876.0, 2278.0),
+    "璃月": (270.0, -666.0),
+    "稻妻": (-4400.0, -3050.0),
+    "须弥": (2877.0, -374.0),
+    "枫丹": (4515.0, 3631.0),
+    "纳塔": (8973.5, -1879.1),
+    "挪德卡莱": (9542.25, 1661.84),
+    "至冬": (6755.051, 9480.659),
+}
+
+_COUNTRY_ALIASES = {
+    "mondstadt": "蒙德",
+    "liyue": "璃月",
+    "inazuma": "稻妻",
+    "sumeru": "须弥",
+    "fontaine": "枫丹",
+    "natlan": "纳塔",
+    "nodkrai": "挪德卡莱",
+    "snezhnaya": "至冬",
+}
+
+
+def _normalize_country(value: str) -> str:
+    return (
+        str(value).strip().replace(" ", "").replace("·", "")
+        .replace("-", "").replace("_", "").casefold()
+    )
+
+
+def resolve_country_name(value: str | None) -> str | None:
+    """Normalize BetterGI country names and common script aliases."""
+    if value is None or not str(value).strip():
+        return None
+    normalized = _normalize_country(value)
+    for country in TEYVAT_COUNTRY_CENTERS:
+        if normalized == _normalize_country(country):
+            return country
+    return _COUNTRY_ALIASES.get(normalized, str(value).strip())
+
+
+def nearest_teyvat_country(wx: float, wy: float) -> str:
+    """Return the area whose map-selector center is nearest to a coordinate."""
+    return min(
+        TEYVAT_COUNTRY_CENTERS,
+        key=lambda name: math.hypot(
+            TEYVAT_COUNTRY_CENTERS[name][0] - float(wx),
+            TEYVAT_COUNTRY_CENTERS[name][1] - float(wy),
+        ),
+    )
 
 
 def resolve_map_name(value: str | None) -> str:

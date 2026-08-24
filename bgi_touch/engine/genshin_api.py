@@ -151,7 +151,7 @@ class GenshinApi:
         with task.exclusive_triggers():
             for attempt in range(3):
                 try:
-                    result = task.tp(float(x), float(y))
+                    result = task.tp(float(x), float(y), force=bool(force))
                     if result:
                         self._positioner_for(str(map_name or "Teyvat")).set_prior(
                             float(x), float(y)
@@ -167,16 +167,22 @@ class GenshinApi:
             raise last_error
         raise RuntimeError("传送失败：未知原因")
 
-    def moveMapTo(self, x, y, country=None):
-        return self._tp_for().move_map_to(float(x), float(y))
+    def moveMapTo(self, x, y, forceCountry=None):
+        return self._tp_for().move_map_to(
+            float(x), float(y), force_country=forceCountry,
+        )
 
     def clickMapPoint(self, x, y, forceCountry=None):
         """移动到世界坐标并点击地图上的点，保持地图选择面板打开。"""
-        return self._tp_for().click_map_point(float(x), float(y))
+        return self._tp_for().click_map_point(
+            float(x), float(y), force_country=forceCountry,
+        )
 
     def moveIndependentMapTo(self, x, y, map_name, forceCountry=None):
         task = self._tp_for(str(map_name))
-        return task.move_independent_map_to(float(x), float(y), str(map_name))
+        return task.move_independent_map_to(
+            float(x), float(y), str(map_name), force_country=forceCountry,
+        )
 
     def tpToStatueOfTheSeven(self):
         return self._tp_for().tp_to_statue()
