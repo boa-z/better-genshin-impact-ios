@@ -168,11 +168,41 @@ def cmd_run(args) -> int:
     for kv in args.set or []:
         k, _, v = kv.partition("=")
         overrides[k] = v
-    rt = JsScriptRuntime(ctx, args.script_dir, settings=overrides, party_slots=_load_party())
+    rt = JsScriptRuntime(
+        ctx,
+        args.script_dir,
+        settings=overrides,
+        party_slots=_load_party(),
+        notification_config_path=args.notification_config,
+    )
     try:
         rt.run()
     finally:
         ctx.close()
+    return 0
+
+
+def cmd_notify(args) -> int:
+    """Send one notification without connecting to DeviceHub."""
+    from .notification import NotificationService
+
+    service = NotificationService.load(args.notification_config)
+    try:
+        try:
+            queued = service.notify_now(
+                args.event,
+                args.message,
+                result="Fail" if args.error else "Success",
+            )
+        except Exception as error:
+            print(f"Gotify 通知发送失败：{error}", file=sys.stderr)
+            return 1
+    finally:
+        service.close()
+    if not queued:
+        print("通知未发送：Gotify 未启用、事件未订阅或配置无效", file=sys.stderr)
+        return 2
+    print("Gotify 通知已发送")
     return 0
 
 
@@ -275,6 +305,8 @@ def main() -> int:
                         help="DeviceHub 配置文件（默认 config/devicehub.json）")
     parser.add_argument("--device-id", default=os.environ.get("BGI_DEVICE_ID"),
                         help="精确设备选择 ID/UDID（多设备环境推荐）")
+    parser.add_argument("--notification-config", default=os.environ.get("BGI_NOTIFICATION_CONFIG"),
+                        help="通知配置文件（默认 config/notification.json）")
     parser.add_argument("--layout", default=os.environ.get("BGI_LAYOUT_PATH"),
                         help="本地触控布局 JSON；支持 config/controls 下的 extends 覆盖")
     parser.add_argument("--keymap-profile", default=os.environ.get(
@@ -307,6 +339,10 @@ def main() -> int:
     p = sub.add_parser("run", help="运行 JS 脚本包（BetterGI 兼容）")
     p.add_argument("script_dir")
     p.add_argument("--set", action="append", metavar="KEY=VALUE", help="覆盖脚本 settings")
+    p = sub.add_parser("notify", help="发送一条 Gotify 测试通知（不连接设备）")
+    p.add_argument("message")
+    p.add_argument("--event", default="Test")
+    p.add_argument("--error", action="store_true", help="标记为失败通知")
     p = sub.add_parser("pathing", help="解析/执行 pathing JSON")
     p.add_argument("file")
     p.add_argument("--dry-run", action="store_true", help="仅解析并输出统计")
@@ -338,7 +374,7 @@ def main() -> int:
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
                 "task": cmd_task,
                 "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing,
-                "group": cmd_group, "web": cmd_web,
+                "group": cmd_group, "notify": cmd_notify, "web": cmd_web,
                 "trigger": cmd_trigger, "reconnect": cmd_reconnect}
     return handlers[args.command](args)
 

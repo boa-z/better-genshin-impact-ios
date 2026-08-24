@@ -34,6 +34,8 @@
   RunNum、失败继续/停止，以及原子 TaskProgress；中断后从未完成或失败项目恢复。
 - 自由演奏 MusicPlayer 支持原琴 JSON、MIDI JSON、网络键谱、21 键和弦触控、移调、
   顺序/单曲循环/随机、自定义 BPM，以及按背包详情 OCR 自动装备乐器。
+- BetterGI `notification.send/error` 已接入 Gotify，兼容 JS 通知授权、事件订阅、优先级
+  和环境变量 Token；有界后台队列不触碰 DeviceHub 截图器。
 - QuickBuy 的普通商店与尘歌壶商店数量滑块、购买确认分支；货币模板由资产下载器
   固定版本获取，缺少模板时要求显式指定商店类型以避免误购。
 - AutoBoss 的 41 个官方首领路线分型、树脂耗尽/指定次数策略、须臾与脆弱树脂补充、

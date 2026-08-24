@@ -106,6 +106,24 @@ bgi-touch --layout config/controls/genshin-native-ui.json task AutoCook
 默认战斗布局仍使用 `config/controls/genshin-default.json`；`--layout` 只改变
 BetterGI 语义到 profile 原始键码的本地解释，不会修改 DeviceHub 的原始 profile。
 
+### 1.6 Gotify 通知
+
+`config/notification.json` 支持 BetterGI 的 `jsNotificationEnabled`、
+`notificationEventSubscribe`、`gotifyNotificationEnabled`、`gotifyUrl`、
+`gotifyAppToken` 和 `gotifyNotifyLevel` 扁平字段，也支持项目示例中的 `gotify` 嵌套对象。
+建议配置文件只保存服务地址，Token 通过环境变量注入：
+
+```bash
+export BGI_GOTIFY_TOKEN='your-app-token'
+bgi-touch notify "BetterGI iOS 通知测试"
+```
+
+`notificationEventSubscribe` 留空表示允许所有事件；填写时用逗号分隔，例如
+`JsNotification,TaskError`。社区脚本推送还必须显式打开 `jsNotificationEnabled`。
+发送使用独立的有界后台队列，不获取截图，也不会与 DeviceHub 的截图生产者竞争；
+脚本本地 `[通知]` 日志不受远程推送开关影响。配置文件也可以通过全局参数
+`--notification-config` 或 `BGI_NOTIFICATION_CONFIG` 指定。
+
 ---
 
 ## 2. 快速开始

@@ -47,6 +47,10 @@ DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
 多设备环境可在同一配置中设置 `"deviceId": "UDID::wifi"`，也可使用
 `--device-id` 或 `BGI_DEVICE_ID`，避免自动化误连其他 iPhone/iPad。
 
+Gotify 配置在 `config/notification.json`。启用后，社区脚本的
+`notification.send/error` 会经独立后台队列发送，不会额外请求 DeviceHub 截图；Token
+可放在 `BGI_GOTIFY_TOKEN`，并用 `bgi-touch notify "测试消息"` 验证。
+
 ## 安装
 
 ```bash
@@ -70,6 +74,7 @@ bgi-touch screenshot -o shot.png       # 截图（自动转横屏）
 bgi-touch calibrate -o cal.png         # 输出布局标注图，用于校准触控坐标
 bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/pathing/键鼠宏/战斗txt）
 bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼容）
+bgi-touch notify "测试消息"             # 测试 Gotify；不会连接 iPhone
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
 bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑页完成未演奏曲目
@@ -111,6 +116,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 键鼠→触控映射（摇杆/按钮/视角/切人） | ✅ 真机验证（摇杆前进、跳跃、视角滑动） |
 | 模板匹配 / OCR（RapidOCR=PaddleOCR 模型） | ✅ |
 | JS 兼容运行时（sleep/log/settings/file/http/识别/键鼠 API） | ✅ 自测通过 |
+| BetterGI 通知 / Gotify（JS 权限、事件订阅、后台队列） | ✅ 离线与请求契约测试通过 |
 | 战斗策略 DSL（combat txt / action_params） | ✅ 解析+执行 |
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |

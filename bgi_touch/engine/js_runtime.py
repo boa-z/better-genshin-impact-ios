@@ -121,7 +121,8 @@ class JsScriptRuntime:
     def __init__(self, ctx: GameContext, script_dir: str | Path,
                  settings: dict | None = None, log: Callable[[str], None] = print,
                  party_slots: dict[str, int] | None = None,
-                 strategy_roots: list[str | Path] | None = None):
+                 strategy_roots: list[str | Path] | None = None,
+                 notification_config_path: str | Path | None = None):
         import pythonmonkey as pm
 
         self.pm = pm
@@ -137,6 +138,11 @@ class JsScriptRuntime:
             Path(value).expanduser().resolve()
             for value in (strategy_roots or [default_strategy_root])
         ]
+        from ..notification import NotificationService
+
+        self._notification_service = NotificationService.load(
+            notification_config_path, log=log,
+        )
         self._key_mouse_hooks = KeyMouseHookManager(log=log)
         self._install_globals()
 
@@ -288,8 +294,16 @@ class JsScriptRuntime:
         expose("log", wrap(_Log()), proxy=False)
 
         class _Notification:
-            def send(self, msg): log(f"[通知] {msg}")
-            def error(self, msg): log(f"[通知-错误] {msg}")
+            def send(self, msg):
+                log(f"[通知] {msg}")
+                rt._notification_service.notify(
+                    "JsNotification", str(msg), result="Success", from_js=True,
+                )
+            def error(self, msg):
+                log(f"[通知-错误] {msg}")
+                rt._notification_service.notify(
+                    "JsNotification", str(msg), result="Fail", from_js=True,
+                )
         expose("notification", wrap(_Notification()), proxy=False)
         g["settings"] = pm.eval("(o) => o")(self.settings)
 
@@ -1237,3 +1251,6 @@ class JsScriptRuntime:
             html_mask_host = getattr(self, "_html_mask_host", None)
             if html_mask_host is not None:
                 html_mask_host.closeAll()
+            notification_service = getattr(self, "_notification_service", None)
+            if notification_service is not None:
+                notification_service.close()

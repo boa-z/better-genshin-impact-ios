@@ -1,0 +1,12 @@
+{
+  "$comment": "BetterGI 通知配置。Token 建议通过 BGI_GOTIFY_TOKEN 环境变量提供。",
+  "jsNotificationEnabled": false,
+  "notificationEventSubscribe": "",
+  "gotify": {
+    "enabled": false,
+    "url": "",
+    "appToken": "",
+    "priority": 3,
+    "timeoutSeconds": 10
+  }
+}
