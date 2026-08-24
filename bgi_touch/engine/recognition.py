@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import math
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Optional
 
 import cv2
@@ -231,6 +232,24 @@ def _color_conversion_code(value) -> int:
         return int(raw)
     except (TypeError, ValueError) as error:
         raise ValueError(f"颜色转换方式必须是 OpenCV 枚举名或数字: {value}") from error
+
+
+def _replacement_dictionary(value) -> dict[str, list[str]]:
+    """Normalize BetterGI's OCR replacement dictionary for script callers."""
+    value = getattr(value, "__wrapped__", value)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("ReplaceDictionary 必须是对象或字典")
+    result: dict[str, list[str]] = {}
+    for target, replacements in value.items():
+        replacements = getattr(replacements, "__wrapped__", replacements)
+        if isinstance(replacements, str):
+            replacements = [replacements]
+        elif not isinstance(replacements, (list, tuple)):
+            raise TypeError("ReplaceDictionary 的值必须是字符串数组")
+        result[str(target)] = [str(item) for item in replacements]
+    return result
 
 
 class SearchAnchorMode:
@@ -516,10 +535,14 @@ class RecognitionObject:
         self.mask_mat: Mat | None = None
         self.draw_on_window = False
         self.max_match_count = -1
+        self.use_binary_match = False
+        self.binary_threshold = 128
         self.color_conversion_code = int(cv2.COLOR_BGR2RGB)
         self.lower_color = Scalar()
         self.upper_color = Scalar()
         self.match_count = 1
+        self.ocr_engine = "Paddle"
+        self.replace_dictionary: dict[str, list[str]] = {}
         self.one_contain_match_text: list[str] = []
         self.all_contain_match_text: list[str] = []
         self.regex_match_text: list[str] = []
@@ -660,6 +683,14 @@ class RecognitionObject:
         lambda self: self.max_match_count,
         lambda self, value: setattr(self, "max_match_count", int(value)),
     )
+    useBinaryMatch = property(
+        lambda self: self.use_binary_match,
+        lambda self, value: setattr(self, "use_binary_match", bool(value)),
+    )
+    binaryThreshold = property(
+        lambda self: self.binary_threshold,
+        lambda self, value: setattr(self, "binary_threshold", int(value)),
+    )
     colorConversionCode = property(
         lambda self: self.color_conversion_code,
         lambda self, value: setattr(
@@ -681,6 +712,16 @@ class RecognitionObject:
     matchCount = property(
         lambda self: self.match_count,
         lambda self, value: setattr(self, "match_count", int(value)),
+    )
+    ocrEngine = property(
+        lambda self: self.ocr_engine,
+        lambda self, value: setattr(self, "ocr_engine", str(value)),
+    )
+    replaceDictionary = property(
+        lambda self: self.replace_dictionary,
+        lambda self, value: setattr(
+            self, "replace_dictionary", _replacement_dictionary(value),
+        ),
     )
     oneContainMatchText = property(
         lambda self: self.one_contain_match_text,
@@ -720,10 +761,14 @@ class RecognitionObject:
     MaskMat = maskMat
     DrawOnWindow = drawOnWindow
     MaxMatchCount = maxMatchCount
+    UseBinaryMatch = useBinaryMatch
+    BinaryThreshold = binaryThreshold
     ColorConversionCode = colorConversionCode
     LowerColor = lowerColor
     UpperColor = upperColor
     MatchCount = matchCount
+    OcrEngine = ocrEngine
+    ReplaceDictionary = replaceDictionary
     OneContainMatchText = oneContainMatchText
     AllContainMatchText = allContainMatchText
     RegexMatchText = regexMatchText
@@ -1201,6 +1246,13 @@ class ImageRegion(Region):
         )
 
     @staticmethod
+    def _apply_text_replacements(ro: RecognitionObject, text: str) -> str:
+        for target, replacements in ro.replace_dictionary.items():
+            for replacement in replacements:
+                text = text.replace(replacement, target)
+        return text
+
+    @staticmethod
     def _ocr_match_text(ro: RecognitionObject, text: str) -> bool:
         return (
             all(value in text for value in ro.all_contain_match_text)
@@ -1271,7 +1323,9 @@ class ImageRegion(Region):
                 return Region.empty_region(self.ctx)
             crop = self.bgr[cy:cy + ch, cx:cx + cw]
             items = get_ocr().recognize(self._ocr_source(crop, ro))
-            text = self._compact_ocr_text(items)
+            text = self._apply_text_replacements(
+                ro, self._compact_ocr_text(items),
+            )
             matched = bool(text)
             if ro.recognition_type == "OcrMatch":
                 if not (ro.one_contain_match_text or ro.all_contain_match_text
@@ -1342,6 +1396,10 @@ class ImageRegion(Region):
                 else cv2.INTER_LINEAR,
             )
             source = crop if ro.use_3_channels else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            if ro.use_binary_match and not ro.use_3_channels:
+                _, source = cv2.threshold(
+                    source, int(ro.binary_threshold), 255, cv2.THRESH_BINARY,
+                )
             if source.shape[0] < tpl.shape[0] or source.shape[1] < tpl.shape[1]:
                 results = []
                 if callable(fail_action):
@@ -1407,18 +1465,24 @@ class ImageRegion(Region):
             items = get_ocr().recognize(self._ocr_source(crop, ro))
             if (ro.recognition_type == "OcrMatch" or ro.one_contain_match_text
                     or ro.all_contain_match_text or ro.regex_match_text):
+                def normalized(it) -> str:
+                    return self._apply_text_replacements(ro, str(it.text))
+
                 def keep(it) -> bool:
-                    if ro.one_contain_match_text and not any(s in it.text for s in ro.one_contain_match_text):
+                    text = normalized(it)
+                    if ro.one_contain_match_text and not any(s in text for s in ro.one_contain_match_text):
                         return False
-                    if ro.all_contain_match_text and not all(s in it.text for s in ro.all_contain_match_text):
+                    if ro.all_contain_match_text and not all(s in text for s in ro.all_contain_match_text):
                         return False
-                    if ro.regex_match_text and not any(re.search(rx, it.text) for rx in ro.regex_match_text):
+                    if ro.regex_match_text and not any(re.search(rx, text) for rx in ro.regex_match_text):
                         return False
                     return True
                 items = [it for it in items if keep(it)]
             results = [
                 Region(self.ctx, self.dx + cx + it.x, self.dy + cy + it.y,
-                       it.width, it.height, text=it.text, score=it.confidence)
+                       it.width, it.height,
+                       text=self._apply_text_replacements(ro, str(it.text)),
+                       score=it.confidence)
                 for it in items[:limit]
             ]
             if results:

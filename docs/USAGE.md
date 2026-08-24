@@ -295,7 +295,9 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 掩码交给 OCR。`Recognition.json` 同样支持 `colorCode`、`lowerColor`、`upperColor`
 和 `matchCount` 字段。
 模板识别会遵循 `Use3Channels`、`UseMask`（默认忽略纯绿色背景）、
-`TemplateMatchMode` 与 `MaxMatchCount`，并兼容 `TemplateMatch(mat, true)` 构造重载。
+`TemplateMatchMode`、`MaxMatchCount`、`UseBinaryMatch` 与 `BinaryThreshold`，并兼容
+`TemplateMatch(mat, true)` 构造重载。OCR 支持 `ReplaceDictionary`，会在文本匹配前
+按 BetterGI 的目标文本→误识别文本列表执行替换。
 `RecognitionObject.Ocr(Rect)`、`Region.Derive(Rect)`、`ImageRegion.DeriveCrop(Rect)`
 及 Region/GameCapture 坐标转换重载可直接接收 `OpenCvSharp.Rect`。
 `GameCaptureRegion.gameRegion1080PPosClick()` 会直接使用 1920×1080 参考坐标触控，

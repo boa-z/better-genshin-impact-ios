@@ -325,6 +325,12 @@ def load_recognition_object(
         ro.MaskColor = _parse_color(raw["maskColor"])
     if raw.get("maxMatchCount") is not None:
         ro.MaxMatchCount = int(_number(raw["maxMatchCount"], f"objects.{object_name}.maxMatchCount"))
+    if raw.get("useBinaryMatch") is not None:
+        ro.UseBinaryMatch = bool(raw["useBinaryMatch"])
+    if raw.get("binaryThreshold") is not None:
+        ro.BinaryThreshold = int(_number(
+            raw["binaryThreshold"], f"objects.{object_name}.binaryThreshold",
+        ))
     if raw.get("colorCode") is not None:
         ro.ColorConversionCode = _color_code(
             raw["colorCode"], f"objects.{object_name}.colorCode",
@@ -339,6 +345,27 @@ def load_recognition_object(
         )
     if raw.get("matchCount") is not None:
         ro.MatchCount = int(_number(raw["matchCount"], f"objects.{object_name}.matchCount"))
+    if raw.get("ocrEngine") is not None:
+        engine = str(raw["ocrEngine"])
+        if engine.casefold() != "paddle":
+            raise RecognitionJsonError(
+                f"objects.{object_name}.ocrEngine 仅支持 Paddle"
+            )
+        ro.OcrEngine = engine
+    if raw.get("replace") is not None:
+        replacements = raw["replace"]
+        if not isinstance(replacements, Mapping):
+            raise RecognitionJsonError(f"objects.{object_name}.replace 必须是对象")
+        normalized: dict[str, list[str]] = {}
+        for target, values in replacements.items():
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, list):
+                raise RecognitionJsonError(
+                    f"objects.{object_name}.replace 的值必须是字符串数组"
+                )
+            normalized[str(target)] = [str(value) for value in values]
+        ro.ReplaceDictionary = normalized
     for key, target in (
         ("allContains", ro.AllContainMatchText),
         ("oneContains", ro.OneContainMatchText),
