@@ -182,19 +182,24 @@ class CombatExecutor:
                 self.input.attack()
             elif button == "right":
                 self.input.key_press("LSHIFT")
-            # click(middle) 在 PC 是重置视角，触控端无对应操作
+            elif button == "middle":
+                self.input.tap_button("elementalSight")
         elif a == "mousedown":
             button = p[0].casefold() if p else "left"
             if button == "left":
                 self.input.attack_down()
             elif button == "right":
                 self.input.button_down("sprint")
+            elif button == "middle":
+                self.input.button_down("elementalSight")
         elif a == "mouseup":
             button = p[0].casefold() if p else "left"
             if button == "left":
                 self.input.attack_up()
             elif button == "right":
                 self.input.button_up("sprint")
+            elif button == "middle":
+                self.input.button_up("elementalSight")
         elif a == "moveby":
             self.input.move_camera_by(self._sec(p, 0, 0), self._sec(p, 1, 0))
         elif a == "aim":

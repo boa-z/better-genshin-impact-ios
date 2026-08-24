@@ -349,6 +349,8 @@ class OneKeyFightTask:
                 self.ctx.input.attack_up()
             elif button == "right":
                 self.ctx.input.button_up("sprint")
+            elif button == "middle":
+                self.ctx.input.button_up("elementalSight")
 
     # BetterGI host naming aliases.
     KeyDown = key_down

@@ -31,6 +31,7 @@ bettergi-scripts-list 脚本 ──bgi-touch convert──▶ 可运行脚本 + 
 - **朝向自适应**（真机实测）：游戏横屏时截图流仍是竖屏帧（内容旋转 90°），而 tap 坐标空间跟随 `status.orientation` 动态变化。截图按帧宽高自动旋转；点按映射按 status 动态启停。
 - **滚轮兼容**：JS `verticalScroll`、战斗 DSL `scroll(...)` 与键鼠宏滚轮统一转换为菜单安全区竖向滑动；连续滚轮事件先合并，避免产生不必要的 DeviceHub 请求。
 - **鼠标右键兼容**：按原神默认 PC 键位映射为移动端冲刺按钮；瞄准模式仍由 `R` / `aim` 映射处理。
+- **鼠标中键兼容**：按原神默认键位映射为移动端元素视野，支持点击和按住/释放语义。
 
 ## DeviceHub profile
 

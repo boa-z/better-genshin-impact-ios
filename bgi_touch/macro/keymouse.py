@@ -33,7 +33,7 @@ def vk_to_key(code: int) -> str | None:
 @dataclass
 class TouchEvent:
     t: float  # ms since start
-    kind: str  # keyDown / keyUp / cameraBy / verticalScroll / tapRef / attack* / sprint*
+    kind: str  # keyDown / keyUp / cameraBy / verticalScroll / tapRef / attack* / sprint* / sight*
     key: str | None = None
     x: float = 0
     y: float = 0
@@ -109,6 +109,10 @@ def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
                 events.append(TouchEvent(
                     t=t, kind="sprintDown" if etype == 4 else "sprintUp",
                 ))
+            elif button == "middle":
+                events.append(TouchEvent(
+                    t=t, kind="sightDown" if etype == 4 else "sightUp",
+                ))
             elif button == "left" and etype == 4:
                 if cursor_fresh and cursor:
                     events.append(TouchEvent(t=t, kind="tapRef", x=cursor[0], y=cursor[1]))
@@ -157,6 +161,10 @@ class MacroPlayer:
                 self.input.button_down("sprint")
             elif ev.kind == "sprintUp":
                 self.input.button_up("sprint")
+            elif ev.kind == "sightDown":
+                self.input.button_down("elementalSight")
+            elif ev.kind == "sightUp":
+                self.input.button_up("elementalSight")
             elif ev.kind == "tapRef":
                 self.input.click_ref(ev.x, ev.y)
             elif ev.kind == "attackDown":

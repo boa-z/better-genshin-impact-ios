@@ -275,9 +275,9 @@ class JsScriptRuntime:
         expose("rightButtonClick", lambda: ctx.input.key_press("LSHIFT"))
         expose("rightButtonDown", lambda: ctx.input.button_down("sprint"))
         expose("rightButtonUp", lambda: ctx.input.button_up("sprint"))
-        expose("middleButtonClick", lambda: None)
-        expose("middleButtonDown", lambda: None)
-        expose("middleButtonUp", lambda: None)
+        expose("middleButtonClick", lambda: ctx.input.tap_button("elementalSight"))
+        expose("middleButtonDown", lambda: ctx.input.button_down("elementalSight"))
+        expose("middleButtonUp", lambda: ctx.input.button_up("elementalSight"))
         expose("verticalScroll", lambda n: ctx.input.vertical_scroll(float(n)))
 
         # log / notification / settings

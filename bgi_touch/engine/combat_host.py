@@ -168,6 +168,8 @@ class Avatar:
             self.ctx.input.attack_down()
         elif value == "right":
             self.ctx.input.button_down("sprint")
+        elif value == "middle":
+            self.ctx.input.button_down("elementalSight")
 
     def mouse_up(self, key: str = "left") -> None:
         value = str(key).lower()
@@ -175,6 +177,8 @@ class Avatar:
             self.ctx.input.attack_up()
         elif value == "right":
             self.ctx.input.button_up("sprint")
+        elif value == "middle":
+            self.ctx.input.button_up("elementalSight")
 
     def click(self, key: str = "left") -> None:
         value = str(key).lower()
@@ -182,6 +186,8 @@ class Avatar:
             self.ctx.input.attack()
         elif value == "right":
             self.ctx.input.key_press("LSHIFT")
+        elif value == "middle":
+            self.ctx.input.tap_button("elementalSight")
 
     def move_by(self, x: float, y: float) -> None:
         self.move_camera(x, y)

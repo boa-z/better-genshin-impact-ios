@@ -41,7 +41,7 @@ SUPPORTED = [
     "htmlMask.poll", "htmlMask.close", "htmlMask.exists",
     "KeyMouseHook", "OnKeyDown", "OnKeyUp", "OnMouseDown", "OnMouseUp",
     "OnMouseMove", "OnMouseWheel", "RemoveAllListeners",
-    "moveMouseBy", "verticalScroll", "rightButton", "keyMouseScript", "inputText", "http.request", "genshin.returnMainUi",
+    "moveMouseBy", "verticalScroll", "rightButton", "middleButton", "keyMouseScript", "inputText", "http.request", "genshin.returnMainUi",
     "genshin.relogin", "chooseTalkOption", "runCombatScript", "leftButtonClick",
     "genshin.tp", "genshin.moveMapTo", "genshin.tpToStatueOfTheSeven",
     "genshin.teleportToStatue",
@@ -64,7 +64,6 @@ SUPPORTED = [
 ]
 PARTIAL = {
     "moveMouseTo": "触控无指针，移动为空操作（点击时直接给坐标即可）",
-    "middleButton": "PC 重置视角，触控端为空操作",
     "notification.": "本地日志始终可用；远程推送需在 config/notification.json 显式允许 JS 并启用 Gotify",
     "dispatcher.runTask": "已支持 AutoFight/AutoTrack/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/MusicPlayer/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/OneKeyExpedition/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon/ScriptGroup/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
     "runAutoFightTask": "支持 combatStrategyPath、快速/切人后战斗结束检查、开战阻断、敌血条跳过与队伍页确认；掉落拾取等附加参数忽略",
