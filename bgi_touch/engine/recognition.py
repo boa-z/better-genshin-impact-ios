@@ -21,6 +21,46 @@ if TYPE_CHECKING:
     from .context import GameContext
 
 
+def _rect_tuple(value) -> tuple[float, float, float, float]:
+    """Read OpenCvSharp.Rect, JS objects, mappings, or four-value arrays."""
+    unwrapped = getattr(value, "__wrapped__", None)
+    if unwrapped is not None:
+        value = unwrapped
+    if isinstance(value, dict):
+        folded = {str(key).casefold(): item for key, item in value.items()}
+        parts = (
+            folded.get("x", 0), folded.get("y", 0),
+            folded.get("width", 0), folded.get("height", 0),
+        )
+    elif isinstance(value, (list, tuple)) and len(value) == 4:
+        parts = value
+    else:
+        def member(lower: str, upper: str):
+            for name in (lower, upper):
+                try:
+                    return value[name]
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                try:
+                    return getattr(value, name)
+                except (AttributeError, TypeError):
+                    pass
+            return 0
+
+        parts = tuple(member(lower, upper) for lower, upper in (
+            ("x", "X"), ("y", "Y"),
+            ("width", "Width"), ("height", "Height"),
+        ))
+    return tuple(float(part) for part in parts)
+
+
+def _rect_result(x: float, y: float, width: float, height: float) -> dict:
+    return {
+        "x": x, "y": y, "width": width, "height": height,
+        "X": x, "Y": y, "Width": width, "Height": height,
+    }
+
+
 class Mat:
     """OpenCvSharp Mat 的替身：BGR ndarray + 惰性灰度缓存。"""
 
@@ -162,7 +202,13 @@ class RecognitionObject:
         return (0, 255, 0)
 
     @classmethod
-    def ocr(cls, x: float, y: float, w: float, h: float) -> "RecognitionObject":
+    def ocr(cls, *args) -> "RecognitionObject":
+        if len(args) == 1:
+            x, y, w, h = _rect_tuple(args[0])
+        elif len(args) == 4:
+            x, y, w, h = args
+        else:
+            raise TypeError("RecognitionObject.Ocr 需要 Rect 或 x, y, w, h")
         ro = cls()
         ro.recognition_type = "Ocr"
         ro.roi = (x, y, w, h)
@@ -189,8 +235,10 @@ class RecognitionObject:
         lambda self, value: setattr(self, "recognition_type", str(value)),
     )
     regionOfInterest = property(
-        lambda self: self.roi,
-        lambda self, value: setattr(self, "roi", value),
+        lambda self: _rect_result(*self.roi) if self.roi is not None else None,
+        lambda self, value: setattr(
+            self, "roi", None if value is None else _rect_tuple(value),
+        ),
     )
     templateImageMat = property(
         lambda self: self.template,
@@ -364,12 +412,52 @@ class Region:
         if pointer is not None:
             pointer.move_to(self.x + self.width / 2, self.y + self.height / 2)
 
+    def move_to(self, x: float, y: float, w: float = 0, h: float = 0) -> None:
+        pointer = getattr(self.ctx, "_script_pointer", None)
+        if pointer is not None:
+            pointer.move_to_ref(
+                self.x + float(x) + float(w) / 2,
+                self.y + float(y) + float(h) / 2,
+            )
+
     def background_click(self) -> None:
         self.click()
 
-    def derive(self, x: float, y: float, w: float = 0, h: float = 0) -> "Region":
+    def derive(self, *args) -> "Region":
+        if len(args) == 1:
+            x, y, w, h = _rect_tuple(args[0])
+        elif len(args) == 2:
+            x, y = args
+            w = h = 0
+        elif len(args) == 4:
+            x, y, w, h = args
+        else:
+            raise TypeError("Region.Derive 需要 Rect、x/y 或 x/y/w/h")
         s = self.ctx.transform.scale
         return Region(self.ctx, self.dx + x * s, self.dy + y * s, w * s, h * s, empty=self._empty)
+
+    def convert_position_to_game_capture_region(
+        self, x: float, y: float, w: float | None = None, h: float | None = None,
+    ):
+        absolute_x = self.x + float(x)
+        absolute_y = self.y + float(y)
+        if w is None and h is None:
+            return {
+                "item1": absolute_x, "item2": absolute_y,
+                "Item1": absolute_x, "Item2": absolute_y,
+            }
+        return _rect_result(
+            absolute_x, absolute_y, float(w or 0), float(h or 0),
+        )
+
+    def convert_self_position_to_game_capture_region(self):
+        return self.to_rect()
+
+    def convert_position_to_desktop_region(self, x: float, y: float):
+        return self.convert_position_to_game_capture_region(x, y)
+
+    def to_rect(self):
+        return _rect_result(self.x, self.y, self.width, self.height)
 
     def draw_self(self, name: str = "rect", pen=None) -> None:
         """Drawing is optional on the touch console; preserve script flow."""
@@ -397,9 +485,19 @@ class Region:
     doubleClick = double_click
     DoubleClick = double_click
     Move = move
+    moveTo = move_to
+    MoveTo = move_to
     backgroundClick = background_click
     BackgroundClick = background_click
     Derive = derive
+    convertSelfPositionToGameCaptureRegion = convert_self_position_to_game_capture_region
+    ConvertSelfPositionToGameCaptureRegion = convert_self_position_to_game_capture_region
+    convertPositionToGameCaptureRegion = convert_position_to_game_capture_region
+    ConvertPositionToGameCaptureRegion = convert_position_to_game_capture_region
+    convertPositionToDesktopRegion = convert_position_to_desktop_region
+    ConvertPositionToDesktopRegion = convert_position_to_desktop_region
+    toRect = to_rect
+    ToRect = to_rect
     drawSelf = draw_self
     DrawSelf = draw_self
     drawRect = draw_rect
@@ -652,10 +750,22 @@ class ImageRegion(Region):
 
         raise NotImplementedError(f"识别类型 {ro.recognition_type} 暂未支持")
 
-    def derive_crop(self, x: float, y: float, w: float, h: float) -> "ImageRegion":
+    def derive_crop(self, *args) -> "ImageRegion":
+        if len(args) == 1:
+            x, y, w, h = _rect_tuple(args[0])
+        elif len(args) == 4:
+            x, y, w, h = args
+        else:
+            raise TypeError("ImageRegion.DeriveCrop 需要 Rect 或 x, y, w, h")
         s = self.ctx.transform.scale
-        x0, y0 = int(x * s), int(y * s)
-        crop = self.bgr[y0:y0 + int(h * s), x0:x0 + int(w * s)]
+        x0, y0 = int(round(float(x) * s)), int(round(float(y) * s))
+        x1 = max(0, min(self.bgr.shape[1], x0 + int(round(float(w) * s))))
+        y1 = max(0, min(self.bgr.shape[0], y0 + int(round(float(h) * s))))
+        x0 = max(0, min(self.bgr.shape[1], x0))
+        y0 = max(0, min(self.bgr.shape[0], y0))
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError(f"DeriveCrop 裁剪区域无效: ({x}, {y}, {w}, {h})")
+        crop = self.bgr[y0:y1, x0:x1]
         return ImageRegion(self.ctx, crop, self.dx + x0, self.dy + y0)
 
     def derive_to_1080p(self) -> "ImageRegion":

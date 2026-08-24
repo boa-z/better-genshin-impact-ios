@@ -507,8 +507,8 @@ class JsScriptRuntime:
             value = getattr(mat, "__wrapped__", mat)
             return wrap(RecognitionObject.template_match(value, x, y, w, h))
 
-        def _ocr(x, y, w, h):
-            return wrap(RecognitionObject.ocr(x, y, w, h))
+        def _ocr(*args):
+            return wrap(RecognitionObject.ocr(*args))
 
         def _ocr_match(x, y, w, h, *texts):
             return wrap(RecognitionObject.ocr_match(
