@@ -81,7 +81,7 @@ class TaskDispatcher:
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
-        "CharacterDevelopment", "OneDragon", "ScriptGroup", "Shell",
+        "CharacterDevelopment", "OneDragon", "ScriptGroup", "MusicPlayer", "Shell",
     })
 
     def __init__(
@@ -190,6 +190,8 @@ class TaskDispatcher:
             return self.run_one_dragon_task(cfg, ct)
         if name in ("ScriptGroup", "ScriptGroupTask"):
             return self.run_script_group_task(cfg, ct)
+        if name in ("MusicPlayer", "PlayMusic", "AutoYuanQin"):
+            return self.run_music_player_task(cfg, ct)
         if name == "Shell":
             return self.run_shell_task(cfg, ct)
         raise NotImplementedError(
@@ -257,6 +259,34 @@ class TaskDispatcher:
             log=self.log,
         )
         return runner.run(resume=_value(param, "resume", _value(param, "progress", None)))
+
+    def run_music_player_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
+        from .music_player import MusicPlayerTask
+
+        sources = _value(param, "files", _value(
+            param, "sources", _value(param, "file", _value(param, "path", None))
+        ))
+        if isinstance(sources, (str, Path)):
+            sources = [sources]
+        if not isinstance(sources, (list, tuple)) or not sources:
+            raise ValueError("MusicPlayer 需要 file/files 或 path/sources")
+        custom_bpm = _value(param, "customBpm", None)
+        if not bool(_value(param, "useCustomBpm", custom_bpm is not None)):
+            custom_bpm = None
+        return MusicPlayerTask(
+            self.ctx,
+            [str(value) for value in sources],
+            layout_path=_value(param, "layoutPath", _value(param, "musicLayout", None)),
+            playback_mode=str(_value(param, "playbackMode", "Sequential") or "Sequential"),
+            speed=float(_value(param, "speed", 1.0) or 1.0),
+            custom_bpm=None if custom_bpm is None else float(custom_bpm),
+            transpose=int(_value(param, "transpose", 0) or 0),
+            auto_switch_instrument=bool(_value(param, "autoSwitchInstrument", False)),
+            start_position_s=float(_value(param, "startPositionSeconds", 0) or 0),
+            loop_count=int(_value(param, "loopCount", 1) or 1),
+            max_instrument_pages=int(_value(param, "maxInstrumentPages", 20) or 20),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
 
     def run_shell_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
         from .shell_task import ShellTask

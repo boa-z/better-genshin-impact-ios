@@ -288,6 +288,9 @@ bgi-touch task AutoDomain --config '{"domainRoundNum":1}'
 bgi-touch task AutoOpenChest --config '{"timeoutSeconds":60}'
 # 在千音雅集的国家主题专辑页运行；musicLevel 也支持“所有”/normal/master 等别名
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说","songCount":13}'
+# 自由演奏曲谱；与活动六轨 AutoMusicGame 是两个独立功能
+bgi-touch task MusicPlayer --config \
+  '{"file":"score.json","playbackMode":"Sequential","useCustomBpm":true,"customBpm":120}'
 # 快捷尘歌壶、一键领取当前页面、兑换码
 bgi-touch task QuickSereniteaPot
 bgi-touch task QuickClaimReward --config '{"scrollDown":true,"maxScrolls":3}'
@@ -349,6 +352,16 @@ Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模�
 默认处理传说难度的 13 首曲目；`musicLevel` 可设为“普通”“困难”“大师”“传说”或
 “所有”，`mustCanorusLevel` 可改为只跳过已经获得“大音天籁”的曲目。每首歌结束后
 程序通过列表按钮回到专辑页，再点击原版相同的下一曲位置。
+
+`MusicPlayer` 对齐 BetterGI 自由演奏菜单的原琴 `yuanqin`、MIDI JSON `midi` 和网络键谱
+`keyboard` 格式。`files` 可传多个文件，目录会递归扫描 JSON；支持 `playbackMode`、
+`speed`、`useCustomBpm/customBpm`、`transpose`、`startPositionSeconds` 和 `loopCount`。
+默认要求玩家已打开对应乐器演奏界面；设置 `autoSwitchInstrument=true` 后，会扫描小道具
+背包详情名称、装备曲谱声明的乐器并自动打开演奏界面。
+
+自由演奏不复用战斗键位 profile，而是把同一时间的音符合并为最多五点的原生触控手势，
+坐标在 `config/music.json`。该布局以 1920×1080 参考坐标保存，换 HUD 缩放或设备时应先
+用一首短曲逐行校准；它与 `AutoMusicGame` 的六轨判定坐标互不影响。
 
 `QuickClaimReward` 复用 BetterGI 的“领取/礼物领取/点击空白继续”模板；开启
 `scrollDown` 后会把原版滚轮下滑语义转换为奖励列表内的触控上滑。

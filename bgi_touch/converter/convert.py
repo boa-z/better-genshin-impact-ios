@@ -64,7 +64,7 @@ PARTIAL = {
     "rightButton": "近似映射为 E 技能",
     "middleButton": "PC 重置视角，触控端为空操作",
     "verticalScroll": "触控端为空操作",
-    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon/ScriptGroup/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
+    "dispatcher.runTask": "已支持 AutoFight/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/MusicPlayer/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon/ScriptGroup/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
     "runAutoFightTask": "支持 combatStrategyPath；掉落拾取等附加参数忽略",
     "runAutoBossTask": "支持 BetterGI AutoBoss 官方路线、树脂策略、征讨之花导航、奖励汇总和 routePath/pathingFile 覆盖",
     "runAutoLeyLine": "支持 269 个官方地脉点位、632 份路线、树脂耗尽策略、奖励树脂优先级和 routePath/pathingFile 覆盖",
