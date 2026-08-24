@@ -332,6 +332,7 @@ class ScriptGroupRunner:
                 path,
                 settings=project.settings,
                 party_slots=self.party_slots,
+                pathing_root=self.roots.pathing,
                 log=self.log,
             ).run()
             return

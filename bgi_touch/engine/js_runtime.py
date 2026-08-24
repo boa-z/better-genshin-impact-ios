@@ -122,6 +122,7 @@ class JsScriptRuntime:
                  settings: dict | None = None, log: Callable[[str], None] = print,
                  party_slots: dict[str, int] | None = None,
                  strategy_roots: list[str | Path] | None = None,
+                 pathing_root: str | Path | None = None,
                  notification_config_path: str | Path | None = None):
         import pythonmonkey as pm
 
@@ -138,6 +139,10 @@ class JsScriptRuntime:
             Path(value).expanduser().resolve()
             for value in (strategy_roots or [default_strategy_root])
         ]
+        default_pathing_root = Path(__file__).resolve().parents[2] / "scripts" / "pathing"
+        self.pathing_root = Path(
+            pathing_root or default_pathing_root
+        ).expanduser().resolve()
         from ..notification import NotificationService
 
         self._notification_service = NotificationService.load(
@@ -173,9 +178,20 @@ class JsScriptRuntime:
     # ---- sandboxed helpers ----
 
     def _resolve(self, sub_path: str) -> Path:
-        p = (self.script_dir / str(sub_path)).resolve()
+        # Community scripts are authored for Windows and often keep `\\` in
+        # manifest/file paths. Treat it as a separator on macOS as well.
+        relative = str(sub_path).replace("\\", "/")
+        p = (self.script_dir / relative).resolve()
         if not p.is_relative_to(self.script_dir):
             raise PermissionError(f"路径越出脚本目录: {sub_path}")
+        return p
+
+    def _resolve_pathing(self, sub_path: str) -> Path:
+        """Resolve a BetterGI User/AutoPathing path inside the shared root."""
+        relative = str(sub_path or ".").replace("\\", "/")
+        p = (self.pathing_root / relative).resolve()
+        if not p.is_relative_to(self.pathing_root):
+            raise PermissionError(f"路径越出 Pathing 根目录: {sub_path}")
         return p
 
     def _check_cancel(self) -> None:
@@ -909,7 +925,41 @@ class JsScriptRuntime:
         class _Pathing:
             def run(self, j): pathing_exec.run(PathingTask.parse(json.loads(str(j))))
             def runFile(self, p): pathing_exec.run(PathingTask.load(rt._resolve(p)))
-            def runFileFromUser(self, p): pathing_exec.run(PathingTask.load(rt._resolve(p)))
+            def runFileFromUser(self, p):
+                return pathing_exec.run(PathingTask.load(rt._resolve_pathing(p)))
+            def isExists(self, p):
+                try:
+                    return rt._resolve_pathing(p).exists()
+                except (OSError, ValueError, PermissionError):
+                    return False
+            def isFile(self, p):
+                try:
+                    return rt._resolve_pathing(p).is_file()
+                except (OSError, ValueError, PermissionError):
+                    return False
+            def isFolder(self, p):
+                try:
+                    return rt._resolve_pathing(p).is_dir()
+                except (OSError, ValueError, PermissionError):
+                    return False
+            def readPathSync(self, p="./"):
+                try:
+                    base = rt._resolve_pathing(p)
+                    if not base.is_dir():
+                        return []
+                    return [
+                        str(child.relative_to(rt.pathing_root))
+                        for child in sorted(base.iterdir())
+                    ]
+                except (OSError, ValueError, PermissionError) as error:
+                    log(f"[pathingScript] ReadPathSync 失败: {error}")
+                    return []
+            def readTextSync(self, p):
+                try:
+                    return rt._resolve_pathing(p).read_text(encoding="utf-8-sig")
+                except (OSError, ValueError, PermissionError) as error:
+                    log(f"[pathingScript] ReadTextSync 失败: {error}")
+                    return ""
         expose("pathingScript", wrap(_Pathing()), proxy=False)
 
         # dispatcher / 任务模型。JS、WebUI、CLI 共用同一个实现，避免任务

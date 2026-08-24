@@ -254,6 +254,9 @@ bgi-touch run scripts/js/RecognitionDemo
 
 # 覆盖脚本设置（对应原版 settings.json 的 UI 配置项）
 bgi-touch run scripts/js/AutoCrystalfly --set 循环次数=5 --set 使用队伍=采集队
+
+# 指定 BetterGI User/AutoPathing 对应的共享路线根目录
+bgi-touch run scripts/js/RouteLoader --pathing-root scripts/pathing
 ```
 
 设置的三层优先级：`--set` > 脚本目录下的 `user-settings.json` >
@@ -273,6 +276,9 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 接入同一截图上下文；`OpenCvSharp.OpenCvSharp.Rect` 会映射为 1080p 参考坐标 ROI。
 `strategyFile` 以项目的 `scripts/combat` 为受限根目录；Dispatcher 会依次解析 JS
 脚本包内路径和该公共策略目录，因此浏览器返回的相对策略名可直接传给任务参数。
+`pathingScript.runFile()` 仍读取当前 JS 包内路线；`runFileFromUser()` 以及上游新增的
+`isExists/isFile/isFolder/readPathSync/readTextSync` 读取共享 `scripts/pathing` 根目录
+（可由 `--pathing-root` 或 ScriptGroup 的 Pathing 根目录覆盖），并阻止越界访问。
 社区脚本的本地 `htmlMask` 页面会显示在 WebUI 控制台上层，并支持 `send/request`、
 `receive/poll`、响应匹配、点击穿透和关闭生命周期。遮罩事件使用 20 秒长轮询，不会
 触发设备截图；屏幕预览仍只读取 `GameContext` 缓存帧，避免和任务截图器竞争。

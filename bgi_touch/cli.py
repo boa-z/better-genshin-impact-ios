@@ -185,6 +185,7 @@ def cmd_run(args) -> int:
         args.script_dir,
         settings=overrides,
         party_slots=_load_party(),
+        pathing_root=args.pathing_root,
         notification_config_path=args.notification_config,
     )
     try:
@@ -354,6 +355,7 @@ def main() -> int:
     p = sub.add_parser("run", help="运行 JS 脚本包（BetterGI 兼容）")
     p.add_argument("script_dir")
     p.add_argument("--set", action="append", metavar="KEY=VALUE", help="覆盖脚本 settings")
+    p.add_argument("--pathing-root", help="订阅 Pathing 根目录（默认 scripts/pathing）")
     p = sub.add_parser("notify", help="发送一条 Gotify 测试通知（不连接设备）")
     p.add_argument("message")
     p.add_argument("--event", default="Test")
