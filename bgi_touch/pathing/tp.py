@@ -241,11 +241,12 @@ class TpTask:
         self.log(f"[tp] 已选择 {self.map_name}，但大地图特征匹配失败")
         return False
 
-    def _drag_map(self, dx: float, dy: float) -> None:
-        """把地图内容平移 (dx, dy) 设备像素（正值=内容向右/下移动）。"""
+    def _drag_map(self, dx: float, dy: float) -> np.ndarray | None:
+        """Move map content and return the newest frame produced by the gesture."""
         t = self.ctx.transform
         W, H = t.device_width, t.device_height
         max_step = 0.30 * W
+        feedback = None
         while abs(dx) > 1 or abs(dy) > 1:
             sx = max(-max_step, min(max_step, dx))
             sy = max(-max_step, min(max_step, dy))
@@ -255,16 +256,19 @@ class TpTask:
             before = self.ctx.device.last_frame_version
             self.ctx.device.swipe(x0, y0, x0 + sx, y0 + sy, duration_ms=650,
                                   image_width=W, image_height=H)
+            self.ctx.sleep(700)  # 等惯性衰减
             if before is not None:
                 try:
-                    self.ctx.device.wait_for_frame(before, timeout_ms=1800)
+                    feedback = self.ctx.capture_bgr_after_frame(
+                        before, timeout_ms=1800,
+                    )
                 except Exception:
                     # Older headless builds do not expose frame cursors; the
-                    # settle delay below remains the compatibility fallback.
-                    pass
-            self.ctx.sleep(700)  # 等惯性衰减
+                    # next loop capture remains the compatibility fallback.
+                    feedback = None
             dx -= sx
             dy -= sy
+        return feedback
 
     def move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
         with self.exclusive_triggers():
@@ -281,19 +285,15 @@ class TpTask:
         last_view: tuple[float, float] | None = None
         stagnant_iterations = 0
         recovered = False
+        feedback_frame = None
         for it in range(14):
             if time.monotonic() > deadline:
                 break
-            # DeviceHub's legacy screenshot endpoint can legally return the
-            # last decoded frame while its capture worker is busy. Waiting on
-            # the frame cursor keeps map feedback tied to the swipe we just
-            # issued and also avoids competing with the WebUI preview poller.
-            try:
-                frame = self.ctx.capture_bgr_after_frame(
-                    self.ctx.device.last_frame_version, timeout_ms=2200
-                )
-            except Exception:
-                frame = self.ctx.capture_bgr()
+            # Consume the frame obtained after the previous drag. Asking for
+            # another frame here can time out on a slow stream and return a
+            # stale pre-gesture screenshot.
+            frame = feedback_frame if feedback_frame is not None else self.ctx.capture_bgr()
+            feedback_frame = None
             view = self.big.locate_view(frame)
             if view is None:
                 self.log("[tp] 大地图视野匹配失败，重试")
@@ -317,7 +317,7 @@ class TpTask:
                 recovered = True
                 stagnant_iterations = 0
                 last_view = None
-            self._drag_map(-dx_screen, -dy_screen)
+            feedback_frame = self._drag_map(-dx_screen, -dy_screen)
         raise RuntimeError("大地图移动失败：迭代/超时耗尽")
 
     def get_big_map_zoom_level(self) -> float:
@@ -503,15 +503,12 @@ class TpTask:
         last_view: tuple[float, float] | None = None
         stagnant_iterations = 0
         recovered = False
+        feedback_frame = None
         for it in range(20):
             if time.monotonic() > deadline:
                 break
-            try:
-                frame = self.ctx.capture_bgr_after_frame(
-                    self.ctx.device.last_frame_version, timeout_ms=2200
-                )
-            except Exception:
-                frame = self.ctx.capture_bgr()
+            frame = feedback_frame if feedback_frame is not None else self.ctx.capture_bgr()
+            feedback_frame = None
             view = self.big.locate_view(frame)
             if view is None:
                 self.log("[tp] 大地图视野匹配失败，重试")
@@ -544,7 +541,7 @@ class TpTask:
                 stagnant_iterations = 0
                 last_view = None
             # 拖动地图：目标向中心移动 = 内容朝反方向平移
-            self._drag_map(-dx_screen, -dy_screen)
+            feedback_frame = self._drag_map(-dx_screen, -dy_screen)
         raise RuntimeError("传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）")
 
     def _select_target_and_confirm(self, tap_x: float, tap_y: float, tol: float) -> bool:
@@ -601,19 +598,15 @@ class TpTask:
         deadline = time.monotonic() + timeout_s
         started_at = time.monotonic()
         observed_loading = False
-        stable_main_ui = 0
         api = GenshinApi(self.ctx, log=self.log)
         while time.monotonic() < deadline:
             frame = self.ctx.capture_bgr()
             is_main_ui = api._is_main_ui(frame)
             if is_main_ui:
                 if observed_loading and time.monotonic() - started_at >= 1.0:
-                    stable_main_ui += 1
-                    if stable_main_ui >= 3:
-                        self.log("[tp] 传送完成")
-                        return
+                    self.log("[tp] 传送完成")
+                    return
             else:
-                stable_main_ui = 0
                 if not observed_loading and self.big.locate_view(frame) is None:
                     observed_loading = True
             self.ctx.sleep(500)

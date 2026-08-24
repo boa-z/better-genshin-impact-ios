@@ -265,6 +265,59 @@ def test_teleport_ambiguous_icons_use_only_one_precomputed_fallback():
     assert fallback.clicks == 1
 
 
+def test_map_drag_returns_the_frame_after_its_own_gesture():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    feedback = np.ones((4, 8, 3), dtype=np.uint8)
+    device = SimpleNamespace(last_frame_version=41, swipe=Mock())
+    ctx = SimpleNamespace(
+        device=device,
+        transform=SimpleNamespace(device_width=1000, device_height=600),
+        capture_bgr_after_frame=Mock(return_value=feedback),
+        sleep=Mock(),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+
+    assert task._drag_map(120, -60) is feedback
+
+    ctx.capture_bgr_after_frame.assert_called_once_with(41, timeout_ms=1800)
+    ctx.sleep.assert_called_once_with(700)
+
+
+def test_move_map_consumes_drag_feedback_without_requesting_an_extra_frame():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    initial = np.zeros((4, 8, 3), dtype=np.uint8)
+    feedback = np.ones((4, 8, 3), dtype=np.uint8)
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=100, device_height=60),
+        capture_bgr=Mock(return_value=initial),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = Mock()
+    task.open_map = Mock(return_value=True)
+    task.big = SimpleNamespace(
+        world_to_feature=Mock(return_value=(10.0, 0.0)),
+        locate_view=Mock(side_effect=lambda frame: (
+            (0.0, 0.0, 1.0) if frame is initial else (10.0, 0.0, 1.0)
+        )),
+    )
+    task._drag_map = Mock(return_value=feedback)
+
+    assert task._move_map_to(1, 2)
+
+    ctx.capture_bgr.assert_called_once_with()
+    task._drag_map.assert_called_once_with(-10.0, -0.0)
+
+
 def test_js_runtime_awaits_async_iife_and_restores_python_error_text(tmp_path):
     import pythonmonkey as pm
 
