@@ -375,7 +375,8 @@ class InputSimulator:
         self._direct_input(lambda: self.device.tap(x, y, **self._wh))
 
     def attack(self, hold_ms: int = 80) -> None:
-        if self._profile_press("X", hold_ms):
+        raw = self.layout.profile_key_for_button("attack")
+        if raw is not None and self._profile_press_raw(raw, hold_ms):
             return
         x, y = self._button_pos("attack")
         self._direct_input(
@@ -408,7 +409,8 @@ class InputSimulator:
         self.button_up("attack")
 
     def charged_attack(self, hold_ms: int = 800) -> None:
-        if self._profile_press("X", hold_ms):
+        raw = self.layout.profile_key_for_button("attack")
+        if raw is not None and self._profile_press_raw(raw, hold_ms):
             return
         x, y = self._button_pos("attack")
         self._direct_input(
@@ -451,6 +453,36 @@ class InputSimulator:
                     time.sleep(0.35)
 
         self._direct_input(swipe_all)
+
+    def drag_ref(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        duration_ms: int = 350,
+    ) -> None:
+        """Replay a desktop pointer drag as one complete touch gesture."""
+        start_x, start_y = self.t.to_device(float(x1), float(y1))
+        end_x, end_y = self.t.to_device(float(x2), float(y2))
+        duration = max(100, min(10_000, int(duration_ms)))
+        if math.hypot(end_x - start_x, end_y - start_y) < 2:
+            self._direct_input(
+                lambda: self.device.tap(
+                    start_x, start_y, hold_ms=duration, **self._wh,
+                )
+            )
+            return
+        self._direct_input(
+            lambda: self.device.swipe(
+                start_x, start_y, end_x, end_y,
+                duration_ms=duration, **self._wh,
+            )
+        )
+        self._emit(
+            "pointer_drag", x1=float(x1), y1=float(y1),
+            x2=float(x2), y2=float(y2), duration_ms=duration,
+        )
 
     def vertical_scroll(self, amount: float) -> None:
         """Translate BetterGI mouse-wheel clicks into safe vertical swipes.

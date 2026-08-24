@@ -241,6 +241,12 @@ class JsScriptRuntime:
         g = pm.eval("globalThis")
         ctx, log, wrap = self.ctx, self.log, self._wrap
 
+        from ..input.layout import normalize_key
+        from ..input.pointer import TouchPointer
+        pointer = TouchPointer(ctx.input)
+        self._pointer = pointer
+        setattr(ctx, "_script_pointer", pointer)
+
         def expose(name: str, value: Any, proxy: bool = True) -> None:
             v = wrap(value) if proxy and not callable(value) else value
             g[name] = v
@@ -254,23 +260,54 @@ class JsScriptRuntime:
         expose("captureGameRegion", self._capture)
         expose("getAvatars", lambda: list(self.party_slots.keys()))
         expose("inputText", lambda text: ctx.device.paste_text(str(text)))
-        expose("setGameMetrics", lambda w, h, dpi=1: None)
-        expose("getGameMetrics", lambda: [
-            ctx.transform.device_width,
-            ctx.transform.device_height,
-            ctx.transform.scale,
-        ])
+        expose("setGameMetrics", pointer.set_metrics)
+        expose("getGameMetrics", pointer.get_metrics)
 
         # 键鼠
-        expose("keyDown", lambda k: ctx.input.key_down(str(k)))
-        expose("keyUp", lambda k: ctx.input.key_up(str(k)))
-        expose("keyPress", lambda k: ctx.input.key_press(str(k)))
-        expose("click", lambda x, y: ctx.input.click_ref(float(x), float(y)))
-        expose("moveMouseBy", lambda dx, dy: ctx.input.move_camera_by(float(dx), float(dy)))
-        expose("moveMouseTo", lambda x, y: None)  # 无指针；点击时直接给坐标
-        expose("leftButtonClick", lambda: ctx.input.attack())
-        expose("leftButtonDown", lambda: ctx.input.attack_down())
-        expose("leftButtonUp", lambda: ctx.input.attack_up())
+        def _key_down(key):
+            canonical = normalize_key(str(key))
+            if canonical == "LBUTTON":
+                pointer.left_down()
+            elif canonical == "RBUTTON":
+                ctx.input.button_down("sprint")
+            elif canonical == "MBUTTON":
+                ctx.input.button_down("elementalSight")
+            else:
+                pointer.clear_intent()
+                ctx.input.key_down(str(key))
+
+        def _key_up(key):
+            canonical = normalize_key(str(key))
+            if canonical == "LBUTTON":
+                pointer.left_up()
+            elif canonical == "RBUTTON":
+                ctx.input.button_up("sprint")
+            elif canonical == "MBUTTON":
+                ctx.input.button_up("elementalSight")
+            else:
+                ctx.input.key_up(str(key))
+
+        def _key_press(key):
+            canonical = normalize_key(str(key))
+            if canonical == "LBUTTON":
+                pointer.left_click()
+            elif canonical == "RBUTTON":
+                ctx.input.key_press("LSHIFT")
+            elif canonical == "MBUTTON":
+                ctx.input.tap_button("elementalSight")
+            else:
+                pointer.clear_intent()
+                ctx.input.key_press(str(key))
+
+        expose("keyDown", _key_down)
+        expose("keyUp", _key_up)
+        expose("keyPress", _key_press)
+        expose("click", pointer.click_at)
+        expose("moveMouseBy", pointer.move_by)
+        expose("moveMouseTo", pointer.move_to)
+        expose("leftButtonClick", pointer.left_click)
+        expose("leftButtonDown", pointer.left_down)
+        expose("leftButtonUp", pointer.left_up)
         # Genshin's default PC right mouse binding is sprint, not aimed mode.
         expose("rightButtonClick", lambda: ctx.input.key_press("LSHIFT"))
         expose("rightButtonDown", lambda: ctx.input.button_down("sprint"))
@@ -1302,6 +1339,11 @@ class JsScriptRuntime:
             self.log("[runtime] 脚本已取消")
             return None
         finally:
+            pointer = getattr(self, "_pointer", None)
+            if pointer is not None:
+                pointer.release_all()
+                if getattr(self.ctx, "_script_pointer", None) is pointer:
+                    delattr(self.ctx, "_script_pointer")
             one_key_fight = getattr(self, "_one_key_fight", None)
             if one_key_fight is not None:
                 one_key_fight.stop()

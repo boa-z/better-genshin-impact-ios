@@ -269,7 +269,12 @@ class Region:
                             image_height=self.ctx.transform.device_height)
 
     def move(self) -> None:
-        """原版移动鼠标指针；触控端无指针，空操作。"""
+        """Move the active script's virtual pointer to this region."""
+        if self._empty:
+            raise RuntimeError("对空 Region 调用 move()")
+        pointer = getattr(self.ctx, "_script_pointer", None)
+        if pointer is not None:
+            pointer.move_to(self.x + self.width / 2, self.y + self.height / 2)
 
     def background_click(self) -> None:
         self.click()
@@ -358,11 +363,14 @@ class DesktopRegion(Region):
                              height: float = 0) -> None:
         self.click_to(x, y, width, height)
 
-    def desktop_region_move(self, _x: float, _y: float, _width: float = 0,
-                            _height: float = 0) -> None:
-        # iOS has no persistent mouse pointer. Keeping this a no-op matches the
-        # global moveMouseTo compatibility contract.
-        return None
+    def desktop_region_move(self, x: float, y: float, width: float = 0,
+                            height: float = 0) -> None:
+        pointer = getattr(self.ctx, "_script_pointer", None)
+        if pointer is not None:
+            pointer.move_to(
+                float(x) + float(width) / 2,
+                float(y) + float(height) / 2,
+            )
 
     def derive_capture(self, mat: Mat, x: float, y: float) -> "ImageRegion":
         value = getattr(mat, "__wrapped__", mat)

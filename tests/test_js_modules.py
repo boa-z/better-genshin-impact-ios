@@ -14,7 +14,8 @@ def _context():
     input_simulator = SimpleNamespace(
         key_down=Mock(), key_up=Mock(), key_press=Mock(), click_ref=Mock(),
         move_camera_by=Mock(), attack=Mock(), attack_down=Mock(), attack_up=Mock(),
-        button_down=Mock(), button_up=Mock(), release_all=Mock(),
+        button_down=Mock(), button_up=Mock(), tap_button=Mock(), drag_ref=Mock(),
+        release_all=Mock(),
     )
     return SimpleNamespace(
         input=input_simulator,
@@ -75,6 +76,43 @@ import icon from 'assets/icon.png';
         "value": 13, "label": "module-default", "renamed": "renamed",
         "width": 5, "height": 3,
     }
+
+
+def test_js_runtime_replays_virtual_cursor_drag_and_mouse_virtual_keys(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"main": "main.js"}), encoding="utf-8",
+    )
+    (tmp_path / "main.js").write_text(
+        """
+(async function () {
+  setGameMetrics(3840, 2160, 2);
+  moveMouseTo(800, 1500);
+  leftButtonDown();
+  moveMouseBy(0, -100);
+  moveMouseTo(800, 1200);
+  leftButtonUp();
+  moveMouseTo(1000, 1000);
+  keyPress('VK_LBUTTON');
+  keyPress('W');
+  keyPress('MBUTTON');
+  return JSON.stringify(getGameMetrics());
+})();
+""",
+        encoding="utf-8",
+    )
+    ctx = _context()
+
+    result = json.loads(JsScriptRuntime(ctx, tmp_path).run())
+
+    assert result == [3840, 2160, 2]
+    drag = ctx.input.drag_ref.call_args
+    assert drag.args[:4] == (400, 750, 400, 600)
+    ctx.input.click_ref.assert_called_once_with(500, 500)
+    ctx.input.key_press.assert_called_once_with("W")
+    ctx.input.tap_button.assert_called_once_with("elementalSight")
 
 
 def test_js_module_loader_rejects_path_outside_sandbox(tmp_path):
