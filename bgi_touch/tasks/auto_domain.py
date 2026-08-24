@@ -11,11 +11,22 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Callable
 
 from ..engine.context import GameContext
-from ..engine.recognition import RecognitionObject
+from ..engine.recognition import Mat, RecognitionObject
 from .auto_fight import AutoFightTask
+
+
+TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "assets" / "templates" / "stygian"
+REWARD_RESULT_EXIT = RecognitionObject.template_match(
+    Mat.from_file(str(TEMPLATE_ROOT / "exit_button.png")),
+    0,
+    540,
+    960,
+    540,
+)
 
 
 class AutoDomainTask:
@@ -94,27 +105,25 @@ class AutoDomainTask:
 
     # ---- 主流程 ----
 
+    def _wait_for_reward_result_ready(
+        self, cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Wait until the stable reward-page exit control is visible."""
+        for _ in range(20):
+            if cancelled and cancelled():
+                return False
+            if self.ctx.capture_region().find(REWARD_RESULT_EXIT).is_exist():
+                return True
+            self.ctx.sleep(300)
+        return False
+
     def _recognize_rewards(self, cancelled: Callable[[], bool] | None = None) -> None:
         if not self.reward_recognition_enabled:
             return
-        from .reward_result import (
-            RewardResultRecognizer,
-            crop_reward_band,
-            detect_reward_card_rects,
-        )
+        from .reward_result import RewardResultRecognizer
 
-        deadline = time.monotonic() + 6
-        ready = False
-        while time.monotonic() < deadline:
-            if cancelled and cancelled():
-                return
-            frame = self.ctx.capture_bgr()
-            if detect_reward_card_rects(crop_reward_band(self.ctx, frame)):
-                ready = True
-                break
-            self.ctx.sleep(300)
-        if not ready:
-            self.log("[AutoDomain] 奖励结果页未就绪，跳过本轮奖励识别")
+        if not self._wait_for_reward_result_ready(cancelled):
+            self.log("[AutoDomain] 奖励结果页未检测到退出按钮，跳过本轮奖励识别")
             return
         try:
             if self._reward_recognizer is None:
