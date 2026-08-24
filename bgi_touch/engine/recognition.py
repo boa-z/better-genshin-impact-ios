@@ -388,6 +388,7 @@ class RecognitionObject:
         self.search_options: SearchOptions | None = None
         self.threshold = 0.8
         self.name = ""
+        self.text = ""
         self.use_3_channels = False
         self.template_match_mode = cv2.TM_CCOEFF_NORMED
         self.use_mask = False
@@ -557,6 +558,10 @@ class RecognitionObject:
     Name = property(
         lambda self: self.name,
         lambda self, value: setattr(self, "name", str(value)),
+    )
+    Text = property(
+        lambda self: self.text,
+        lambda self, value: setattr(self, "text", str(value)),
     )
     Threshold = property(
         lambda self: self.threshold,
