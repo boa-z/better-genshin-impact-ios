@@ -416,12 +416,67 @@ class ImageRegion(Region):
         y = int(max(0, min(h_img - 1, y)))
         return x, y, int(min(w, w_img - x)), int(min(h, h_img - y))
 
-    def find(self, ro: RecognitionObject) -> Region:
-        ro = getattr(ro, "__wrapped__", ro)
-        results = self.find_multi(ro, limit=1)
-        return results[0] if results else Region.empty_region(self.ctx)
+    @staticmethod
+    def _compact_ocr_text(items) -> str:
+        return "".join(
+            re.sub(r"\s+", "", str(item.text))
+            for item in items
+        )
 
-    def find_multi(self, ro: RecognitionObject, limit: int = 10) -> list[Region]:
+    @staticmethod
+    def _ocr_match_text(ro: RecognitionObject, text: str) -> bool:
+        return (
+            all(value in text for value in ro.all_contain_match_text)
+            and (
+                not ro.one_contain_match_text
+                or any(value in text for value in ro.one_contain_match_text)
+            )
+            and all(re.search(pattern, text) for pattern in ro.regex_match_text)
+        )
+
+    def find(self, ro: RecognitionObject, success_action=None,
+             fail_action=None) -> Region:
+        ro = getattr(ro, "__wrapped__", ro)
+        if not isinstance(ro, RecognitionObject):
+            raise TypeError("find/findMulti 需要 RecognitionObject")
+
+        if ro.recognition_type in ("Ocr", "OcrMatch"):
+            cx, cy, cw, ch = self._roi_to_device(ro.roi)
+            crop = self.bgr[cy:cy + ch, cx:cx + cw]
+            items = get_ocr().recognize(crop)
+            text = self._compact_ocr_text(items)
+            matched = bool(text)
+            if ro.recognition_type == "OcrMatch":
+                if not (ro.one_contain_match_text or ro.all_contain_match_text
+                        or ro.regex_match_text):
+                    raise ValueError("OcrMatch 的匹配文本不能全为空")
+                matched = matched and self._ocr_match_text(ro, text)
+            if matched:
+                if ro.roi and ro.roi != (0, 0, 0, 0):
+                    result = Region(
+                        self.ctx, self.dx + cx, self.dy + cy, cw, ch, text=text,
+                    )
+                else:
+                    self.text = text
+                    result = self
+                if callable(success_action):
+                    success_action(result)
+                return result
+            if callable(fail_action):
+                fail_action()
+            return Region.empty_region(self.ctx)
+
+        results = self.find_multi(ro, limit=1)
+        result = results[0] if results else Region.empty_region(self.ctx)
+        if results:
+            if callable(success_action):
+                success_action(result)
+        elif callable(fail_action):
+            fail_action()
+        return result
+
+    def find_multi(self, ro: RecognitionObject, success_action=None,
+                   fail_action=None, *, limit: int = 10) -> list[Region]:
         ro = getattr(ro, "__wrapped__", ro)
         if not isinstance(ro, RecognitionObject):
             raise TypeError("find/findMulti 需要 RecognitionObject")
@@ -441,7 +496,10 @@ class ImageRegion(Region):
                              interpolation=cv2.INTER_AREA if t.scale < 1 else cv2.INTER_LINEAR)
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             if gray.shape[0] < tpl.shape[0] or gray.shape[1] < tpl.shape[1]:
-                return []
+                results = []
+                if callable(fail_action):
+                    fail_action()
+                return results
             res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
             out: list[Region] = []
             work = res.copy()
@@ -455,6 +513,11 @@ class ImageRegion(Region):
                 x0 = max(0, mx - tpl.shape[1] // 2)
                 y0 = max(0, my - tpl.shape[0] // 2)
                 work[y0:my + tpl.shape[0] // 2 + 1, x0:mx + tpl.shape[1] // 2 + 1] = -1.0
+            if out:
+                if callable(success_action):
+                    success_action(out)
+            elif callable(fail_action):
+                fail_action()
             return out
 
         if ro.recognition_type in ("Ocr", "OcrMatch"):
@@ -470,9 +533,17 @@ class ImageRegion(Region):
                         return False
                     return True
                 items = [it for it in items if keep(it)]
-            return [Region(self.ctx, self.dx + cx + it.x, self.dy + cy + it.y,
-                           it.width, it.height, text=it.text, score=it.confidence)
-                    for it in items[:limit]]
+            results = [
+                Region(self.ctx, self.dx + cx + it.x, self.dy + cy + it.y,
+                       it.width, it.height, text=it.text, score=it.confidence)
+                for it in items[:limit]
+            ]
+            if results:
+                if callable(success_action):
+                    success_action(results)
+            elif callable(fail_action):
+                fail_action()
+            return results
 
         raise NotImplementedError(f"识别类型 {ro.recognition_type} 暂未支持")
 

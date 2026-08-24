@@ -288,6 +288,8 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 不会同时点按设备，因而可兼容社区 OCR 选区与快捷键脚本。
 `getVersion()` 返回当前对齐的 BetterGI 兼容版本；`RecognitionObject`、`Mat`、
 `Point2f`、`Region`、`ImageRegion` 与 `GameCaptureRegion` 均支持 HostType 构造语义。
+`ImageRegion.Find(Ocr/OcrMatch)` 与原版一样返回整个 ROI 的去空白合并文本，跨 OCR
+文本块执行包含/正则匹配；`Find/FindMulti` 的成功和失败回调重载也会同步触发。
 `GameCaptureRegion.gameRegion1080PPosClick()` 会直接使用 1920×1080 参考坐标触控，
 背包任务相关的 `GridScreenName` 和 `ItemIconRecognitionMode` 枚举也已暴露。
 `DesktopRegion`、`Color`、`Pen`、`BvImage` 以及 `OpenCvSharp.Vec3b` 已提供；其中
