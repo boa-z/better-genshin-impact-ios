@@ -191,6 +191,36 @@ def cmd_pathing(args) -> int:
         ctx.close()
 
 
+def cmd_group(args) -> int:
+    from .tasks.script_group import ScriptGroupRoots, ScriptGroupRunner
+    from .tasks.task_progress import TaskProgressStore
+
+    roots = ScriptGroupRoots.build(
+        javascript=args.script_root,
+        key_mouse=args.macro_root,
+        pathing=args.pathing_root,
+    )
+    groups = ScriptGroupRunner.load(
+        None,
+        args.files,
+        roots=roots,
+        party_slots=_load_party(),
+        progress_store=TaskProgressStore(args.progress_dir),
+        continue_on_error=not args.stop_on_error,
+    )
+    if args.dry_run:
+        print(json.dumps(groups.describe(), ensure_ascii=False, indent=2))
+        return 0
+    ctx = _context(args)
+    groups.ctx = ctx
+    try:
+        result = groups.run(resume=args.resume)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["failed"] == 0 else 1
+    finally:
+        ctx.close()
+
+
 def cmd_trigger(args) -> int:
     """长驻运行实时触发器（Ctrl-C 停止）。"""
     ctx = _context(args)
@@ -280,6 +310,15 @@ def main() -> int:
     p = sub.add_parser("pathing", help="解析/执行 pathing JSON")
     p.add_argument("file")
     p.add_argument("--dry-run", action="store_true", help="仅解析并输出统计")
+    p = sub.add_parser("group", help="执行 BetterGI ScriptGroup 配置组（支持进度续跑）")
+    p.add_argument("files", nargs="+", help="User/ScriptGroup 下的配置组 JSON")
+    p.add_argument("--script-root", help="Javascript 项目根目录（默认 scripts/js）")
+    p.add_argument("--macro-root", help="KeyMouse 项目根目录（默认 scripts/keymouse）")
+    p.add_argument("--pathing-root", help="Pathing 项目根目录（默认 scripts/pathing）")
+    p.add_argument("--progress-dir", help="TaskProgress 目录（默认 log/task_progress）")
+    p.add_argument("--resume", help="进度 JSON 路径或 14 位进度名称")
+    p.add_argument("--stop-on-error", action="store_true", help="项目失败时停止配置组")
+    p.add_argument("--dry-run", action="store_true", help="仅解析并输出项目顺序")
     p = sub.add_parser("web", help="启动 WebUI 控制台")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8899)
@@ -298,7 +337,8 @@ def main() -> int:
                 "close-game": cmd_close_game,
                 "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
                 "task": cmd_task,
-                "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing, "web": cmd_web,
+                "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing,
+                "group": cmd_group, "web": cmd_web,
                 "trigger": cmd_trigger, "reconnect": cmd_reconnect}
     return handlers[args.command](args)
 

@@ -30,6 +30,8 @@
   file 文本回调、图片缩放/写入等 bettergi.d.ts 宿主契约。
 - ShellTask 的 macOS/Linux 跨平台命令、超时、取消、输出和不等待语义；任意主机命令
   默认由项目安全配置禁用。
+- ScriptGroup 配置组兼容原版 Javascript、KeyMouse、Pathing、Shell 项目，支持禁用状态、
+  RunNum、失败继续/停止，以及原子 TaskProgress；中断后从未完成或失败项目恢复。
 - QuickBuy 的普通商店与尘歌壶商店数量滑块、购买确认分支；货币模板由资产下载器
   固定版本获取，缺少模板时要求显式指定商店类型以避免误购。
 - AutoBoss 的 41 个官方首领路线分型、树脂耗尽/指定次数策略、须臾与脆弱树脂补充、
@@ -92,8 +94,8 @@ HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest �
 AutoGeniusInvokation 和 AutoAlbum 迁移；当前真机回归仍需分别准备有效活动期、战斗
 策略、七圣召唤策略和主题专辑界面。
 
-下一批迁移重点是 FarmingPlan 等尚未接入统一调度器的页面任务；QuickForge 上游
-当前仍为空类。需要继续移植专用识别器，
+FarmingPlan 已接入路径执行统计，ScriptGroup/TaskProgress 已形成调度闭环；QuickForge
+上游当前仍为空类。下一批继续移植有实际业务实现的专用识别器，
 不能只用通用 OCR 点击流代替。
 
 ## 工程

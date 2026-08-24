@@ -84,6 +84,8 @@ bgi-touch task AutoFishing --config '{"autoThrowRodEnabled":true,"targetCatches"
 bgi-touch macro 宏.json                 # 回放键鼠宏（自动翻译为触控）
 bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
+bgi-touch group User/ScriptGroup/每日.json --dry-run  # 检查原版配置组项目顺序
+bgi-touch group User/ScriptGroup/每日.json            # 执行配置组并保存崩溃续跑进度
 bgi-touch trigger --map-mask --map-name Teyvat  # 长驻地图遮罩/坐标追踪
 bgi-touch trigger --skill-cd            # 四人队伍元素战技冷却提示
 bgi-touch trigger --quick-teleport      # 地图选点后自动点击候选项与传送
@@ -132,6 +134,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |
 | 一条龙 OneDragonFlowConfig | ⚠️ 顺序、重复任务 ID、NextTaskId、内置任务与安全完成动作已迁移，待真机回归 |
+| ScriptGroup / TaskProgress | ✅ 原版 JSON、四类项目、RunNum、失败策略与原子崩溃续跑 |
 | ShellTask | ✅ 跨平台超时/取消/输出兼容；任意主机命令默认由安全配置禁用 |
 
 ## 已知约束

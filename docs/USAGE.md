@@ -73,6 +73,10 @@ export BGI_MCP_URL=http://127.0.0.1:8009/mcp          # 环境变量
 `devicehub-headless`、`dist/` 和 sidecar 应保持原有相对位置，工作目录通常设为
 归档顶层目录。配置完成后不再需要手工先启动 headless。
 
+多设备环境应在顶层加入 `"deviceId": "UDID::wifi"`，或使用全局参数
+`--device-id` / 环境变量 `BGI_DEVICE_ID`。CLI 参数优先于配置文件，可避免自动选择时
+误连同一 DeviceHub 中的其他 iPhone/iPad。
+
 ### 1.5 DeviceHub 键位 profile
 
 默认读取 DeviceHub Mask 的 `Genshin-Impact-fixed-16by9` profile。程序启动时会先建立
@@ -424,6 +428,31 @@ attack(2), jump, w(0.5)            // 无角色名 = 当前角色：普攻2秒�
 支持动作：`e/skill[(hold)]`、`q/burst`、`attack(秒)`、`charge(秒)`、
 `dash(秒)`、`jump`、`w/a/s/d(秒)`、`walk(方向,秒)`、`wait(秒)`、`aim`、
 `keydown/keyup/keypress(键)`、`moveby(dx,dy)`（转视角）、`ready`、`check`。
+
+### 5.5 执行 BetterGI ScriptGroup 配置组
+
+可直接读取原项目 `User/ScriptGroup/*.json`，依次调度 `Javascript`、`KeyMouse`、
+`Pathing` 和 `Shell` 项目。先用 `--dry-run` 核对路径和顺序，此模式不会连接设备：
+
+```bash
+bgi-touch group '/path/to/User/ScriptGroup/每日.json' --dry-run
+bgi-touch group '/path/to/User/ScriptGroup/每日.json' \
+  --script-root scripts/js --pathing-root scripts/pathing --macro-root scripts/keymouse
+```
+
+`Status=Disabled` 的项目会跳过，`RunNum` 会按原配置重复。默认与 BetterGI 一样记录项目
+失败后继续后续项目；使用 `--stop-on-error` 可在首个失败处停止。每个项目执行前后都会把
+进度原子写入 `log/task_progress/<14位时间戳>.json`，异常退出后用以下命令恢复：
+
+```bash
+bgi-touch group '/path/to/User/ScriptGroup/每日.json' \
+  --resume log/task_progress/20260824010203.json
+```
+
+恢复时已成功项目不会重跑，未完成或失败项目会先重试。多个配置组文件可按参数顺序一起
+执行；也可用 `bgi-touch task ScriptGroup --config-file group-task.json` 从 JS/WebUI 的
+统一 SoloTask 调度层调用。Shell 项目仍受安全配置限制，配置组必须显式
+`Config.EnableShellConfig=true`，全局 `config/shell.json` 也必须允许执行。
 
 ---
 

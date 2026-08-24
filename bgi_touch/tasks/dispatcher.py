@@ -81,7 +81,7 @@ class TaskDispatcher:
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
-        "CharacterDevelopment", "OneDragon", "Shell",
+        "CharacterDevelopment", "OneDragon", "ScriptGroup", "Shell",
     })
 
     def __init__(
@@ -188,6 +188,8 @@ class TaskDispatcher:
             return self.run_character_development_task(cfg, ct)
         if name in ("OneDragon", "OneDragonFlow"):
             return self.run_one_dragon_task(cfg, ct)
+        if name in ("ScriptGroup", "ScriptGroupTask"):
+            return self.run_script_group_task(cfg, ct)
         if name == "Shell":
             return self.run_shell_task(cfg, ct)
         raise NotImplementedError(
@@ -226,6 +228,35 @@ class TaskDispatcher:
             ),
             log=self.log,
         ).run(cancelled=self._callback(ct))
+
+    def run_script_group_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
+        from .script_group import ScriptGroupRoots, ScriptGroupRunner
+        from .task_progress import TaskProgressStore
+
+        sources = _value(param, "configFiles", _value(
+            param, "paths", _value(param, "configFile", _value(param, "path", None))
+        ))
+        if isinstance(sources, (str, Path)):
+            sources = [sources]
+        if not isinstance(sources, (list, tuple)) or not sources:
+            raise ValueError("ScriptGroup 需要 configFile/configFiles")
+        roots = ScriptGroupRoots.build(
+            javascript=_value(param, "javascriptRoot", _value(param, "scriptRoot", None)),
+            key_mouse=_value(param, "keyMouseRoot", _value(param, "macroRoot", None)),
+            pathing=_value(param, "pathingRoot", None),
+        )
+        store = TaskProgressStore(_value(param, "progressDirectory", None), log=self.log)
+        runner = ScriptGroupRunner.load(
+            self.ctx,
+            [str(value) for value in sources],
+            roots=roots,
+            party_slots=self.party_slots,
+            progress_store=store,
+            continue_on_error=bool(_value(param, "continueOnError", True)),
+            cancelled=self._callback(ct),
+            log=self.log,
+        )
+        return runner.run(resume=_value(param, "resume", _value(param, "progress", None)))
 
     def run_shell_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
         from .shell_task import ShellTask
