@@ -66,6 +66,14 @@
       "nx": 0.7417212879590396,
       "ny": 0.06368834967751216
     },
+    "wishMenu": {
+      "nx": 0.7845852092161016,
+      "ny": 0.06554655093869134
+    },
+    "adventurerHandbook": {
+      "nx": 0.8296257062146892,
+      "ny": 0.06572637686719256
+    },
     "paimonMenu": {
       "nx": 0.065,
       "ny": 0.06
@@ -150,6 +158,16 @@
     "M": {
       "type": "button",
       "button": "map"
+    },
+    "F1": {
+      "type": "button",
+      "button": "adventurerHandbook",
+      "profileCode": "KeyB"
+    },
+    "F3": {
+      "type": "button",
+      "button": "wishMenu",
+      "profileCode": "KeyP"
     },
     "F5": {
       "type": "button",
