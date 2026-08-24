@@ -284,29 +284,37 @@ class GenshinApi:
 
     def switchCharacter(self, slot1="", slot2="", slot3="", slot4="",
                         usePhysicalSlots=True):
-        """Store a script-requested party composition and select its first slot.
+        """Rebuild requested party slots through the iOS party configuration UI."""
+        from .party import CharacterSwitcher
 
-        DeviceHub can reproduce the game's control surface but cannot edit an
-        in-game party through HID alone. Keeping the requested mapping on the
-        context makes subsequent combat scripts use the same composition while
-        returning ``False`` for unknown character names, matching BetterGI's
-        failure contract.
-        """
         requested = [str(value or "").strip() for value in (slot1, slot2, slot3, slot4)]
+        try:
+            result = CharacterSwitcher(
+                self.ctx,
+                log=self.log,
+                return_main_ui=self.returnMainUi,
+            ).switch_characters(
+                requested,
+                use_physical_slots=bool(usePhysicalSlots),
+            )
+        except Exception as error:
+            self.log(f"[genshin] 角色队伍重组失败：{error}")
+            return False
+        if not result:
+            return False
+
         available = dict(self._party_slots)
-        for index, character in enumerate(requested, start=1):
-            if not character:
-                continue
-            if character not in available:
-                self.log(f"[genshin] 队伍配置中未找到角色：{character}")
-                return False
-            available[character] = index
+        if usePhysicalSlots:
+            for index, character in enumerate(requested, start=1):
+                if character:
+                    available[character] = index
+        else:
+            for index, character in enumerate(
+                (value for value in requested if value), start=1,
+            ):
+                available[character] = index
         self._party_slots = available
         setattr(self.ctx, "party_slots", available)
-        first = next((name for name in requested if name), None)
-        if first:
-            self.ctx.input.switch_party_slot(available[first])
-        self.log("[genshin] 已更新脚本队伍槽位映射；iOS 端保留当前游戏队伍")
         return True
 
     def setBigMapZoomLevel(self, level):

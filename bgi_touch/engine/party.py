@@ -31,6 +31,10 @@ PARTY_SELECTOR_POINT = (140, 1020)
 PARTY_LIST_MAX_PAGES = 16
 PARTY_OPEN_TIMEOUT_S = 7.0
 PARTY_LIST_SETTLE_MS = 450
+CHARACTER_GRID_ROI = (24, 86, 766, 743)
+CHARACTER_SLOT_POINTS = ((470, 550), (800, 550), (1130, 550), (1460, 550))
+CHARACTER_CONFIRM_ROI = (350, 950, 180, 90)
+CHARACTER_LIST_MAX_PAGES = 12
 
 
 def _compact_text(value: str) -> str:
@@ -206,5 +210,92 @@ class PartySwitcher:
         finally:
             # The caller may invoke another task immediately after a failed
             # OCR/page transition. Always close an opened list before leaving.
+            if not main_ui_returned:
+                self._leave_main_ui()
+
+
+class CharacterSwitcher(PartySwitcher):
+    """Replace selected physical party slots with OCR-matched characters."""
+
+    def _click_character_confirm(self) -> bool:
+        # BetterGI's role state machine uses the small bottom-left “更换” /
+        # “加入” text region. OCR is preferred; the fixed reference point is a
+        # safe fallback after a character card has already been selected.
+        for hit in self._ocr(CHARACTER_CONFIRM_ROI, limit=10):
+            if self._matches(hit.text, "更换") or self._matches(hit.text, "加入"):
+                hit.click()
+                self.ctx.sleep(PARTY_LIST_SETTLE_MS)
+                return True
+        self.ctx.input.click_ref(425, 1018)
+        self.ctx.sleep(PARTY_LIST_SETTLE_MS)
+        return True
+
+    def _select_character(self, name: str) -> bool:
+        for page in range(CHARACTER_LIST_MAX_PAGES):
+            hits = self._ocr(CHARACTER_GRID_ROI, limit=120)
+            target = next(
+                (hit for hit in hits if self._matches(hit.text, name)),
+                None,
+            )
+            if target is not None:
+                self.log(f"[genshin] 找到角色：{target.text.strip()}")
+                target.click()
+                self.ctx.sleep(PARTY_LIST_SETTLE_MS)
+                return self._click_character_confirm()
+            if not hits or not self._scroll_team_list():
+                break
+            self.log(f"[genshin] 角色列表未找到 {name}，继续第 {page + 2} 页")
+        return False
+
+    def switch_characters(
+        self,
+        roles: list[str],
+        *,
+        use_physical_slots: bool = True,
+    ) -> bool:
+        requested = [_compact_text(role) for role in roles]
+        if not any(requested):
+            self.log("[genshin] 未指定需要切换的角色")
+            return False
+        if len([role for role in requested if role]) != len({role for role in requested if role}):
+            self.log("[genshin] 同一角色不能同时指定到多个队伍槽位")
+            return False
+
+        assignments = (
+            [(index + 1, role) for index, role in enumerate(requested) if role]
+            if use_physical_slots
+            else [
+                (slot, role)
+                for slot, role in zip(
+                    (1, 2, 3, 4), (role for role in requested if role), strict=False,
+                )
+            ]
+        )
+        main_ui_returned = False
+
+        def leave_main_ui() -> bool:
+            nonlocal main_ui_returned
+            if main_ui_returned:
+                return True
+            main_ui_returned = True
+            return self._leave_main_ui()
+
+        if callable(self.return_main_ui) and not self.return_main_ui():
+            return False
+        try:
+            self.ctx.input.key_press("L")
+            if not self._wait_for_party_setup():
+                return False
+            for slot, name in assignments:
+                if slot > len(CHARACTER_SLOT_POINTS):
+                    return False
+                self.ctx.input.click_ref(*CHARACTER_SLOT_POINTS[slot - 1])
+                self.ctx.sleep(PARTY_LIST_SETTLE_MS)
+                if not self._select_character(name):
+                    self.log(f"[genshin] 未找到角色：{name}")
+                    return False
+            self.log("[genshin] 角色队伍重组完成")
+            return leave_main_ui()
+        finally:
             if not main_ui_returned:
                 self._leave_main_ui()
