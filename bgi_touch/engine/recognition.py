@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import re
 from typing import TYPE_CHECKING, Optional
 
@@ -59,6 +60,239 @@ def _rect_result(x: float, y: float, width: float, height: float) -> dict:
         "x": x, "y": y, "width": width, "height": height,
         "X": x, "Y": y, "Width": width, "Height": height,
     }
+
+
+def _size_tuple(value) -> tuple[float, float]:
+    """Read OpenCvSharp.Size, JS objects, mappings, or two-value arrays."""
+    unwrapped = getattr(value, "__wrapped__", None)
+    if unwrapped is not None:
+        value = unwrapped
+    if isinstance(value, dict):
+        folded = {str(key).casefold(): item for key, item in value.items()}
+        parts = (folded.get("width", 0), folded.get("height", 0))
+    elif isinstance(value, (list, tuple)) and len(value) >= 2:
+        parts = (value[0], value[1])
+    else:
+        def member(lower: str, upper: str):
+            for name in (lower, upper):
+                try:
+                    return value[name]
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                try:
+                    return getattr(value, name)
+                except (AttributeError, TypeError):
+                    pass
+            return 0
+
+        parts = (member("width", "Width"), member("height", "Height"))
+    return tuple(float(part) for part in parts)
+
+
+class Size:
+    """Small OpenCvSharp.Size-compatible value object for host properties."""
+
+    def __init__(self, width: float = 0, height: float = 0):
+        self.width = float(width)
+        self.height = float(height)
+
+    Width = property(
+        lambda self: self.width,
+        lambda self, value: setattr(self, "width", float(value)),
+    )
+    Height = property(
+        lambda self: self.height,
+        lambda self, value: setattr(self, "height", float(value)),
+    )
+
+    def __iter__(self):
+        yield self.width
+        yield self.height
+
+    def __repr__(self) -> str:
+        return f"Size({self.width:g}, {self.height:g})"
+
+
+class SearchAnchorMode:
+    """BetterGI ``SearchAnchorMode`` enum values exposed to Python and JS."""
+
+    Auto = "Auto"
+    TopLeft = "TopLeft"
+    TopRight = "TopRight"
+    BottomLeft = "BottomLeft"
+    BottomRight = "BottomRight"
+    Center = "Center"
+
+    @classmethod
+    def normalize(cls, value) -> str:
+        raw = getattr(value, "value", value)
+        text = str(raw)
+        for name in ("Auto", "TopLeft", "TopRight", "BottomLeft", "BottomRight", "Center"):
+            if text.casefold() == name.casefold():
+                return name
+        return cls.Auto
+
+
+class SearchExpandRatio:
+    """Four-sided percentage expansion using XAML Thickness ordering."""
+
+    def __init__(self, *values, left=None, top=None, right=None, bottom=None):
+        if any(value is not None for value in (left, top, right, bottom)):
+            if any(value is None for value in (left, top, right, bottom)):
+                raise ValueError("SearchExpandRatio 的四边参数不能缺少")
+            values = (left, top, right, bottom)
+        elif len(values) == 1 and isinstance(values[0], (list, tuple)):
+            values = tuple(values[0])
+        if len(values) == 0:
+            values = (0, 0, 0, 0)
+        elif len(values) == 1:
+            values = (values[0],) * 4
+        elif len(values) == 2:
+            values = (values[0], values[1], values[0], values[1])
+        elif len(values) != 4:
+            raise ValueError("SearchExpandRatio 需要 1、2 或 4 个数字")
+        self.left, self.top, self.right, self.bottom = (
+            float(value) for value in values
+        )
+
+    Left = property(
+        lambda self: self.left,
+        lambda self, value: setattr(self, "left", float(value)),
+    )
+    Top = property(
+        lambda self: self.top,
+        lambda self, value: setattr(self, "top", float(value)),
+    )
+    Right = property(
+        lambda self: self.right,
+        lambda self, value: setattr(self, "right", float(value)),
+    )
+    Bottom = property(
+        lambda self: self.bottom,
+        lambda self, value: setattr(self, "bottom", float(value)),
+    )
+
+    @property
+    def is_valid(self) -> bool:
+        return all(
+            math.isfinite(value) and value >= 0
+            for value in (self.left, self.top, self.right, self.bottom)
+        )
+
+    IsValid = property(lambda self: self.is_valid)
+
+    def __iter__(self):
+        yield self.left
+        yield self.top
+        yield self.right
+        yield self.bottom
+
+    def __repr__(self) -> str:
+        return (
+            "SearchExpandRatio("
+            f"{self.left:g}, {self.top:g}, {self.right:g}, {self.bottom:g})"
+        )
+
+
+def _expand_ratio(value) -> SearchExpandRatio | None:
+    if value is None:
+        return None
+    if isinstance(value, SearchExpandRatio):
+        return value
+    unwrapped = getattr(value, "__wrapped__", None)
+    if unwrapped is not None:
+        value = unwrapped
+    if isinstance(value, dict):
+        folded = {str(key).casefold(): item for key, item in value.items()}
+        values = [
+            folded.get("left", 0), folded.get("top", 0),
+            folded.get("right", 0), folded.get("bottom", 0),
+        ]
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        values = []
+        for name in ("left", "top", "right", "bottom"):
+            try:
+                values.append(value[name])
+            except (KeyError, TypeError, AttributeError):
+                values.append(getattr(value, name, getattr(value, name.capitalize(), 0)))
+    try:
+        return SearchExpandRatio(*values)
+    except (TypeError, ValueError):
+        # Keep an invalid object visible to the resolver so it can safely
+        # produce a miss instead of silently broadening the search region.
+        return SearchExpandRatio(float("nan"), 0, 0, 0)
+
+
+class SearchOptions:
+    """Reference-canvas search options from BetterGI's recognition model."""
+
+    def __init__(self, anchor_mode: str = SearchAnchorMode.Auto,
+                 reference_search_box=None, expand_size=None, expand_percent=None,
+                 **kwargs):
+        # Python callers and ClearScript callers commonly use the public
+        # PascalCase property names in object initializers.
+        anchor_mode = kwargs.pop("AnchorMode", kwargs.pop("anchorMode", anchor_mode))
+        reference_search_box = kwargs.pop(
+            "ReferenceSearchBox", kwargs.pop("referenceSearchBox", reference_search_box),
+        )
+        expand_size = kwargs.pop("ExpandSize", kwargs.pop("expandSize", expand_size))
+        expand_percent = kwargs.pop(
+            "ExpandPercent", kwargs.pop("expandPercent", expand_percent),
+        )
+        if kwargs:
+            raise TypeError(f"SearchOptions 不支持字段: {', '.join(kwargs)}")
+        self.anchor_mode = SearchAnchorMode.normalize(anchor_mode)
+        self.reference_search_box = (
+            None if reference_search_box is None else _rect_tuple(reference_search_box)
+        )
+        self.expand_size = None if expand_size is None else Size(*_size_tuple(expand_size))
+        self.expand_percent = _expand_ratio(expand_percent)
+
+    AnchorMode = property(
+        lambda self: self.anchor_mode,
+        lambda self, value: setattr(self, "anchor_mode", SearchAnchorMode.normalize(value)),
+    )
+    ReferenceSearchBox = property(
+        lambda self: None if self.reference_search_box is None else _rect_result(*self.reference_search_box),
+        lambda self, value: setattr(
+            self, "reference_search_box",
+            None if value is None else _rect_tuple(value),
+        ),
+    )
+    ExpandSize = property(
+        lambda self: self.expand_size,
+        lambda self, value: setattr(
+            self, "expand_size", None if value is None else Size(*_size_tuple(value)),
+        ),
+    )
+    ExpandPercent = property(
+        lambda self: self.expand_percent,
+        lambda self, value: setattr(self, "expand_percent", _expand_ratio(value)),
+    )
+
+    anchorMode = AnchorMode
+    referenceSearchBox = ReferenceSearchBox
+    expandSize = ExpandSize
+    expandPercent = ExpandPercent
+
+    def clone(self) -> "SearchOptions":
+        ratio = _expand_ratio(self.expand_percent)
+        return SearchOptions(
+            anchor_mode=self.anchor_mode,
+            reference_search_box=(
+                None if self.reference_search_box is None
+                else _rect_tuple(self.reference_search_box)
+            ),
+            expand_size=(
+                None if self.expand_size is None
+                else Size(*_size_tuple(self.expand_size))
+            ),
+            expand_percent=ratio,
+        )
+
+    Clone = clone
 
 
 class Mat:
@@ -149,6 +383,9 @@ class RecognitionObject:
         self.recognition_type = "TemplateMatch"
         self.template: Mat | None = None
         self.roi: tuple[float, float, float, float] | None = None  # ref 空间 x,y,w,h
+        self.reference_image_size: Size | None = None
+        self.reference_bounding_box: tuple[float, float, float, float] | None = None
+        self.search_options: SearchOptions | None = None
         self.threshold = 0.8
         self.name = ""
         self.use_3_channels = False
@@ -240,6 +477,29 @@ class RecognitionObject:
             self, "roi", None if value is None else _rect_tuple(value),
         ),
     )
+    referenceImageSize = property(
+        lambda self: self.reference_image_size,
+        lambda self, value: setattr(
+            self, "reference_image_size",
+            None if value is None else Size(*_size_tuple(value)),
+        ),
+    )
+    referenceBoundingBox = property(
+        lambda self: (
+            None if self.reference_bounding_box is None
+            else _rect_result(*self.reference_bounding_box)
+        ),
+        lambda self, value: setattr(
+            self, "reference_bounding_box",
+            None if value is None else _rect_tuple(value),
+        ),
+    )
+    searchOptions = property(
+        lambda self: self.search_options,
+        lambda self, value: setattr(
+            self, "search_options", getattr(value, "__wrapped__", value),
+        ),
+    )
     templateImageMat = property(
         lambda self: self.template,
         lambda self, value: setattr(self, "template", value),
@@ -289,6 +549,9 @@ class RecognitionObject:
     )
     RecognitionType = recognitionType
     RegionOfInterest = regionOfInterest
+    ReferenceImageSize = referenceImageSize
+    ReferenceBoundingBox = referenceBoundingBox
+    SearchOptions = searchOptions
     TemplateImageMat = templateImageMat
     TemplateImageGreyMat = templateImageGreyMat
     Name = property(
@@ -323,7 +586,10 @@ class RecognitionObject:
     def clone(self) -> "RecognitionObject":
         # BetterGI shares Mat/list references when cloning RecognitionObject;
         # copy.copy preserves that contract while isolating scalar options.
-        return copy.copy(self)
+        cloned = copy.copy(self)
+        if self.search_options is not None:
+            cloned.search_options = self.search_options.clone()
+        return cloned
 
     Clone = clone
 
@@ -580,9 +846,11 @@ class DesktopRegion(Region):
 
 
 class ImageRegion(Region):
-    def __init__(self, ctx: "GameContext", bgr: np.ndarray, dx: float = 0, dy: float = 0):
+    def __init__(self, ctx: "GameContext", bgr: np.ndarray, dx: float = 0, dy: float = 0,
+                 *, reference_search_allowed: bool = True):
         super().__init__(ctx, dx, dy, bgr.shape[1], bgr.shape[0])
         self.bgr = bgr
+        self._reference_search_allowed = bool(reference_search_allowed)
 
     @property
     def src_mat(self) -> Mat:
@@ -601,6 +869,174 @@ class ImageRegion(Region):
         x = int(max(0, min(w_img - 1, x)))
         y = int(max(0, min(h_img - 1, y)))
         return x, y, int(min(w, w_img - x)), int(min(h, h_img - y))
+
+    @staticmethod
+    def _has_reference_search(ro: RecognitionObject) -> bool:
+        roi = ro.roi
+        has_explicit_roi = roi is not None and tuple(roi) != (0, 0, 0, 0)
+        return (
+            not has_explicit_roi
+            and ro.reference_image_size is not None
+            and ro.reference_bounding_box is not None
+        )
+
+    @classmethod
+    def _has_partial_reference_search(cls, ro: RecognitionObject) -> bool:
+        roi = ro.roi
+        has_explicit_roi = roi is not None and tuple(roi) != (0, 0, 0, 0)
+        return (
+            not has_explicit_roi
+            and (
+                ro.reference_image_size is not None
+                or ro.reference_bounding_box is not None
+                or ro.search_options is not None
+            )
+            and not cls._has_reference_search(ro)
+        )
+
+    @staticmethod
+    def _round(value: float) -> int:
+        # Python's round uses the same ties-to-even rule as Math.Round(double)
+        # used by BetterGI's reference-search helper.
+        return int(round(value))
+
+    @classmethod
+    def _transform_reference_rect(
+        cls, rect: tuple[float, float, float, float],
+        scale: float, offset_x: float, offset_y: float,
+    ) -> tuple[int, int, int, int]:
+        x, y, width, height = rect
+        left = cls._round(offset_x + x * scale)
+        top = cls._round(offset_y + y * scale)
+        right = cls._round(offset_x + (x + width) * scale)
+        bottom = cls._round(offset_y + (y + height) * scale)
+        return left, top, max(1, right - left), max(1, bottom - top)
+
+    @classmethod
+    def _resolve_reference_search(
+        cls, image: "ImageRegion", ro: RecognitionObject,
+    ) -> tuple[tuple[int, int, int, int], tuple[int, int]] | None:
+        """Resolve BetterGI reference-canvas search to source-image pixels."""
+        if cls._has_partial_reference_search(ro):
+            return None
+        if not cls._has_reference_search(ro):
+            return image._roi_to_device(ro.roi), None
+        if not image._reference_search_allowed:
+            return None
+
+        ref_w, ref_h = _size_tuple(ro.reference_image_size)
+        bbox = _rect_tuple(ro.reference_bounding_box)
+        options = ro.search_options or SearchOptions()
+        ratio = _expand_ratio(options.expand_percent)
+        search_box = (
+            None if options.reference_search_box is None
+            else _rect_tuple(options.reference_search_box)
+        )
+        expand_size = (
+            None if options.expand_size is None
+            else _size_tuple(options.expand_size)
+        )
+        if (
+            ref_w <= 0 or ref_h <= 0
+            or bbox[2] <= 0 or bbox[3] <= 0
+            or (
+                search_box is not None
+                and (
+                    search_box[2] <= 0 or search_box[3] <= 0
+                )
+            )
+            or (ratio is not None and not ratio.is_valid)
+        ):
+            return None
+
+        image_h, image_w = image.bgr.shape[:2]
+        scale = min(image_w / ref_w, image_h / ref_h)
+        if scale <= 0:
+            return None
+
+        anchor = SearchAnchorMode.normalize(options.anchor_mode)
+        center_x = bbox[0] + bbox[2] / 2
+        center_y = bbox[1] + bbox[3] / 2
+        if anchor == SearchAnchorMode.TopLeft:
+            horizontal, vertical = "left", "top"
+        elif anchor == SearchAnchorMode.TopRight:
+            horizontal, vertical = "right", "top"
+        elif anchor == SearchAnchorMode.BottomLeft:
+            horizontal, vertical = "left", "bottom"
+        elif anchor == SearchAnchorMode.BottomRight:
+            horizontal, vertical = "right", "bottom"
+        elif anchor == SearchAnchorMode.Center:
+            horizontal, vertical = "center", "center"
+        else:
+            horizontal = (
+                "left" if center_x < ref_w * 0.4
+                else "right" if center_x > ref_w * 0.6
+                else "center"
+            )
+            vertical = (
+                "top" if center_y < ref_h * 0.4
+                else "bottom" if center_y > ref_h * 0.6
+                else "center"
+            )
+
+        scaled_w, scaled_h = ref_w * scale, ref_h * scale
+        offset_x = (
+            image_w - scaled_w if horizontal == "right"
+            else (image_w - scaled_w) / 2 if horizontal == "center"
+            else 0
+        )
+        offset_y = (
+            image_h - scaled_h if vertical == "bottom"
+            else (image_h - scaled_h) / 2 if vertical == "center"
+            else 0
+        )
+
+        template_size = (
+            max(1, cls._round(bbox[2] * scale)),
+            max(1, cls._round(bbox[3] * scale)),
+        )
+        base = search_box or bbox
+        left, top, width, height = cls._transform_reference_rect(
+            base, scale, offset_x, offset_y,
+        )
+        if ratio is not None:
+            expand_left = image_w * ratio.left
+            expand_top = image_h * ratio.top
+            expand_right = image_w * ratio.right
+            expand_bottom = image_h * ratio.bottom
+        else:
+            width, height = expand_size or (10, 10)
+            expand_left = expand_right = width
+            expand_top = expand_bottom = height
+
+        right = left + width
+        bottom = top + height
+        left = cls._round(max(0, min(image_w, left - expand_left)))
+        top = cls._round(max(0, min(image_h, top - expand_top)))
+        right = cls._round(max(0, min(image_w, right + expand_right)))
+        bottom = cls._round(max(0, min(image_h, bottom + expand_bottom)))
+        effective = (left, top, max(0, right - left), max(0, bottom - top))
+        if (
+            effective[2] <= 0 or effective[3] <= 0
+            or (
+                ro.recognition_type == "TemplateMatch"
+                and (
+                    effective[2] < template_size[0]
+                    or effective[3] < template_size[1]
+                )
+            )
+        ):
+            return None
+        return effective, template_size
+
+    def _resolve_search_region(
+        self, ro: RecognitionObject,
+    ) -> tuple[tuple[int, int, int, int], tuple[int, int] | None] | None:
+        resolved = self._resolve_reference_search(self, ro)
+        if resolved is None:
+            return None
+        roi, template_size = resolved
+        return roi, template_size
 
     @staticmethod
     def _compact_ocr_text(items) -> str:
@@ -627,7 +1063,16 @@ class ImageRegion(Region):
             raise TypeError("find/findMulti 需要 RecognitionObject")
 
         if ro.recognition_type in ("Ocr", "OcrMatch"):
-            cx, cy, cw, ch = self._roi_to_device(ro.roi)
+            resolved = self._resolve_search_region(ro)
+            if resolved is None:
+                if callable(fail_action):
+                    fail_action()
+                return Region.empty_region(self.ctx)
+            (cx, cy, cw, ch), _template_size = resolved
+            if cw <= 0 or ch <= 0:
+                if callable(fail_action):
+                    fail_action()
+                return Region.empty_region(self.ctx)
             crop = self.bgr[cy:cy + ch, cx:cx + cw]
             items = get_ocr().recognize(crop)
             text = self._compact_ocr_text(items)
@@ -638,7 +1083,9 @@ class ImageRegion(Region):
                     raise ValueError("OcrMatch 的匹配文本不能全为空")
                 matched = matched and self._ocr_match_text(ro, text)
             if matched:
-                if ro.roi and ro.roi != (0, 0, 0, 0):
+                if (
+                    ro.roi and ro.roi != (0, 0, 0, 0)
+                ) or self._has_reference_search(ro):
                     result = Region(
                         self.ctx, self.dx + cx, self.dy + cy, cw, ch, text=text,
                     )
@@ -666,7 +1113,16 @@ class ImageRegion(Region):
         ro = getattr(ro, "__wrapped__", ro)
         if not isinstance(ro, RecognitionObject):
             raise TypeError("find/findMulti 需要 RecognitionObject")
-        cx, cy, cw, ch = self._roi_to_device(ro.roi)
+        resolved = self._resolve_search_region(ro)
+        if resolved is None:
+            if callable(fail_action):
+                fail_action()
+            return []
+        (cx, cy, cw, ch), reference_template_size = resolved
+        if cw <= 0 or ch <= 0:
+            if callable(fail_action):
+                fail_action()
+            return []
         crop = self.bgr[cy:cy + ch, cx:cx + cw]
         t = self.ctx.transform
 
@@ -679,8 +1135,16 @@ class ImageRegion(Region):
             ro.init_template()
             tpl = template.bgr if ro.use_3_channels else template.gray()
             th, tw = tpl.shape[:2]
-            tpl = cv2.resize(tpl, (max(1, round(tw * t.scale)), max(1, round(th * t.scale))),
-                             interpolation=cv2.INTER_AREA if t.scale < 1 else cv2.INTER_LINEAR)
+            if reference_template_size is not None:
+                target_width, target_height = reference_template_size
+            else:
+                target_width = max(1, round(tw * t.scale))
+                target_height = max(1, round(th * t.scale))
+            tpl = cv2.resize(
+                tpl, (target_width, target_height),
+                interpolation=cv2.INTER_AREA if target_width < tw or target_height < th
+                else cv2.INTER_LINEAR,
+            )
             source = crop if ro.use_3_channels else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             if source.shape[0] < tpl.shape[0] or source.shape[1] < tpl.shape[1]:
                 results = []
@@ -766,7 +1230,10 @@ class ImageRegion(Region):
         if x1 <= x0 or y1 <= y0:
             raise ValueError(f"DeriveCrop 裁剪区域无效: ({x}, {y}, {w}, {h})")
         crop = self.bgr[y0:y1, x0:x1]
-        return ImageRegion(self.ctx, crop, self.dx + x0, self.dy + y0)
+        return ImageRegion(
+            self.ctx, crop, self.dx + x0, self.dy + y0,
+            reference_search_allowed=False,
+        )
 
     def derive_to_1080p(self) -> "ImageRegion":
         return self  # 本移植版坐标已通过 ScreenTransform 归一化

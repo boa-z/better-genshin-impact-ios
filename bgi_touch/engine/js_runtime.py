@@ -33,6 +33,9 @@ from .recognition import (
     Point2f,
     RecognitionObject,
     Region,
+    SearchAnchorMode,
+    SearchExpandRatio,
+    SearchOptions,
 )
 
 CASE_PROXY = """
@@ -535,6 +538,22 @@ class JsScriptRuntime:
         """)(_create_recognition_object, _template_match, _ocr, _ocr_match, _ocr_this)
         g["RecognitionObject"] = recognition_object_type
 
+        def _create_search_options(anchor="Auto", box=None, expand=None, percent=None):
+            return wrap(SearchOptions(anchor, box, expand, percent))
+
+        g["SearchOptions"] = pm.eval(
+            "factory => function SearchOptions(anchor, box, expand, percent) { "
+            "return factory(anchor, box, expand, percent); }"
+        )(_create_search_options)
+        g["SearchExpandRatio"] = pm.eval(
+            "factory => function SearchExpandRatio(...values) { "
+            "return factory(...values); }"
+        )(lambda *values: wrap(SearchExpandRatio(*values)))
+        g["SearchAnchorMode"] = pm.eval(
+            "Object.freeze({Auto:'Auto', TopLeft:'TopLeft', TopRight:'TopRight', "
+            "BottomLeft:'BottomLeft', BottomRight:'BottomRight', Center:'Center'})"
+        )
+
         g["Point2f"] = pm.eval(
             "factory => function Point2f(x = 0, y = 0) { return factory(x, y); }"
         )(lambda x=0, y=0: wrap(Point2f(float(x), float(y))))
@@ -786,7 +805,11 @@ class JsScriptRuntime:
             "Y:{get:()=>this.y,set:v=>this.y=Number(v)},"
             "Width:{get:()=>this.width,set:v=>this.width=Number(v)},"
             "Height:{get:()=>this.height,set:v=>this.height=Number(v)}}); }"
-            "return { OpenCvSharp: { Rect, Vec3b }, Rect, Vec3b };"
+            "function Size(width = 0, height = 0) {"
+            "this.width=Number(width);this.height=Number(height);"
+            "Object.defineProperties(this,{Width:{get:()=>this.width,set:v=>this.width=Number(v)},"
+            "Height:{get:()=>this.height,set:v=>this.height=Number(v)}}); }"
+            "return { OpenCvSharp: { Rect, Size, Vec3b }, Rect, Size, Vec3b };"
             "})()"
         )
 
