@@ -95,6 +95,7 @@ class TaskDispatcher:
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment", "OneDragon", "ScriptGroup", "MusicPlayer", "Shell",
         "OneKeyExpedition",
+        "AutoTrack",
     })
 
     def __init__(
@@ -187,6 +188,8 @@ class TaskDispatcher:
             return self.run_quick_claim_reward_task(cfg, ct)
         if name in ("OneKeyExpedition", "Expedition"):
             return self.run_one_key_expedition_task(cfg, ct)
+        if name in ("AutoTrack", "QuestTracking"):
+            return self.run_auto_track_task(cfg, ct)
         if name in ("QuickBuy", "BuyMax"):
             return self.run_quick_buy_task(cfg, ct)
         if name in ("UseRedemptionCode", "UseRedeemCode", "AutoRedeemCode"):
@@ -734,6 +737,20 @@ class TaskDispatcher:
             redispatch_retries=int(_value(param, "redispatchRetries", 3) or 3),
             timeout_s=float(_value(param, "timeoutSeconds", 12) or 12),
             close_page=_boolean(_value(param, "closePage", True), True),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_auto_track_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .auto_track import AutoTrackTask
+
+        return AutoTrackTask(
+            self.ctx,
+            timeout_s=float(_value(param, "timeoutSeconds", 120) or 120),
+            far_distance_m=int(_value(param, "farDistance", 150) or 150),
+            arrival_distance_m=int(_value(param, "arrivalDistance", 3) or 3),
+            teleport_when_far=_boolean(
+                _value(param, "teleportWhenFar", True), True,
+            ),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

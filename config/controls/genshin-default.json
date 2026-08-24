@@ -70,6 +70,14 @@
       "nx": 0.065,
       "ny": 0.06
     },
+    "questMenu": {
+      "nx": 0.06441726253531073,
+      "ny": 0.24492890881626583
+    },
+    "questNavigation": {
+      "nx": 0.09708658854166669,
+      "ny": 0.2976794122766565
+    },
     "partyRow1": {
       "nx": 0.96,
       "ny": 0.212
@@ -151,6 +159,14 @@
     "ESCAPE": {
       "type": "button",
       "button": "paimonMenu"
+    },
+    "J": {
+      "type": "button",
+      "button": "questMenu"
+    },
+    "V": {
+      "type": "button",
+      "button": "questNavigation"
     },
     "1": {
       "type": "party",

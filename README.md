@@ -82,6 +82,7 @@ bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑�
 bgi-touch task MusicPlayer --config '{"file":"score.json","customBpm":120}' # 自由演奏曲谱
 bgi-touch task QuickSereniteaPot       # 从背包部署并进入/离开尘歌壶
 bgi-touch task OneKeyExpedition         # 在探索派遣页全部领取并再次派遣
+bgi-touch task AutoTrack                # 自动跟随当前蓝色任务追踪标记
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
 bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
@@ -131,6 +132,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | QuickTeleport 快速传送（候选点识别/列表选择/传送确认） | ✅ 离线链路，待真机地图面板复验 |
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
 | pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路；已接入锄地日上限与统计，待真机路线实测 |
+| AutoTrack 当前任务追踪（距离 OCR / 蓝色标记 / 远距传送） | ⚠️ 离线全链路，待已有任务真机验证 |
 | 实时触发器（AutoPick / AutoSkip 选项、派遣、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |

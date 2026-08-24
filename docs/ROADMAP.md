@@ -75,6 +75,8 @@
 3. **真机路线回归**
    - 优先验证短路线和包含 `teleport`、`target`、`combat_script`、`nahida_collect`、
      `mining` 的路线；确认完成后执行 `bgi-touch close-game` 挂起原神。
+   - AutoTrack 已接入任务距离 OCR、蓝色目标标记转向、到点停止和远距离任务页最近锚点；
+     可先用当前账号已有任务验证，不要求地图传送点完整解锁。
    - iPhone 13 Pro Max 已验证渊下宫 → 层岩巨渊 OCR 区域切换、层岩大地图定位、
      `moveMapTo`、传送确认/加载完成和落点小地图定位；其余独立地图仍需逐图回归。
 

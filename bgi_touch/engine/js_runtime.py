@@ -914,6 +914,8 @@ class JsScriptRuntime:
                 return task_dispatcher.run_quick_claim_reward_task(param, ct)
             def runOneKeyExpeditionTask(self, param=None, ct=None):
                 return task_dispatcher.run_one_key_expedition_task(param, ct)
+            def runAutoTrackTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_track_task(param, ct)
             def runQuickBuyTask(self, param=None, ct=None):
                 return task_dispatcher.run_quick_buy_task(param, ct)
             def runUseRedemptionCodeTask(self, param=None, ct=None):

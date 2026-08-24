@@ -315,6 +315,7 @@ bgi-touch task MusicPlayer --config \
 bgi-touch task QuickSereniteaPot
 bgi-touch task QuickClaimReward --config '{"scrollDown":true,"maxScrolls":3}'
 bgi-touch task OneKeyExpedition
+bgi-touch task AutoTrack --config '{"timeoutSeconds":120,"teleportWhenFar":true}'
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 # 安全预览：选择 1~4 星后停在复查页，不会执行最终分解
 bgi-touch task AutoArtifactSalvage --config '{"star":4}'
@@ -388,6 +389,10 @@ Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模�
 `scrollDown` 后会把原版滚轮下滑语义转换为奖励列表内的触控上滑。
 `OneKeyExpedition` 应在已有派遣完成的探索派遣页运行：识别“全部领取”，等待奖励弹窗
 结束后识别“再次派遣”，成功后按 `ESCAPE` 退出；没有完成项时保持当前页面不变。
+`AutoTrack` 从主界面读取小地图下方的任务距离，按 `V` 显示蓝色追踪标记并持续修正
+视角与前进方向；距离超过 `farDistance`（默认 150m）时会尝试从任务页打开目标地图，
+选择中心附近已解锁的传送点。测试小号未解锁该锚点时会退出地图并回退到直接追踪。
+`J/V` 同时映射到 DeviceHub profile 与 `genshin-default.json` 的触控回退坐标。
 `UseRedemptionCode` 会从主界面打开设置和账户页，使用 DeviceHub 文本输入逐个提交
 `codes`；任务结束会返回主界面。兑换结果保存在任务返回对象中并写入日志。
 
