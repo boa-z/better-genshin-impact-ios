@@ -288,10 +288,11 @@ class InputSimulator:
         others = [s for s in (1, 2, 3, 4) if s != from_slot]
         if slot not in others:
             return
-        if self._profile_press(str(slot)):
-            self._active_slot = slot
-            self._emit("party_switch", from_slot=from_slot, to_slot=slot)
-            return
+        # The mobile party HUD only shows the three *non-active* characters.
+        # A fixed Digit1..4 profile coordinate therefore points at a different
+        # character after every switch.  Always resolve the visible row from
+        # the active slot and use a direct tap; _direct_input() safely rebuilds
+        # a held native game session afterwards when necessary.
         row = others.index(slot) + 1
         x, y = self._button_pos(f"partyRow{row}")
         self._direct_input(lambda: self.device.tap(x, y, **self._wh))

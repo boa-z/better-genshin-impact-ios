@@ -23,6 +23,7 @@ import numpy as np
 
 from ..vision.game_ui import is_main_ui
 from ..vision.ocr import get_ocr
+from ..engine.recognition import RecognitionObject
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PARTY_PATH = ROOT / "config" / "party.json"
@@ -205,6 +206,8 @@ class SkillCdTrigger:
         self._raw_in_context = False
         self._was_visible_context = False
         self._leave_at: float | None = None
+        self._team_sync_needed = True
+        self._last_team_sync_at = float("-inf")
         self._active_slot = int(getattr(ctx.input, "_active_slot", 1))
         self.trigger_on_skill_use = bool(trigger_on_skill_use)
         self.hide_when_zero = bool(hide_when_zero)
@@ -231,9 +234,20 @@ class SkillCdTrigger:
         now = self._clock()
         frame = region.bgr
         raw_in_context = bool(self._main_ui_detector(self.ctx, frame))
+        team_sync_attempted = (
+            raw_in_context
+            and self._team_sync_needed
+            and now - self._last_team_sync_at >= 0.8
+        )
+        observed_team = None
+        if team_sync_attempted:
+            observed_team = self._observe_visible_party(region)
         with self._lock:
+            was_raw_in_context = self._raw_in_context
             self._raw_in_context = raw_in_context
             if raw_in_context:
+                if not was_raw_in_context:
+                    self._team_sync_needed = True
                 self._leave_at = None
                 visible_context = True
             else:
@@ -245,6 +259,12 @@ class SkillCdTrigger:
                 )
             self._was_visible_context = visible_context
             self._active_slot = int(getattr(self.ctx.input, "_active_slot", self._active_slot))
+            if team_sync_attempted:
+                self._last_team_sync_at = now
+            if observed_team:
+                for slot, name in observed_team.items():
+                    self._team[slot - 1] = name
+                self._team_sync_needed = False
             self._last_frame = frame.copy()
             captured_at = float(getattr(self.ctx, "_last_frame_at", 0.0) or 0.0)
             self._last_frame_at = captured_at if 0 < captured_at <= now else now
@@ -272,9 +292,45 @@ class SkillCdTrigger:
                 )
                 if 1 <= to_slot <= 4:
                     self._active_slot = to_slot
+                    self._team_sync_needed = True
             else:
                 return
             self._publish("gameplay", self._full_team(), now)
+
+    def _observe_visible_party(self, region: Any) -> dict[int, str]:
+        """Map the three visible mobile party labels onto physical slots.
+
+        OCR runs on the TriggerLoop frame passed to us.  It never captures a
+        frame itself, and only runs on scene entry or after a switch.
+        """
+        find_multi = getattr(region, "find_multi", None)
+        if not callable(find_multi):
+            return {}
+        try:
+            hits = find_multi(RecognitionObject.ocr(1560, 120, 360, 480), limit=8)
+        except Exception as error:
+            self.log(f"[SkillCD] 队伍 OCR 失败（保留现有配置）：{error}")
+            return {}
+        others = [slot for slot in (1, 2, 3, 4) if slot != self._active_slot]
+        defaults = (0.212, 0.348, 0.457)
+        row_y = [
+            float(self.ctx.layout.buttons.get(
+                f"partyRow{row}", (0.96, defaults[row - 1])
+            )[1]) * 1080
+            for row in (1, 2, 3)
+        ]
+        cooldowns = _avatar_cooldowns()
+        observed: dict[int, str] = {}
+        for hit in hits:
+            text = "".join(str(getattr(hit, "text", "") or "").split())
+            name = next((candidate for candidate in cooldowns if candidate == text), None)
+            if name is None:
+                continue
+            y = float(getattr(hit, "y", -1000.0))
+            row = min(range(3), key=lambda index: abs(y - row_y[index]))
+            if abs(y - row_y[row]) <= 90:
+                observed[others[row]] = name
+        return observed
 
     def _record_slot(self, slot: int, now: float, *, allow_fallback: bool) -> None:
         if not 1 <= slot <= 4:

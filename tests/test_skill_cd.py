@@ -199,6 +199,56 @@ def test_input_simulator_publishes_completed_skill_and_party_edges():
     assert events[1]["to_slot"] == 2
 
 
+def test_party_switch_ignores_static_digit_profile_and_taps_dynamic_mobile_row():
+    from bgi_touch.input.layout import ControlLayout, DeviceHubProfile
+    from bgi_touch.input.simulator import InputSimulator
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    profile = DeviceHubProfile.from_dict({
+        "name": "fixed-profile",
+        "mappings": [
+            {"type": "Press", "bind": ["Digit2"], "position": {"x": 0.9, "y": 0.32}},
+        ],
+    })
+    layout = ControlLayout.load(
+        Path(__file__).parents[1] / "config" / "controls" / "genshin-default.json",
+        devicehub_profile=profile,
+    )
+    device = SimpleNamespace(
+        tap=Mock(), game_session_id=None,
+        start_game_session=Mock(side_effect=AssertionError("party must not use fixed profile")),
+    )
+    simulator = InputSimulator(device, layout, ScreenTransform(1920, 1080))
+
+    simulator.switch_party_slot(2)
+
+    x, y = simulator._button_pos("partyRow1")
+    device.tap.assert_called_once_with(x, y, image_width=1920, image_height=1080)
+    assert simulator._active_slot == 2
+
+
+def test_skill_cd_syncs_visible_mobile_party_names_from_existing_frame():
+    clock = Clock()
+    ctx, _, trigger = make_trigger(clock)
+    hits = [
+        SimpleNamespace(text="刻晴", y=215),
+        SimpleNamespace(text="绮良良", y=330),
+        SimpleNamespace(text="闲云", y=442),
+        SimpleNamespace(text="25ms", y=105),
+    ]
+    region = SimpleNamespace(
+        bgr=np.zeros((1080, 1920, 3), dtype=np.uint8),
+        find_multi=Mock(return_value=hits),
+    )
+
+    trigger.on_frame(region)
+
+    assert [item["name"] for item in trigger.state.snapshot()["team"]] == [
+        "钟离", "刻晴", "绮良良", "闲云",
+    ]
+    region.find_multi.assert_called_once()
+
+
 def test_skill_cd_timer_maps_bettergi_configuration():
     from bgi_touch.tasks.dispatcher import TaskDispatcher
 
