@@ -796,6 +796,33 @@ class JsScriptRuntime:
             proxy=False,
         )
 
+        # BetterGI's global one-key fight hotkey is represented as a host
+        # object so community scripts can bind it to KeyMouseHook events.
+        from ..combat.one_key_fight import HOLD_ON_MODE, OneKeyFightTask
+        one_key_mode = str(
+            self.settings.get("combatMacroHotkeyMode", HOLD_ON_MODE) or HOLD_ON_MODE
+        )
+        one_key_path = self.settings.get("avatarMacroPath")
+        if one_key_path:
+            candidate = Path(str(one_key_path)).expanduser()
+            if not candidate.is_absolute():
+                candidate = (self.script_dir / candidate).resolve()
+            one_key_path = candidate
+        enabled_value = self.settings.get("combatMacroEnabled", True)
+        one_key_enabled = enabled_value if isinstance(enabled_value, bool) else (
+            str(enabled_value).strip().casefold() not in {"0", "false", "no", "off"}
+        )
+        self._one_key_fight = OneKeyFightTask(
+            ctx,
+            party_slots=self.party_slots,
+            macro_path=one_key_path,
+            mode=one_key_mode,
+            priority=int(self.settings.get("combatMacroPriority", 1) or 1),
+            enabled=one_key_enabled,
+            log=log,
+        )
+        expose("oneKeyFight", wrap(self._one_key_fight), proxy=False)
+
         # keyMouseScript / pathingScript
         player = MacroPlayer(ctx.input, sleep=ctx.sleep, log=log)
 
@@ -1252,6 +1279,9 @@ class JsScriptRuntime:
             self.log("[runtime] 脚本已取消")
             return None
         finally:
+            one_key_fight = getattr(self, "_one_key_fight", None)
+            if one_key_fight is not None:
+                one_key_fight.stop()
             key_mouse_hooks = getattr(self, "_key_mouse_hooks", None)
             if key_mouse_hooks is not None:
                 key_mouse_hooks.close_all()

@@ -22,7 +22,8 @@ from typing import Callable, Optional
 KNOWN_ACTIONS = {
     "e", "skill", "q", "burst", "attack", "charge", "dash", "jump",
     "w", "a", "s", "d", "walk", "wait", "aim", "fly",
-    "keydown", "keyup", "keypress", "click", "moveby", "scroll", "ready", "check",
+    "keydown", "keyup", "keypress", "click", "mousedown", "mouseup",
+    "moveby", "scroll", "ready", "check",
 }
 
 _CMD_RE = re.compile(r"^([\w一-鿿]+)\s*(?:\(([^)]*)\))?$")
@@ -32,6 +33,7 @@ _CMD_RE = re.compile(r"^([\w一-鿿]+)\s*(?:\(([^)]*)\))?$")
 class CombatCommand:
     action: str
     params: list[str] = field(default_factory=list)
+    activating_rounds: tuple[int, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -178,6 +180,18 @@ class CombatExecutor:
             if (p[0].lower() if p else "left") == "left":
                 self.input.attack()
             # click(middle) 在 PC 是重置视角，触控端无对应操作
+        elif a == "mousedown":
+            button = p[0].casefold() if p else "left"
+            if button == "left":
+                self.input.attack_down()
+            elif button == "right":
+                self.input.button_down("aim")
+        elif a == "mouseup":
+            button = p[0].casefold() if p else "left"
+            if button == "left":
+                self.input.attack_up()
+            elif button == "right":
+                self.input.button_up("aim")
         elif a == "moveby":
             self.input.move_camera_by(self._sec(p, 0, 0), self._sec(p, 1, 0))
         elif a == "aim":
