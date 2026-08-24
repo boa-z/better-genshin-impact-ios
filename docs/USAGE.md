@@ -390,6 +390,9 @@ Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模�
 `MusicPlayer` 对齐 BetterGI 自由演奏菜单的原琴 `yuanqin`、MIDI JSON `midi` 和网络键谱
 `keyboard` 格式。`files` 可传多个文件，目录会递归扫描 JSON；支持 `playbackMode`、
 `speed`、`useCustomBpm/customBpm`、`transpose`、`startPositionSeconds` 和 `loopCount`。
+`searchText`、`formatFilter`、`instrumentFilter` 会先冻结当前筛选后的播放队列；
+`startTrack`（曲名、文件名或完整路径）或 `startIndex` 可指定该队列中的起始曲目，后续切歌
+与顺序续播不会混入筛选外曲目。
 默认要求玩家已打开对应乐器演奏界面；设置 `autoSwitchInstrument=true` 后，会扫描小道具
 背包详情名称、装备曲谱声明的乐器并自动打开演奏界面。
 

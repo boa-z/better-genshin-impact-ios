@@ -23,6 +23,11 @@ STANDARD_NOTES = dict(zip(SUPPORTED_KEYS, (
     48, 50, 52, 53, 55, 57, 59,
 )))
 PERCUSSION = {"绮筵之鼓", "聚聚鼓"}
+FORMAT_NAMES = {
+    "yuanqin": "原琴 JSON",
+    "midi": "MIDI JSON",
+    "keyboard": "网络键谱",
+}
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,46 @@ class MusicScore:
     events: tuple[MusicEvent, ...]
     duration_ms: float
     author: str = ""
+
+    @property
+    def format_name(self) -> str:
+        return FORMAT_NAMES.get(self.format.casefold(), self.format)
+
+    @property
+    def instrument_tags(self) -> tuple[str, ...]:
+        return tuple(
+            value.strip() for value in self.instrument.split(",") if value.strip()
+        )
+
+
+def filter_music_scores(
+    scores: Iterable[MusicScore],
+    *,
+    search_text: str = "",
+    format_filter: str = "",
+    instrument_filter: str = "",
+) -> list[MusicScore]:
+    """Freeze the playback queue from the same filters as BetterGI's music page."""
+    search = str(search_text or "").strip().casefold()
+    selected_format = str(format_filter or "").strip().casefold()
+    selected_instrument = str(instrument_filter or "").strip().casefold()
+    all_formats = {"", "全部格式", "all", "all formats"}
+    all_instruments = {"", "全部乐器", "all", "all instruments"}
+    output = []
+    for score in scores:
+        searchable = (score.name, score.author, str(score.path))
+        if search and not any(search in value.casefold() for value in searchable):
+            continue
+        if selected_format not in all_formats and selected_format not in {
+            score.format.casefold(), score.format_name.casefold(),
+        }:
+            continue
+        if selected_instrument not in all_instruments and selected_instrument not in {
+            value.casefold() for value in score.instrument_tags
+        }:
+            continue
+        output.append(score)
+    return output
 
 
 @dataclass(frozen=True)
@@ -465,6 +510,11 @@ class MusicPlayerTask:
         transpose: int = 0,
         auto_switch_instrument: bool = False,
         start_position_s: float = 0.0,
+        search_text: str = "",
+        format_filter: str = "",
+        instrument_filter: str = "",
+        start_index: int = 0,
+        start_track: str | Path | None = None,
         loop_count: int = 1,
         max_instrument_pages: int = 20,
         log: Callable[[str], None] = print,
@@ -486,6 +536,11 @@ class MusicPlayerTask:
         self.transpose = max(-48, min(48, int(transpose)))
         self.auto_switch_instrument = bool(auto_switch_instrument)
         self.start_position_ms = max(0.0, float(start_position_s) * 1000)
+        self.search_text = str(search_text or "")
+        self.format_filter = str(format_filter or "")
+        self.instrument_filter = str(instrument_filter or "")
+        self.start_index = max(0, int(start_index))
+        self.start_track = str(start_track or "").strip()
         self.loop_count = max(1, min(1000, int(loop_count)))
         self.switcher = MusicInstrumentSwitcher(
             ctx, max_pages=max_instrument_pages, log=log
@@ -512,7 +567,30 @@ class MusicPlayerTask:
         if not scores:
             detail = f"（{errors[0]}）" if errors else ""
             raise ValueError(f"未找到可播放的 JSON 曲谱{detail}")
-        return scores
+        filtered = filter_music_scores(
+            scores,
+            search_text=self.search_text,
+            format_filter=self.format_filter,
+            instrument_filter=self.instrument_filter,
+        )
+        if not filtered:
+            raise ValueError("当前搜索、格式和乐器筛选下没有可播放曲谱")
+        return filtered
+
+    def _queue_start_index(self, scores: Sequence[MusicScore]) -> int:
+        if self.start_track:
+            target = self.start_track.casefold()
+            for index, score in enumerate(scores):
+                candidates = (
+                    score.name,
+                    str(score.path),
+                    score.path.name,
+                    score.path.stem,
+                )
+                if any(target == value.casefold() for value in candidates):
+                    return index
+            raise ValueError(f"筛选后的播放队列中没有起始曲目：{self.start_track}")
+        return min(self.start_index, len(scores) - 1)
 
     def _hold(self, keys: set[str], duration_ms: float,
               cancelled: Callable[[], bool] | None) -> bool:
@@ -589,10 +667,13 @@ class MusicPlayerTask:
         scores = self._scores()
         completed = 0
         active_instrument = None
-        index = 0
-        target_tracks = self.loop_count if self.playback_mode == "SingleLoop" else (
-            len(scores) * self.loop_count
-        )
+        index = self._queue_start_index(scores)
+        if self.playback_mode == "SingleLoop":
+            target_tracks = self.loop_count
+        elif self.playback_mode == "Sequential":
+            target_tracks = len(scores) - index + len(scores) * (self.loop_count - 1)
+        else:
+            target_tracks = len(scores) * self.loop_count
         first_track = True
         try:
             while completed < target_tracks:

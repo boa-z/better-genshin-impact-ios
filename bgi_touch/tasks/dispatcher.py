@@ -312,6 +312,15 @@ class TaskDispatcher:
             transpose=int(_value(param, "transpose", 0) or 0),
             auto_switch_instrument=bool(_value(param, "autoSwitchInstrument", False)),
             start_position_s=float(_value(param, "startPositionSeconds", 0) or 0),
+            search_text=str(_value(param, "searchText", "") or ""),
+            format_filter=str(_value(
+                param, "formatFilter", _value(param, "selectedFormatFilter", "")
+            ) or ""),
+            instrument_filter=str(_value(
+                param, "instrumentFilter", _value(param, "selectedInstrumentFilter", "")
+            ) or ""),
+            start_index=int(_value(param, "startIndex", 0) or 0),
+            start_track=_value(param, "startTrack", _value(param, "selectedTrack", None)),
             loop_count=int(_value(param, "loopCount", 1) or 1),
             max_instrument_pages=int(_value(param, "maxInstrumentPages", 20) or 20),
             log=self.log,

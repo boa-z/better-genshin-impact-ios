@@ -180,6 +180,49 @@ def test_music_directory_scan_skips_non_score_json(tmp_path: Path):
     assert any("settings.json" in message for message in messages)
 
 
+def test_music_queue_filters_match_bettergi_visible_library(tmp_path: Path):
+    from bgi_touch.tasks.music_player import filter_music_scores, parse_music_score
+
+    yuan = parse_music_score(_score_file(
+        tmp_path, name="晨风", author="Alice", type="yuanqin", bpm=120,
+        notes="Q[4]", instrument="风物之诗琴,镜花之琴",
+    ))
+    midi = parse_music_score(_score_file(
+        tmp_path, name="鼓点", author="Bob", type="midi", bpm=120, ticks=480,
+        notes="DQ0|UQ480", instrument="聚聚鼓",
+    ))
+
+    assert filter_music_scores([yuan, midi], search_text="alice") == [yuan]
+    assert filter_music_scores([yuan, midi], format_filter="MIDI JSON") == [midi]
+    assert filter_music_scores([yuan, midi], format_filter="yuanqin") == [yuan]
+    assert filter_music_scores([yuan, midi], instrument_filter="镜花之琴") == [yuan]
+    assert filter_music_scores([yuan, midi], instrument_filter="全部乐器") == [yuan, midi]
+
+
+def test_music_sequential_queue_starts_at_selected_filtered_track():
+    from bgi_touch.tasks.music_player import MusicPlayerTask, MusicScore
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    ctx = SimpleNamespace(
+        device=SimpleNamespace(multi_touch=Mock()),
+        transform=ScreenTransform(1920, 1080), sleep=Mock(),
+        input=SimpleNamespace(release_all=Mock()),
+    )
+    scores = [
+        MusicScore(Path(f"{name}.json"), name, "风物之诗琴", 120, "yuanqin", (), 0)
+        for name in ("one", "two", "three")
+    ]
+    task = MusicPlayerTask(ctx, ["unused.json"], start_track="two")
+    task._scores = lambda: scores
+    played = []
+    task._play_score = lambda score, *_args: played.append(score.name) or True
+
+    result = task.run()
+
+    assert played == ["two", "three"]
+    assert result == {"status": "completed", "completed": 2}
+
+
 def test_music_instrument_switcher_scans_gadget_names_and_equips():
     from bgi_touch.tasks.music_player import MusicInstrumentSwitcher
 
@@ -215,6 +258,10 @@ def test_music_player_dispatcher_maps_latest_bettergi_options():
             "useCustomBpm": True,
             "customBpm": 88,
             "autoSwitchInstrument": True,
+            "searchText": "风",
+            "formatFilter": "原琴 JSON",
+            "instrumentFilter": "风物之诗琴",
+            "startTrack": "晨风",
             "transpose": -2,
             "loopCount": 3,
         })
@@ -224,4 +271,8 @@ def test_music_player_dispatcher_maps_latest_bettergi_options():
     assert task.call_args.kwargs["playback_mode"] == "Shuffle"
     assert task.call_args.kwargs["custom_bpm"] == 88
     assert task.call_args.kwargs["auto_switch_instrument"] is True
+    assert task.call_args.kwargs["search_text"] == "风"
+    assert task.call_args.kwargs["format_filter"] == "原琴 JSON"
+    assert task.call_args.kwargs["instrument_filter"] == "风物之诗琴"
+    assert task.call_args.kwargs["start_track"] == "晨风"
     assert task.call_args.kwargs["transpose"] == -2
