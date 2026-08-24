@@ -966,8 +966,11 @@ class JsScriptRuntime:
               function FightFinishDetectConfig() {
                 Object.assign(this, {
                   battleEndProgressBarColor: '', battleEndProgressBarColorTolerance: '',
-                  fastCheckEnabled: false, fastCheckParams: '', checkEndDelay: '',
-                  beforeDetectDelay: '', rotateFindEnemyEnabled: false
+                  fastCheckEnabled: false, fastCheckParams: '', checkAfterSwitchAvatar: false,
+                  checkEndDelay: '0.4;钟离,1.4;', beforeDetectDelay: '0.4',
+                  rotateFindEnemyEnabled: false, skipFightEndCheckWhenEnemyVisible: false,
+                  blockCheckBeforeBattleSeconds: 0, paimonEndCheckEnabled: true,
+                  paimonEndCheckDelay: 0.075
                 });
                 return caseInsensitive(this);
               }

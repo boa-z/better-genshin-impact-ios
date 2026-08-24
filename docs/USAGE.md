@@ -460,6 +460,14 @@ attack(2), jump, w(0.5)            // 无角色名 = 当前角色：普攻2秒�
 `dash(秒)`、`jump`、`w/a/s/d(秒)`、`walk(方向,秒)`、`wait(秒)`、`aim`、
 `keydown/keyup/keypress(键)`、`moveby(dx,dy)`（转视角）、`ready`、`check`。
 
+`AutoFight` 的 `finishDetectConfig` 兼容 BetterGI 最新的 `fastCheckEnabled`、
+`fastCheckParams`、`checkAfterSwitchAvatar`、`checkEndDelay`、`beforeDetectDelay`、
+`skipFightEndCheckWhenEnemyVisible`、`blockCheckBeforeBattleSeconds`、
+`paimonEndCheckEnabled` 和 `paimonEndCheckDelay`。结束复核会按 DeviceHub profile 的
+`KeyL` 尝试打开队伍页：战斗中按钮不生效且派蒙 HUD 保留；可打开时再校验队伍页顶部
+黄条与白块，随后用 `KeyX` 关闭。探测不确定时只清理界面并继续战斗，不会仅因大招运镜
+隐藏派蒙而判定结束。
+
 ### 5.5 执行 BetterGI ScriptGroup 配置组
 
 可直接读取原项目 `User/ScriptGroup/*.json`，依次调度 `Javascript`、`KeyMouse`、

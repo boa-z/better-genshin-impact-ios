@@ -89,7 +89,9 @@ HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest �
 
 ## P1 — 战斗增强
 
-- `check`（战斗结束检测）：原版用经验条/YOLO；当前使用敌血条启发式。
+- `check` 与 AutoFight 战斗结束检测已支持开战阻断、敌血条可见时有限跳过、按时间或
+  角色快速检查、切人后检查，以及通过 DeviceHub `L/X` 打开/关闭队伍页并校验黄条白块；
+  仍需真机校准 iOS 队伍页颜色签名，经验值/掉落 YOLO 尚未用于战后拾取判断。
 - `ready`（技能就绪检测）：技能图标区域亮度/颜色判断。
 - 队伍识别：右侧角色名 OCR → 自动生成 party_slots，替代手工 `config/party.json`。
 

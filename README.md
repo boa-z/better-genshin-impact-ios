@@ -132,7 +132,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 实时触发器（AutoPick / AutoSkip 选项、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
-| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ 已实现；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
+| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ AutoFight 已接入队伍页确认与快速检查；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ AutoFishing 已含找鱼、选饵、HutaoFisher 抛竿、提竿与拉条闭环；需真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | 自由演奏 MusicPlayer | ⚠️ 原琴/MIDI JSON/网络键谱、播放模式、自定义 BPM、自动换乐器已迁移；21 键布局待真机校准 |

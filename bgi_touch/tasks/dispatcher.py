@@ -49,6 +49,18 @@ def _requested(token: Any) -> bool:
     return False
 
 
+def _boolean(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def _tuple4(value: Any, default: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
     if isinstance(value, (list, tuple)) and len(value) == 4:
         try:
@@ -199,6 +211,7 @@ class TaskDispatcher:
         )
 
     def run_auto_fight_task(self, param: Any = None, ct: Any = None) -> bool:
+        from ..combat.finish import FightFinishConfig
         from .auto_fight import AutoFightTask
         strategy = self._resolve_strategy(_value(param, "combatStrategyPath", None))
         timeout = _value(param, "timeout", None)
@@ -210,6 +223,12 @@ class TaskDispatcher:
             timeout_s=timeout_s,
             party_slots=self.party_slots,
             log=self.log,
+            fight_finish_detect_enabled=_boolean(
+                _value(param, "fightFinishDetectEnabled", True), True,
+            ),
+            finish_detect_config=FightFinishConfig.from_mapping(
+                _value(param, "finishDetectConfig", {}) or {}
+            ),
         ).run(cancelled=self._callback(ct))
 
     def run_one_dragon_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
