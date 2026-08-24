@@ -873,6 +873,11 @@ class TaskDispatcher:
                     _value(config, "textReadyColor", "#5DCC17FF") or "#5DCC17FF"
                 ),
             )
+        elif name in ("GameLoading", "自动开门"):
+            self.ctx.enable_trigger(
+                "GameLoading",
+                timeout_s=float(_value(config, "timeoutSeconds", 300) or 300),
+            )
         else:
             self.ctx.enable_trigger(name)
 

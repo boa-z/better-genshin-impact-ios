@@ -215,7 +215,7 @@ class GameContext:
     def capture_region(self) -> ImageRegion:
         return ImageRegion(self, self.capture_bgr())
 
-    def launch_game(self) -> None:
+    def launch_game(self, *, auto_enter: bool = True) -> None:
         self.device.launch_app(GENSHIN_BUNDLE_ID, wait=True)
         self.sleep(3000)
         # 前台切换后 HID 注入通道可能失效（实测门界面点按只在重连后生效），
@@ -226,6 +226,8 @@ class GameContext:
         except Exception as e:
             print(f"[context] 设备重连失败（忽略）：{e}")
         self.refresh_orientation()
+        if auto_enter:
+            self.enable_trigger("GameLoading")
 
     _trigger_loop = None
 
@@ -253,9 +255,12 @@ class GameContext:
         elif name in ("SkillCd", "技能冷却"):
             from ..triggers.skill_cd import SkillCdTrigger
             self.triggers.add(SkillCdTrigger(self, log=self.triggers.log, **kwargs))
+        elif name in ("GameLoading", "自动开门"):
+            from ..triggers.game_loading import GameLoadingTrigger
+            self.triggers.add(GameLoadingTrigger(self, log=self.triggers.log, **kwargs))
         else:
             raise ValueError(
-                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask/SkillCd）"
+                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask/SkillCd/GameLoading）"
             )
         self.triggers.start()
 
