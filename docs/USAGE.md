@@ -274,6 +274,10 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 关闭按钮连续两帧稳定命中；主界面、大地图、引导札记、聊天记录和且试身手不会被关闭。
 `BvPage/BvLocator` 的 OCR、模板定位、等待重试、点击和“点击直到消失”链式 API 也已
 接入同一截图上下文；`OpenCvSharp.OpenCvSharp.Rect` 会映射为 1080p 参考坐标 ROI。
+新版 `BvPage.Flow()` / `BvFlow` / `BvFlowAction` 也已兼容：支持
+`WaitUntil*`、`Until*`、动作重试、默认超时、拖动和上一步识别结果的隐式点击。
+一个流程轮询中的多个目标共享同一帧截图，避免脚本在条件判断时额外争抢截图器；
+右键按原神触控映射为冲刺，中键映射为元素视野。
 `strategyFile` 以项目的 `scripts/combat` 为受限根目录；Dispatcher 会依次解析 JS
 脚本包内路径和该公共策略目录，因此浏览器返回的相对策略名可直接传给任务参数。
 `pathingScript.runFile()` 仍读取当前 JS 包内路线；`runFileFromUser()` 以及上游新增的
