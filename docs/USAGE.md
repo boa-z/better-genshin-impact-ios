@@ -485,6 +485,13 @@ bgi-touch group '/path/to/User/ScriptGroup/每日.json' \
 统一 SoloTask 调度层调用。Shell 项目仍受安全配置限制，配置组必须显式
 `Config.EnableShellConfig=true`，全局 `config/shell.json` 也必须允许执行。
 
+原配置组 `Config.PathingConfig` 中的 `SkipDuring`、`TaskCycleConfig` 和
+`TaskCompletionSkipRuleConfig` 会一并生效。成功记录按 BetterGI 字段保存在
+`log/ExecutionRecords/YYYYMMDD.json`，支持 `GroupPhysicalPathSkipPolicy`、
+`PhysicalPathSkipPolicy`、`SameNameSkipPolicy`、凌晨分界、服务器时间分界和
+`LastRunGapSeconds/ReferencePoint`。测试或多实例运行时可用 `--records-dir` 隔离目录；
+SoloTask 参数对应 `executionRecordDirectory`。
+
 ---
 
 ## 6. WebUI 控制台

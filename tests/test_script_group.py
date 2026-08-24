@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -209,9 +210,127 @@ def test_script_group_cli_dry_run_does_not_connect_device(tmp_path: Path, capsys
     args = SimpleNamespace(
         files=[str(source)], script_root=None, macro_root=None, pathing_root=None,
         progress_dir=str(tmp_path / "progress"), stop_on_error=False,
-        dry_run=True, resume=None,
+        records_dir=str(tmp_path / "records"), dry_run=True, resume=None,
     )
     with patch("bgi_touch.cli._context") as context:
         assert cmd_group(args) == 0
     context.assert_not_called()
     assert json.loads(capsys.readouterr().out)["count"] == 1
+
+
+def test_execution_records_apply_bettergi_policy_boundary_and_gap(tmp_path: Path):
+    from bgi_touch.tasks.execution_records import (
+        CompletionSkipRule,
+        ExecutionRecord,
+        ExecutionRecordStore,
+    )
+
+    zone = timezone(timedelta(hours=8))
+    started = datetime(2026, 8, 24, 5, 0, tzinfo=zone)
+    store = ExecutionRecordStore(tmp_path / "records")
+    record = ExecutionRecord.start(
+        "每日配置", "路线.json", "精英", "Pathing", now=started,
+    )
+    store.save(record)
+    store.finish(record, True, now=started + timedelta(minutes=10))
+
+    daily = CompletionSkipRule(enabled=True, boundary_hour=4)
+    assert store.should_skip(
+        "每日配置", "路线.json", "精英", "Pathing", daily,
+        now=started + timedelta(hours=2),
+    )[0]
+    assert not store.should_skip(
+        "其他配置", "路线.json", "精英", "Pathing", daily,
+        now=started + timedelta(hours=2),
+    )[0]
+    assert not store.should_skip(
+        "每日配置", "路线.json", "精英", "Pathing", daily,
+        now=started + timedelta(days=1),
+    )[0]
+
+    gap = CompletionSkipRule(
+        enabled=True,
+        policy="SameNameSkipPolicy",
+        boundary_hour=-1,
+        last_run_gap_s=3600,
+        reference_point="EndTime",
+    )
+    assert store.should_skip(
+        "任意组", "路线.json", "任意目录", "Pathing", gap,
+        now=started + timedelta(minutes=40),
+    )[0]
+    assert not store.should_skip(
+        "任意组", "路线.json", "任意目录", "Pathing", gap,
+        now=started + timedelta(hours=2),
+    )[0]
+
+
+def test_script_group_schedule_rule_supports_skip_hour_and_cycle():
+    from bgi_touch.tasks.execution_records import TaskScheduleRule
+
+    zone = timezone(timedelta(hours=8))
+    skip_hour = TaskScheduleRule.from_group_config({
+        "PathingConfig": {"Enabled": True, "SkipDuring": "5"},
+    })
+    assert skip_hour.skip_reason(now=datetime(2026, 8, 24, 5, tzinfo=zone))
+    assert skip_hour.skip_reason(now=datetime(2026, 8, 24, 6, tzinfo=zone)) is None
+
+    cycle = TaskScheduleRule.from_group_config({
+        "PathingConfig": {
+            "Enabled": True,
+            "TaskCycleConfig": {
+                "Enable": True,
+                "BoundaryTime": 4,
+                "Cycle": 3,
+                "Index": 2,
+            },
+        },
+    })
+    # 1970-01-02 is day 1: (1 % 3) + 1 == 2.
+    assert cycle.skip_reason(now=datetime(1970, 1, 2, 5, tzinfo=zone)) is None
+    assert cycle.skip_reason(now=datetime(1970, 1, 3, 5, tzinfo=zone))
+
+
+def test_script_group_skips_successful_project_in_same_completion_window(tmp_path: Path):
+    from bgi_touch.tasks.execution_records import ExecutionRecordStore
+    from bgi_touch.tasks.script_group import ScriptGroupRunner
+    from bgi_touch.tasks.task_progress import TaskProgressStore
+
+    source = _write_group(
+        tmp_path / "daily.json",
+        [{"Name": "A", "Type": "Shell", "FolderName": "folder"}],
+        Config={
+            "PathingConfig": {
+                "TaskCompletionSkipRuleConfig": {
+                    "Enable": True,
+                    "SkipPolicy": "GroupPhysicalPathSkipPolicy",
+                    "BoundaryTime": 4,
+                },
+            },
+        },
+    )
+    records = ExecutionRecordStore(tmp_path / "records")
+    calls = []
+    first = ScriptGroupRunner.load(
+        _ctx(), [source],
+        progress_store=TaskProgressStore(tmp_path / "progress1"),
+        execution_store=records,
+        log=lambda _message: None,
+    )
+    first._execute_project = lambda _group, project: calls.append(project.name)
+    assert first.run()["completed"] == 1
+
+    second = ScriptGroupRunner.load(
+        _ctx(), [source],
+        progress_store=TaskProgressStore(tmp_path / "progress2"),
+        execution_store=records,
+        log=lambda _message: None,
+    )
+    second._execute_project = lambda _group, project: calls.append(project.name)
+    result = second.run()
+
+    assert calls == ["A"]
+    assert result["completed"] == 0
+    assert result["skipped"] == 1
+    raw = json.loads(next((tmp_path / "records").glob("*.json")).read_text())
+    assert raw["execution_records"][0]["is_successful"] is True

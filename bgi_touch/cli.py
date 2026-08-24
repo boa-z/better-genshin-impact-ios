@@ -222,6 +222,7 @@ def cmd_pathing(args) -> int:
 
 
 def cmd_group(args) -> int:
+    from .tasks.execution_records import ExecutionRecordStore
     from .tasks.script_group import ScriptGroupRoots, ScriptGroupRunner
     from .tasks.task_progress import TaskProgressStore
 
@@ -236,6 +237,7 @@ def cmd_group(args) -> int:
         roots=roots,
         party_slots=_load_party(),
         progress_store=TaskProgressStore(args.progress_dir),
+        execution_store=ExecutionRecordStore(args.records_dir),
         continue_on_error=not args.stop_on_error,
     )
     if args.dry_run:
@@ -352,6 +354,7 @@ def main() -> int:
     p.add_argument("--macro-root", help="KeyMouse 项目根目录（默认 scripts/keymouse）")
     p.add_argument("--pathing-root", help="Pathing 项目根目录（默认 scripts/pathing）")
     p.add_argument("--progress-dir", help="TaskProgress 目录（默认 log/task_progress）")
+    p.add_argument("--records-dir", help="完成记录目录（默认 log/ExecutionRecords）")
     p.add_argument("--resume", help="进度 JSON 路径或 14 位进度名称")
     p.add_argument("--stop-on-error", action="store_true", help="项目失败时停止配置组")
     p.add_argument("--dry-run", action="store_true", help="仅解析并输出项目顺序")

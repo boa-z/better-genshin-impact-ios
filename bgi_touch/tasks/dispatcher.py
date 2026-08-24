@@ -232,6 +232,7 @@ class TaskDispatcher:
         ).run(cancelled=self._callback(ct))
 
     def run_script_group_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:
+        from .execution_records import ExecutionRecordStore
         from .script_group import ScriptGroupRoots, ScriptGroupRunner
         from .task_progress import TaskProgressStore
 
@@ -254,6 +255,9 @@ class TaskDispatcher:
             roots=roots,
             party_slots=self.party_slots,
             progress_store=store,
+            execution_store=ExecutionRecordStore(
+                _value(param, "executionRecordDirectory", _value(param, "recordsDirectory", None))
+            ),
             continue_on_error=bool(_value(param, "continueOnError", True)),
             cancelled=self._callback(ct),
             log=self.log,

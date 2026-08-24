@@ -31,7 +31,8 @@
 - ShellTask 的 macOS/Linux 跨平台命令、超时、取消、输出和不等待语义；任意主机命令
   默认由项目安全配置禁用。
 - ScriptGroup 配置组兼容原版 Javascript、KeyMouse、Pathing、Shell 项目，支持禁用状态、
-  RunNum、失败继续/停止，以及原子 TaskProgress；中断后从未完成或失败项目恢复。
+  RunNum、禁止时段、多日周期、三种成功记录跳过策略、失败继续/停止，以及原子
+  TaskProgress；中断后从未完成或失败项目恢复。
 - 自由演奏 MusicPlayer 支持原琴 JSON、MIDI JSON、网络键谱、21 键和弦触控、移调、
   顺序/单曲循环/随机、自定义 BPM，以及按背包详情 OCR 自动装备乐器。
 - BetterGI `notification.send/error` 已接入 Gotify，兼容 JS 通知授权、事件订阅、优先级

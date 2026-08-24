@@ -8,6 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from .execution_records import (
+    CompletionSkipRule,
+    ExecutionRecord,
+    ExecutionRecordStore,
+    TaskScheduleRule,
+)
 from .task_progress import TaskProgress, TaskProgressStore, resume_flat_index
 
 
@@ -144,6 +150,7 @@ class ScriptGroupRunner:
         roots: ScriptGroupRoots | None = None,
         party_slots: dict[str, int] | None = None,
         progress_store: TaskProgressStore | None = None,
+        execution_store: ExecutionRecordStore | None = None,
         continue_on_error: bool = True,
         cancelled: Callable[[], bool] | None = None,
         log: Callable[[str], None] = print,
@@ -153,6 +160,7 @@ class ScriptGroupRunner:
         self.roots = roots or ScriptGroupRoots.build()
         self.party_slots = party_slots or {}
         self.progress_store = progress_store or TaskProgressStore(log=log)
+        self.execution_store = execution_store or ExecutionRecordStore()
         self.continue_on_error = bool(continue_on_error)
         self.cancelled = cancelled or (lambda: False)
         self.log = log
@@ -207,6 +215,25 @@ class ScriptGroupRunner:
             for group, project_index, project in enabled[start_index:]:
                 if self.cancelled():
                     raise ScriptGroupCancelled("配置组执行已取消")
+                schedule_reason = TaskScheduleRule.from_group_config(
+                    group.config
+                ).skip_reason()
+                if schedule_reason:
+                    skipped += 1
+                    self.log(f"[ScriptGroup] {project.name}: {schedule_reason}，跳过此任务")
+                    continue
+                skip_rule = CompletionSkipRule.from_group_config(group.config)
+                should_skip, skip_reason = self.execution_store.should_skip(
+                    group.name,
+                    project.name,
+                    project.folder_name,
+                    project.type,
+                    skip_rule,
+                )
+                if should_skip:
+                    skipped += 1
+                    self.log(f"[ScriptGroup] {project.name}: {skip_reason}，跳过此任务")
+                    continue
                 progress.begin(group.name, project_index, project.name, project.folder_name)
                 self.progress_store.save(progress)
                 success = True
@@ -218,17 +245,33 @@ class ScriptGroupRunner:
                 for run_index in range(project.run_num):
                     if self.cancelled():
                         raise ScriptGroupCancelled("配置组执行已取消")
+                    execution_record = None
+                    if skip_rule.enabled:
+                        execution_record = ExecutionRecord.start(
+                            group.name,
+                            project.name,
+                            project.folder_name,
+                            project.type,
+                        )
+                        self.execution_store.save(execution_record)
                     try:
                         self._execute_project(group, project)
                     except ScriptGroupCancelled:
+                        if execution_record is not None:
+                            self.execution_store.finish(execution_record, False)
                         raise
                     except Exception as error:
+                        if execution_record is not None:
+                            self.execution_store.finish(execution_record, False)
                         success = False
                         error_text = str(error)
                         self.log(
                             f"[ScriptGroup] {project.name} 第 {run_index + 1}/{project.run_num} 次失败：{error}"
                         )
                         break
+                    else:
+                        if execution_record is not None:
+                            self.execution_store.finish(execution_record, True)
                 progress.finish_current(success)
                 self.progress_store.save(progress)
                 if success:
