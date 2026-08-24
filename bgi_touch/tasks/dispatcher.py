@@ -218,11 +218,13 @@ class TaskDispatcher:
 
     def run_auto_fight_task(self, param: Any = None, ct: Any = None) -> bool:
         from ..combat.finish import FightFinishConfig
+        from ..combat.pickup import PostFightPickupConfig
         from .auto_fight import AutoFightTask
         strategy = self._resolve_strategy(_value(param, "combatStrategyPath", None))
         timeout = _value(param, "timeout", None)
         # BetterGI AutoFightParam.Timeout is expressed in seconds.
         timeout_s = float(timeout) if timeout else 120
+        pickup_config = PostFightPickupConfig.from_mapping(param)
         return AutoFightTask(
             self.ctx,
             combat_strategy_path=strategy,
@@ -235,6 +237,10 @@ class TaskDispatcher:
             finish_detect_config=FightFinishConfig.from_mapping(
                 _value(param, "finishDetectConfig", {}) or {}
             ),
+            post_fight_config=pickup_config,
+            experience_detector_config=_value(
+                param, "experienceDetectorConfig", {}
+            ) or {},
         ).run(cancelled=self._callback(ct))
 
     def run_one_dragon_task(self, param: Any = None, ct: Any = None) -> dict[str, Any]:

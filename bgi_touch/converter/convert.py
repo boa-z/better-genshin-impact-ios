@@ -72,7 +72,7 @@ SUPPORTED = [
 PARTIAL = {
     "notification.": "本地日志始终可用；远程推送需在 config/notification.json 显式允许 JS 并启用 Gotify",
     "dispatcher.runTask": "已支持 AutoFight/AutoTrack/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/MusicPlayer/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/QuickClaimReward/OneKeyExpedition/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon/ScriptGroup/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
-    "runAutoFightTask": "支持 combatStrategyPath、快速/切人后战斗结束检查、开战阻断、敌血条跳过与队伍页确认；掉落拾取等附加参数忽略",
+    "runAutoFightTask": "支持 combatStrategyPath、快速/切人后战斗结束检查、开战阻断、敌血条跳过、队伍页确认，以及经验图标门控的万叶/琴战后聚怪和扫描拾取；拾取队伍自动恢复仍需真机回归",
     "runAutoBossTask": "支持 BetterGI AutoBoss 官方路线、树脂策略、征讨之花导航、奖励汇总和 routePath/pathingFile 覆盖",
     "runAutoLeyLine": "支持 269 个官方地脉点位、632 份路线、树脂耗尽策略、奖励树脂优先级和 routePath/pathingFile 覆盖",
     "genshin.switchParty": "iOS 端使用 DeviceHub KeyL + OCR 切换游戏中的命名队伍；需要可用 OCR 和已导入的 Genshin profile",

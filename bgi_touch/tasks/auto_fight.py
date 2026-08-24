@@ -15,8 +15,10 @@ import cv2
 import numpy as np
 
 from ..combat.dsl import CombatCommand, CombatExecutor, CombatLine, parse_combat_script
+from ..combat.experience import ExperienceDetector, ExperienceDetectorConfig
 from ..combat.finish import FightFinishConfig, FightFinishDetector
 from ..combat.hud import enemies_nearby, is_skill_ready
+from ..combat.pickup import PostFightPickup, PostFightPickupConfig
 from ..combat.json_strategy import (
     ConditionEvaluator,
     JsonAction,
@@ -36,7 +38,9 @@ class AutoFightTask:
                  timeout_s: float = 120, party_slots: dict[str, int] | None = None,
                  log: Callable[[str], None] = print,
                  fight_finish_detect_enabled: bool = True,
-                 finish_detect_config: FightFinishConfig | None = None):
+                 finish_detect_config: FightFinishConfig | None = None,
+                 post_fight_config: PostFightPickupConfig | None = None,
+                 experience_detector_config: ExperienceDetectorConfig | dict | None = None):
         self.ctx = ctx
         self.log = log
         self.timeout_s = timeout_s
@@ -55,6 +59,30 @@ class AutoFightTask:
         self.finish_detector = FightFinishDetector(
             ctx, finish_detect_config, log=log,
         )
+        self.post_fight_config = post_fight_config or PostFightPickupConfig()
+        self.post_fight = PostFightPickup(
+            ctx,
+            party_slots=self.party_slots,
+            config=self.post_fight_config,
+            log=log,
+            executor=self.executor,
+        )
+        if isinstance(experience_detector_config, ExperienceDetectorConfig):
+            detector_config = experience_detector_config
+        else:
+            detector_config = ExperienceDetectorConfig.from_mapping(
+                experience_detector_config or {}
+            )
+        # Experience detection is only useful when it gates the post-fight
+        # Kazuha/Jean pickup. Keeping it disabled otherwise avoids any extra
+        # image processing in ordinary combat runs.
+        if not self.post_fight_config.exp_based_pickup_enabled:
+            detector_config = ExperienceDetectorConfig(enabled=False)
+        self.experience_detector = ExperienceDetector(
+            ctx, config=detector_config, log=log,
+        )
+        self._post_fight_done = False
+        self._battle_count = 0
         self._skill_deadlines: dict[str, float] = {}
         self._skill_cooldowns = self._load_skill_cooldowns()
 
@@ -69,11 +97,87 @@ class AutoFightTask:
             return self._run_json(cancelled)
         return self._run_txt(cancelled)
 
+    def _start_battle(self) -> None:
+        self._post_fight_done = False
+        self._battle_count = 0
+        self.finish_detector.start_battle()
+        self.experience_detector.start()
+
+    def _observe_experience_frame(self, frame: Any) -> None:
+        if self.experience_detector.available:
+            self.experience_detector.observe(frame)
+
+    def _observe_cached_frame(self) -> None:
+        if not self.experience_detector.available:
+            return
+        cached = getattr(self.ctx, "cached_frame", None)
+        if not callable(cached):
+            return
+        try:
+            frame, _age = cached()
+            self._observe_experience_frame(frame)
+        except Exception:
+            # A cached-frame observer is opportunistic; combat must continue.
+            return
+
+    def _check_fight_end(
+        self,
+        previous_character: str | None = None,
+        *,
+        after_switch: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        result = self.finish_detector.check(
+            previous_character,
+            after_switch=after_switch,
+            cancelled=cancelled,
+        )
+        # FightFinishDetector captures the newest frame itself. Consume the
+        # context cache rather than requesting a competing screenshot.
+        self._observe_cached_frame()
+        return result
+
+    def _finish_fight(self, cancelled: Callable[[], bool] | None = None) -> bool:
+        """Finalize a successful fight exactly once and run pickup policies."""
+
+        if self._post_fight_done:
+            return True
+        self._post_fight_done = True
+
+        elite_detected: bool | None = None
+        if self.experience_detector.available:
+            # The last enemy death and the party-screen probe can land in
+            # adjacent frames. Continue consuming the normal capture path for
+            # at most 1.1s so a short-lived experience icon is not missed.
+            deadline = time.monotonic() + 1.1
+            while not self.experience_detector.has_detected_experience and (
+                time.monotonic() < deadline
+            ):
+                if cancelled and cancelled():
+                    break
+                try:
+                    self._observe_experience_frame(self.ctx.capture_bgr())
+                except Exception as error:
+                    self.log(f"[AutoFight] 等待经验图标截图失败：{error}")
+                    break
+                if not self.experience_detector.has_detected_experience:
+                    self.ctx.sleep(100)
+            elite_detected = self.experience_detector.stop()
+        else:
+            self.experience_detector.stop()
+
+        self.post_fight.run(
+            elite_detected=elite_detected,
+            battle_count=max(1, self._battle_count),
+            cancelled=cancelled,
+        )
+        return True
+
     def _run_txt(self, cancelled: Callable[[], bool] | None = None) -> bool:
         deadline = time.monotonic() + self.timeout_s
         clear_streak = 0
         self.log(f"[AutoFight] 开始（超时 {self.timeout_s:.0f}s）")
-        self.finish_detector.start_battle()
+        self._start_battle()
         current_character = None
         try:
             while time.monotonic() < deadline:
@@ -86,51 +190,60 @@ class AutoFightTask:
                         self.finish_detect_enabled
                         and not self.finish_detector.config.check_after_switch_avatar
                         and self.finish_detector.should_fast_check(previous_character)
-                        and self.finish_detector.check(
+                        and self._check_fight_end(
                             previous_character, cancelled=cancelled,
                         )
                     ):
                         self.log("[AutoFight] 快速检查确认战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
                     if line.character:
                         self.executor.switch_to(line.character)
                         current_character = line.character
+                        self._battle_count += 1
                     if (
                         self.finish_detect_enabled
                         and self.finish_detector.config.check_after_switch_avatar
                         and self.finish_detector.should_fast_check(previous_character)
-                        and self.finish_detector.check(
+                        and self._check_fight_end(
                             previous_character, after_switch=True, cancelled=cancelled,
                         )
                     ):
                         self.log("[AutoFight] 切人后确认战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
                     for command in line.commands:
                         if cancelled and cancelled():
                             self.log("[AutoFight] 已取消")
                             return False
                         if command.action == "check" and self.finish_detect_enabled:
-                            if self.finish_detector.check(
+                            if self._check_fight_end(
                                 current_character, cancelled=cancelled,
                             ):
                                 self.log("[AutoFight] check 确认战斗结束")
-                                return True
+                                return self._finish_fight(cancelled)
                         else:
                             self.executor.exec(command)
 
+                # Text strategies do not otherwise retain a per-round frame.
+                # Take one sequentially after the actions so the frame-fed
+                # experience detector can see the final enemy-death animation.
+                if self.experience_detector.available:
+                    try:
+                        self._observe_experience_frame(self.ctx.capture_bgr())
+                    except Exception as error:
+                        self.log(f"[AutoFight] 经验图标截图失败，继续战斗：{error}")
                 if self.finish_detect_enabled:
-                    if self.finish_detector.check(
+                    if self._check_fight_end(
                         current_character, cancelled=cancelled,
                     ):
                         self.log("[AutoFight] 战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
                 elif enemies_nearby(self.ctx):
                     clear_streak = 0
                 else:
                     clear_streak += 1
                     if clear_streak >= 2:
                         self.log("[AutoFight] 战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
             self.log("[AutoFight] 超时退出")
             return False
         finally:
@@ -277,7 +390,7 @@ class AutoFightTask:
             if cancelled and cancelled():
                 return False
             if command.action == "check" and self.finish_detect_enabled:
-                if self.finish_detector.check(character, cancelled=cancelled):
+                if self._check_fight_end(character, cancelled=cancelled):
                     return True
                 continue
             self.executor.exec(command)
@@ -352,6 +465,7 @@ class AutoFightTask:
                 character = line.character or current_character
                 if line.character:
                     self.executor.switch_to(line.character)
+                    self._battle_count += 1
                 ended = self._execute_json_commands(line.commands, character, cancelled)
                 current_character = character
                 if ended:
@@ -385,18 +499,19 @@ class AutoFightTask:
         )
         current_character = self._active_character()
         deadline = time.monotonic() + self.timeout_s
-        self.finish_detector.start_battle()
+        self._start_battle()
         try:
             current_character, ended = self._run_pre_actions(
                 strategy, current_character, cancelled,
             )
             if ended:
-                return True
+                return self._finish_fight(cancelled)
             while time.monotonic() < deadline:
                 if cancelled and cancelled():
                     self.log("[AutoFight] 已取消")
                     return False
                 frame = self.ctx.capture_bgr()
+                self._observe_experience_frame(frame)
                 evaluator.set_frame(frame)
                 executed = False
                 previous_character = current_character
@@ -410,12 +525,12 @@ class AutoFightTask:
                         self.finish_detect_enabled
                         and not self.finish_detector.config.check_after_switch_avatar
                         and self.finish_detector.should_fast_check(previous_character)
-                        and self.finish_detector.check(
+                        and self._check_fight_end(
                             previous_character, cancelled=cancelled,
                         )
                     ):
                         self.log("[AutoFight] 快速检查确认战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
                     if action.character:
                         self.executor.switch_to(action.character)
                         current_character = action.character
@@ -423,22 +538,23 @@ class AutoFightTask:
                         self.finish_detect_enabled
                         and self.finish_detector.config.check_after_switch_avatar
                         and self.finish_detector.should_fast_check(previous_character)
-                        and self.finish_detector.check(
+                        and self._check_fight_end(
                             previous_character, after_switch=True, cancelled=cancelled,
                         )
                     ):
                         self.log("[AutoFight] 切人后确认战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
                     current_character, ended = self._execute_json_action(
                         action, current_character, cancelled,
                     )
                     if ended:
                         self.log("[AutoFight] check 确认战斗结束")
-                        return True
+                        return self._finish_fight(cancelled)
                     if action.ensure_cast and self._ensure_cast(
                         action, current_character, cancelled,
                     ):
-                        return True
+                        return self._finish_fight(cancelled)
+                    self._battle_count += 1
                     evaluator.update_last_exec_time(action.index, action.name)
                     executed = True
                     break

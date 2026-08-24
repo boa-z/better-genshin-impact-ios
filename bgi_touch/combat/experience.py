@@ -43,6 +43,12 @@ class ExperienceDetectorConfig:
         if not isinstance(raw, dict):
             return cls()
 
+        enabled = raw.get("enabled", True)
+        if isinstance(enabled, str):
+            enabled = enabled.strip().casefold() not in {"0", "false", "no", "off"}
+        else:
+            enabled = bool(enabled)
+
         def number(name: str, default: float, minimum: float | None = None) -> float:
             try:
                 value = float(raw.get(name, default))
@@ -69,9 +75,9 @@ class ExperienceDetectorConfig:
             return channels  # type: ignore[return-value]
 
         return cls(
-            enabled=bool(raw.get("enabled", True)),
+            enabled=enabled,
             interval_s=number("intervalSeconds", 0.1, 0.0),
-            template_threshold=number("templateThreshold", 0.82, 0.0),
+            template_threshold=min(1.0, number("templateThreshold", 0.82, 0.0)),
             pixel_offset_x=number("pixelOffsetX", -147.0),
             color_min_bgr=color("colorMinBgr", (200, 200, 150)),
             color_max_bgr=color("colorMaxBgr", (255, 255, 200)),
@@ -212,4 +218,3 @@ class ExperienceDetector:
             # produce a valid hit after a transient orientation/asset failure.
             self.log(f"[AutoFight] 经验值检测失败，继续战斗：{error}")
         return self._detected
-

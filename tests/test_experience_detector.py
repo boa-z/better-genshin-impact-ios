@@ -85,7 +85,6 @@ def test_experience_detector_from_mapping_clamps_invalid_values():
     })
     assert config.enabled is False
     assert config.interval_s == 0
-    assert config.template_threshold == 2
+    assert config.template_threshold == 1
     assert config.sample_radius == 0
     assert config.color_min_bgr == (200, 200, 150)
-

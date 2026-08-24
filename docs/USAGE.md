@@ -512,6 +512,15 @@ attack(2), jump, w(0.5)            // 无角色名 = 当前角色：普攻2秒�
 黄条与白块，随后用 `KeyX` 关闭。探测不确定时只清理界面并继续战斗，不会仅因大招运镜
 隐藏派蒙而判定结束。
 
+战后拾取参数也兼容 `kazuhaPickupEnabled`、`pickDropsAfterFightEnabled`、
+`pickDropsAfterFightSeconds`、`expBasedPickupEnabled`、`battleThresholdForLoot`、
+`qinDoublePickUp` 和 `kazuhaPartyName`。开启 `expBasedPickupEnabled` 后，AutoFight
+会用上游 `experience_57/58/60` 模板及左侧颜色复核判断精英掉落；识别结果为真时才执行
+队伍中枫原万叶/琴的长按 E 聚怪，否则仍可按 `pickDropsAfterFightEnabled` 执行扫描拾取。
+经验识别消费战斗任务已经获取的帧，扫描期间复用同一个 TriggerLoop，不会为战后拾取创建
+第二个 DeviceHub 截图生产者。`experienceDetectorConfig` 可覆盖 `intervalSeconds`、
+`templateThreshold`、`pixelOffsetX`、`colorMinBgr`、`colorMaxBgr` 和 `sampleRadius`。
+
 ### 5.5 执行 BetterGI ScriptGroup 配置组
 
 可直接读取原项目 `User/ScriptGroup/*.json`，依次调度 `Javascript`、`KeyMouse`、
