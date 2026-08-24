@@ -21,7 +21,7 @@ import numpy as np
 
 from ..engine.context import GameContext
 from ..engine.recognition import Mat, RecognitionObject
-from ..vision.ocr import get_ocr
+from ..vision.game_ui import is_big_map_ui, is_main_ui
 from .feature_store import SiftFeatureStore
 from .map_locator import (
     ASSETS,
@@ -34,6 +34,17 @@ from .map_locator import (
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
 MIN_VIEW_PX_PER_FEATURE = 0.25
 MAX_VIEW_PX_PER_FEATURE = 20.0
+MAP_MOVE_MAX_ITERATIONS = 24
+TP_MOVE_MAX_ITERATIONS = 28
+MAP_MOVE_STAGNANT_LIMIT = 2
+MAP_MOVE_PROGRESS_EPSILON = 1.5
+MAP_MOVE_FRAME_TIMEOUT_MS = 1800
+MAP_MOVE_SETTLE_MS = 700
+TELEPORT_PANEL_TIMEOUT_S = 4.0
+TELEPORT_PANEL_INITIAL_DELAY_MS = 200
+TELEPORT_PANEL_SELECTION_SETTLE_MS = 600
+TELEPORT_COMPLETION_MINIMUM_S = 1.0
+TELEPORT_COMPLETION_STABLE_CHECKS = 2
 
 
 class BigMapLocator:
@@ -115,6 +126,11 @@ class TpTask:
         # Touch zoom has no reliable semantic level from DeviceHub. Keep the
         # BetterGI 1..6 scale in-process and use pinch gestures for changes.
         self._zoom_level = 3.0
+        # Once an independent map has been selected, the game keeps that
+        # selection after closing/reopening the map.  Remember it locally so a
+        # transient SIFT miss does not reopen the area selector and disturb a
+        # gesture that is already in progress.
+        self._area_ready = False
         self._go_teleport = RecognitionObject.template_match(
             Mat.from_file(str(TEMPLATES / "GoTeleport.png")), 1440, 960, 100, 120
         )
@@ -161,8 +177,11 @@ class TpTask:
         for attempt in range(3):
             frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
+                self._area_ready = True
                 return True
             if self._is_map_ui():
+                if self._area_ready and self._wait_for_target_map(timeout_s=1.0):
+                    return True
                 if self._switch_area():
                     return self._wait_for_target_map()
                 return False
@@ -175,6 +194,7 @@ class TpTask:
             except Exception:
                 frame = self.ctx.capture_bgr()
             if self.big.locate_view(frame) is not None:
+                self._area_ready = True
                 return True
             if self._is_map_ui() and self._switch_area():
                 return self._wait_for_target_map()
@@ -236,6 +256,7 @@ class TpTask:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if self.big.locate_view(self.ctx.capture_bgr()) is not None:
+                self._area_ready = True
                 return True
             self.ctx.sleep(250)
         self.log(f"[tp] 已选择 {self.map_name}，但大地图特征匹配失败")
@@ -256,26 +277,75 @@ class TpTask:
             before = self.ctx.device.last_frame_version
             self.ctx.device.swipe(x0, y0, x0 + sx, y0 + sy, duration_ms=650,
                                   image_width=W, image_height=H)
-            self.ctx.sleep(700)  # 等惯性衰减
+            self.ctx.sleep(MAP_MOVE_SETTLE_MS)  # 等惯性衰减
             if before is not None:
                 try:
                     feedback = self.ctx.capture_bgr_after_frame(
-                        before, timeout_ms=1800,
+                        before, timeout_ms=MAP_MOVE_FRAME_TIMEOUT_MS,
                     )
                 except Exception:
                     # Older headless builds do not expose frame cursors; the
                     # next loop capture remains the compatibility fallback.
                     feedback = None
+            if feedback is None:
+                # Old devicehub-mask builds do not expose a frame cursor on
+                # action responses.  Still consume one post-gesture screenshot
+                # instead of letting the next iteration repeatedly inspect a
+                # pre-swipe frame.
+                try:
+                    feedback = self.ctx.capture_bgr()
+                except Exception:
+                    feedback = None
             dx -= sx
             dy -= sy
         return feedback
 
-    def move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
-        with self.exclusive_triggers():
-            return self._move_map_to(wx, wy, timeout_s)
+    def _locate_view_with_stale_frame_guard(
+        self,
+        frame: np.ndarray,
+        previous: tuple[float, float] | None,
+    ) -> tuple[float, float, float] | None:
+        """Locate a map frame and refresh once when the result is unchanged.
 
-    def _move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
-        """Center the visible map on a world coordinate without selecting it."""
+        A slow observation stream can return the frame from immediately before
+        a swipe even though the gesture itself succeeded.  Treating that frame
+        as a real no-op causes the old implementation to repeat the same drag
+        and eventually fail with a constant target offset.  The extra capture
+        is only made for a duplicate result, so normal map movement keeps the
+        one-frame-per-gesture behavior used by the screenshot consumers.
+        """
+        view = self.big.locate_view(frame)
+        if view is None or previous is None:
+            return view
+        if math.hypot(view[0] - previous[0], view[1] - previous[1]) >= MAP_MOVE_PROGRESS_EPSILON:
+            return view
+        try:
+            refreshed = self.ctx.capture_bgr()
+            refreshed_view = self.big.locate_view(refreshed)
+        except Exception:
+            return view
+        if refreshed_view is not None:
+            return refreshed_view
+        return view
+
+    def _move_map_view_to(
+        self,
+        wx: float,
+        wy: float,
+        timeout_s: float,
+        *,
+        log_prefix: str,
+        max_iterations: int,
+        error_message: str,
+    ) -> tuple[float, float, float]:
+        """Move a target into the safe center and return its final map view.
+
+        ``pan_sign`` starts with the iOS convention (the finger follows the
+        map).  If a device profile reports the opposite swipe convention, the
+        first measurable movement automatically flips the sign once.  This is
+        useful for older DeviceHub profiles and is harmless for the current
+        fixed 16:9 profile.
+        """
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
         tx, ty = self.big.world_to_feature(wx, wy)
@@ -283,10 +353,12 @@ class TpTask:
         t = self.ctx.transform
         tol = 0.05 * t.device_width
         last_view: tuple[float, float] | None = None
+        last_expected_direction: tuple[float, float] | None = None
         stagnant_iterations = 0
         recovered = False
+        pan_sign = -1.0
         feedback_frame = None
-        for it in range(14):
+        for it in range(max_iterations):
             if time.monotonic() > deadline:
                 break
             # Consume the frame obtained after the previous drag. Asking for
@@ -294,31 +366,85 @@ class TpTask:
             # stale pre-gesture screenshot.
             frame = feedback_frame if feedback_frame is not None else self.ctx.capture_bgr()
             feedback_frame = None
-            view = self.big.locate_view(frame)
+            view = self._locate_view_with_stale_frame_guard(frame, last_view)
             if view is None:
                 self.log("[tp] 大地图视野匹配失败，重试")
-                self.ctx.sleep(800)
+                self.ctx.sleep(300)
                 continue
             vx, vy, px_per_map = view
             dx_screen = (tx - vx) * px_per_map
             dy_screen = (ty - vy) * px_per_map
             dist = math.hypot(dx_screen, dy_screen)
-            self.log(f"[map] 迭代{it}: 目标偏移 {dist:.0f}px")
+            self.log(
+                f"{log_prefix}{it}: 视野中心 特征图({vx:.0f},{vy:.0f}) "
+                f"比例{px_per_map:.2f} 目标偏移 {dist:.0f}px"
+            )
+
+            if last_view is not None and last_expected_direction is not None:
+                actual_dx = vx - last_view[0]
+                actual_dy = vy - last_view[1]
+                actual_distance = math.hypot(actual_dx, actual_dy)
+                expected_distance = math.hypot(*last_expected_direction)
+                # Only infer the sign when the frame actually moved.  A
+                # duplicate frame is handled by the stagnant/recovery path.
+                if (
+                    actual_distance >= MAP_MOVE_PROGRESS_EPSILON
+                    and expected_distance >= MAP_MOVE_PROGRESS_EPSILON
+                    and actual_dx * last_expected_direction[0]
+                    + actual_dy * last_expected_direction[1] < 0
+                ):
+                    pan_sign *= -1.0
+                    self.log("[tp] 检测到地图拖动方向相反，切换触控方向")
+                    last_expected_direction = None
+
             if dist <= tol:
-                return True
-            if last_view is not None and math.hypot(vx - last_view[0], vy - last_view[1]) < 1.0:
+                return view
+
+            if last_view is not None and math.hypot(vx - last_view[0], vy - last_view[1]) < MAP_MOVE_PROGRESS_EPSILON:
                 stagnant_iterations += 1
             else:
                 stagnant_iterations = 0
             last_view = (vx, vy)
-            if stagnant_iterations >= 2:
+            if stagnant_iterations >= MAP_MOVE_STAGNANT_LIMIT:
                 if recovered or not self._recover_device_channel("连续拖动后地图视野未变化"):
-                    raise RuntimeError("大地图移动失败：连续拖动后地图视野未发生变化")
+                    raise RuntimeError(error_message)
                 recovered = True
                 stagnant_iterations = 0
                 last_view = None
-            feedback_frame = self._drag_map(-dx_screen, -dy_screen)
-        raise RuntimeError("大地图移动失败：迭代/超时耗尽")
+                last_expected_direction = None
+                feedback_frame = None
+                # Let the rebuilt channel publish a fresh map frame before
+                # sending another gesture; otherwise the first retry can
+                # still be based on the stale pre-reconnect frame.
+                self.ctx.sleep(250)
+                continue
+
+            # 目标向中心移动 = 地图内容朝反方向平移。保存期望方向，下一
+            # 帧可以验证 profile 的 swipe 坐标语义是否相反。
+            last_expected_direction = (tx - vx, ty - vy)
+            feedback_frame = self._drag_map(
+                pan_sign * dx_screen,
+                pan_sign * dy_screen,
+            )
+            if feedback_frame is None:
+                self.log("[tp] 未取得拖动后的新截图，等待下一帧")
+        raise RuntimeError(error_message)
+
+    def move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+        with self.exclusive_triggers():
+            return self._move_map_to(wx, wy, timeout_s)
+
+    def _move_map_to(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
+        """Center the visible map on a world coordinate without selecting it."""
+        self._move_map_view_to(
+            wx,
+            wy,
+            timeout_s,
+            log_prefix="[map] 迭代",
+            max_iterations=MAP_MOVE_MAX_ITERATIONS,
+            error_message="大地图移动失败：迭代/超时耗尽",
+        )
+        return True
 
     def get_big_map_zoom_level(self) -> float:
         return float(self._zoom_level)
@@ -407,7 +533,7 @@ class TpTask:
         self.ctx.sleep(1000)
         if not self._find_and_tap_confirm():
             raise RuntimeError("七天神像已选中，但未找到传送确认")
-        self.ctx.sleep(max(1000, int(timeout_s * 1000 / 10)))
+        self._wait_for_teleport_completion(timeout_s=timeout_s)
         return True
 
     # 候选列表里可点的传送目标类型（点位重叠时弹出）
@@ -415,14 +541,15 @@ class TpTask:
 
     def _find_and_tap_confirm(
         self,
-        timeout_s: float = 3.6,
-        initial_delay_ms: int = 200,
+        timeout_s: float = TELEPORT_PANEL_TIMEOUT_S,
+        initial_delay_ms: int = TELEPORT_PANEL_INITIAL_DELAY_MS,
     ) -> bool:
         """Wait for the panel, choose at most one candidate, then confirm."""
         if initial_delay_ms > 0:
             self.ctx.sleep(initial_delay_ms)
         deadline = time.monotonic() + max(0.2, timeout_s)
         selected_entry = False
+        selected_at = 0.0
         while time.monotonic() < deadline:
             region = self.ctx.capture_region()
             # The confirmation control is a stable icon and is faster/more
@@ -435,34 +562,90 @@ class TpTask:
             hits = region.find_multi(RecognitionObject.ocr(900, 100, 1020, 980), limit=25)
             # 最终确认按钮：短文本「传送」
             for h in hits:
-                t = h.text.strip().replace(" ", "")
-                if t == "传送" or (t.endswith("传送") and len(t) <= 4):
+                text = self._normalize_panel_text(getattr(h, "text", ""))
+                if (
+                    (text == "传送" or (text.endswith("传送") and len(text) <= 4))
+                    and self._is_confirm_hit(h)
+                ):
                     self.log(f"[tp] 点击确认「{h.text.strip()}」")
                     h.click()
                     return True
             # 候选列表条目
             entry = next((
                 h for h in hits
-                if 1 < len(h.text.strip()) < 10
-                and any(k in h.text for k in self._ANCHOR_ENTRIES)
+                if 1 < len(self._normalize_panel_text(getattr(h, "text", ""))) < 14
+                and any(
+                    key in self._normalize_panel_text(getattr(h, "text", ""))
+                    for key in self._ANCHOR_ENTRIES
+                )
             ), None)
             if entry is not None and not selected_entry:
                 self.log(f"[tp] 点击候选列表：「{entry.text.strip()}」")
                 entry.click()
                 selected_entry = True
-                self.ctx.sleep(600)
+                selected_at = time.monotonic()
+                self.ctx.sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
                 continue
+            # A candidate row remaining after the settle delay means the tap
+            # did not select it.  Returning here lets the caller use its one
+            # precomputed icon fallback instead of clicking the same stale row
+            # repeatedly for the whole panel timeout.
+            if selected_entry and entry is not None and time.monotonic() - selected_at >= 0.8:
+                self.log("[tp] 传送候选列表仍在，判定本次点选未生效")
+                return False
             self.ctx.sleep(250)
         return False
+
+    @staticmethod
+    def _normalize_panel_text(value: str) -> str:
+        return (
+            str(value or "")
+            .replace(" ", "")
+            .replace("\n", "")
+            .replace("傳送", "传送")
+            .replace("傳送錨點", "传送锚点")
+            .replace("锚点>", "锚点")
+            .replace(">", "")
+            .replace("＞", "")
+            .strip()
+        )
+
+    def _is_confirm_hit(self, hit) -> bool:
+        """Reject map labels that happen to contain the word 传送."""
+        width = float(getattr(self.ctx.transform, "device_width", 1920))
+        height = float(getattr(self.ctx.transform, "device_height", 1080))
+        try:
+            x = float(getattr(hit, "dx"))
+            y = float(getattr(hit, "dy"))
+            w = float(getattr(hit, "dw"))
+            h = float(getattr(hit, "dh"))
+        except (AttributeError, TypeError, ValueError):
+            # Keep compatibility with lightweight recognition fakes and old
+            # headless responses that only expose text/click().
+            return True
+        center_x = x + w / 2
+        center_y = y + h / 2
+        return center_x >= width * 0.58 and center_y >= height * 0.55
 
     def _anchor_icons_near(self, x: float, y: float, max_distance: float):
         """Return nearby teleport icons ordered by distance from the raw point."""
         region = self.ctx.capture_region()
+        width = float(self.ctx.transform.device_width)
+        height = float(self.ctx.transform.device_height)
         candidates = []
         for name in ("TeleportWaypoint", "StatueOfTheSeven", "Domain"):
             tpl = Mat.from_file(str(TEMPLATES / f"{name}.png"))
             for h in region.find_multi(RecognitionObject.template_match(tpl), limit=5):
-                d = math.hypot(h.dx + h.dw / 2 - x, h.dy + h.dh / 2 - y)
+                center_x = h.dx + h.dw / 2
+                center_y = h.dy + h.dh / 2
+                margin = max(35.0, 0.035 * min(width, height))
+                if (
+                    center_x < margin or center_y < margin
+                    or center_x > width - margin or center_y > height - margin
+                    or (center_x < 0.20 * width and center_y < 0.35 * height)
+                ):
+                    continue
+                d = math.hypot(center_x - x, center_y - y)
                 if d <= max_distance:
                     candidates.append((d, h))
         candidates.sort(key=lambda item: item[0])
@@ -487,62 +670,68 @@ class TpTask:
 
     def tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
         with self.exclusive_triggers():
-            return self._tp(wx, wy, timeout_s)
+            try:
+                return self._tp(wx, wy, timeout_s)
+            except RuntimeError:
+                # Keep direct PathingExecutor callers safe as well as the
+                # genshin API retry wrapper: a failed point panel must not
+                # remain over the next map attempt.
+                self._dismiss_teleport_panel()
+                raise
 
     def _tp(self, wx: float, wy: float, timeout_s: float = 90) -> bool:
         """传送到世界坐标 (wx, wy) 附近的锚点。"""
         self.log(f"[tp] 目标世界坐标 ({wx:.1f}, {wy:.1f})")
-        if not self.open_map():
-            raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
-
         tx, ty = self.big.world_to_feature(wx, wy)
-        deadline = time.monotonic() + timeout_s
         t = self.ctx.transform
+        view = self._move_map_view_to(
+            wx,
+            wy,
+            timeout_s,
+            log_prefix="[tp] 迭代",
+            max_iterations=TP_MOVE_MAX_ITERATIONS,
+            error_message="传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）",
+        )
+        vx, vy, px_per_map = view
+        dx_screen = (tx - vx) * px_per_map
+        dy_screen = (ty - vy) * px_per_map
         tol = 0.05 * t.device_width
+        tap_x = t.device_width / 2 + dx_screen
+        tap_y = t.device_height / 2 + dy_screen
+        if not self._is_clickable_map_point(tap_x, tap_y):
+            raise RuntimeError("传送失败：目标点仍位于大地图不可点击区域")
+        if not self._select_target_and_confirm(tap_x, tap_y, tol):
+            raise RuntimeError(
+                "传送失败：点击传送点后未出现交互面板，可能是传送点未激活"
+            )
+        self.log("[tp] 已确认传送，等待加载…")
+        self._wait_for_teleport_completion()
+        return True
 
-        last_view: tuple[float, float] | None = None
-        stagnant_iterations = 0
-        recovered = False
-        feedback_frame = None
-        for it in range(20):
-            if time.monotonic() > deadline:
-                break
-            frame = feedback_frame if feedback_frame is not None else self.ctx.capture_bgr()
-            feedback_frame = None
-            view = self.big.locate_view(frame)
-            if view is None:
-                self.log("[tp] 大地图视野匹配失败，重试")
-                self.ctx.sleep(800)
-                continue
-            vx, vy, px_per_map = view
-            dx_screen = (tx - vx) * px_per_map
-            dy_screen = (ty - vy) * px_per_map
-            dist = math.hypot(dx_screen, dy_screen)
-            self.log(f"[tp] 迭代{it}: 视野中心 特征图({vx:.0f},{vy:.0f}) 比例{px_per_map:.2f} 目标偏移 {dist:.0f}px")
-            if last_view is not None and math.hypot(vx - last_view[0], vy - last_view[1]) < 1.0:
-                stagnant_iterations += 1
+    def _is_clickable_map_point(self, x: float, y: float) -> bool:
+        width = float(self.ctx.transform.device_width)
+        height = float(self.ctx.transform.device_height)
+        margin = max(35.0, 0.035 * min(width, height))
+        if x < margin or y < margin or x > width - margin or y > height - margin:
+            return False
+        return not (x < 0.20 * width and y < 0.35 * height)
+
+    def _dismiss_teleport_panel(self) -> None:
+        """Close a possibly stale map selection before a retry."""
+        try:
+            input_controller = getattr(self.ctx, "input", None)
+            key_press = getattr(input_controller, "key_press", None)
+            if callable(key_press):
+                key_press("ESCAPE")
             else:
-                stagnant_iterations = 0
-            last_view = (vx, vy)
-            if dist <= tol:
-                tap_x = t.device_width / 2 + dx_screen
-                tap_y = t.device_height / 2 + dy_screen
-                if not self._select_target_and_confirm(tap_x, tap_y, tol):
-                    raise RuntimeError(
-                        "传送失败：点击传送点后未出现交互面板，可能是传送点未激活"
-                    )
-                self.log("[tp] 已确认传送，等待加载…")
-                self._wait_for_teleport_completion()
-                return True
-            if stagnant_iterations >= 2:
-                if recovered or not self._recover_device_channel("连续拖动后地图视野未变化"):
-                    raise RuntimeError("大地图移动失败：连续拖动后地图视野未发生变化")
-                recovered = True
-                stagnant_iterations = 0
-                last_view = None
-            # 拖动地图：目标向中心移动 = 内容朝反方向平移
-            feedback_frame = self._drag_map(-dx_screen, -dy_screen)
-        raise RuntimeError("传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）")
+                self.ctx.device.press_key("ESCAPE")
+            self.ctx.sleep(350)
+        except Exception as error:
+            self.log(f"[tp] 关闭传送面板失败（忽略）：{error}")
+
+    def dismiss_after_failure(self) -> None:
+        """Public retry cleanup used by the genshin API wrapper."""
+        self._dismiss_teleport_panel()
 
     def _select_target_and_confirm(self, tap_x: float, tap_y: float, tol: float) -> bool:
         """Click one resolved point and allow one precomputed fallback only."""
@@ -593,21 +782,22 @@ class TpTask:
 
     def _wait_for_teleport_completion(self, timeout_s: float = 60) -> None:
         """Require a loading state followed by a stable gameplay minimap."""
-        from ..engine.genshin_api import GenshinApi
-
         deadline = time.monotonic() + timeout_s
         started_at = time.monotonic()
         observed_loading = False
-        api = GenshinApi(self.ctx, log=self.log)
+        stable_main_ui = 0
         while time.monotonic() < deadline:
             frame = self.ctx.capture_bgr()
-            is_main_ui = api._is_main_ui(frame)
-            if is_main_ui:
-                if observed_loading and time.monotonic() - started_at >= 1.0:
-                    self.log("[tp] 传送完成")
-                    return
+            in_main_ui = is_main_ui(self.ctx, frame)
+            if in_main_ui:
+                if observed_loading and time.monotonic() - started_at >= TELEPORT_COMPLETION_MINIMUM_S:
+                    stable_main_ui += 1
+                    if stable_main_ui >= TELEPORT_COMPLETION_STABLE_CHECKS:
+                        self.log("[tp] 传送完成")
+                        return
             else:
-                if not observed_loading and self.big.locate_view(frame) is None:
+                stable_main_ui = 0
+                if not observed_loading and not is_big_map_ui(self.ctx, frame):
                     observed_loading = True
-            self.ctx.sleep(500)
+            self.ctx.sleep(350)
         self.log("[tp] 传送加载等待超时，继续执行后续任务")

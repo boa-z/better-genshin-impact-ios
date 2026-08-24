@@ -318,6 +318,111 @@ def test_move_map_consumes_drag_feedback_without_requesting_an_extra_frame():
     task._drag_map.assert_called_once_with(-10.0, -0.0)
 
 
+def test_map_move_refreshes_a_duplicate_post_gesture_frame_once():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    initial = np.zeros((4, 8, 3), dtype=np.uint8)
+    stale = np.ones((4, 8, 3), dtype=np.uint8)
+    refreshed = np.full((4, 8, 3), 2, dtype=np.uint8)
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=100, device_height=60),
+        capture_bgr=Mock(side_effect=[initial, refreshed]),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = Mock()
+    task.open_map = Mock(return_value=True)
+    task.big = SimpleNamespace(
+        world_to_feature=Mock(return_value=(10.0, 0.0)),
+        locate_view=Mock(side_effect=[
+            (0.0, 0.0, 1.0),  # before the swipe
+            (0.0, 0.0, 1.0),  # stale observation returned by the gesture
+            (10.0, 0.0, 1.0),  # fresh frame after the one-off refresh
+        ]),
+    )
+    task._drag_map = Mock(return_value=stale)
+
+    assert task._move_map_to(1, 2)
+    assert ctx.capture_bgr.call_count == 2
+    task._drag_map.assert_called_once_with(-10.0, -0.0)
+
+
+def test_map_move_flips_profile_swipe_direction_when_feedback_is_opposite():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    frames = [object(), object(), object()]
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=100, device_height=60),
+        capture_bgr=Mock(return_value=frames[0]),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = Mock()
+    task.open_map = Mock(return_value=True)
+    task.big = SimpleNamespace(
+        world_to_feature=Mock(return_value=(10.0, 0.0)),
+        locate_view=Mock(side_effect=[
+            (0.0, 0.0, 1.0),
+            (-5.0, 0.0, 1.0),  # the profile moved away from the target
+            (10.0, 0.0, 1.0),
+        ]),
+    )
+    task._drag_map = Mock(side_effect=[frames[1], frames[2]])
+
+    assert task._move_map_to(1, 2)
+    assert task._drag_map.call_args_list[0].args == (-10.0, -0.0)
+    assert task._drag_map.call_args_list[1].args == (15.0, 0.0)
+    assert any("拖动方向相反" in call.args[0] for call in task.log.call_args_list)
+
+
+def test_teleport_confirm_ignores_top_map_label_and_clicks_bottom_button():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    class Hit:
+        def __init__(self, text, y):
+            self.text = text
+            self.dx, self.dy, self.dw, self.dh = 700, y, 80, 30
+            self.clicks = 0
+
+        def is_exist(self):
+            return True
+
+        def click(self):
+            self.clicks += 1
+
+    top = Hit("传送", 40)
+    bottom = Hit("传送", 400)
+
+    class Region:
+        def find(self, _):
+            return SimpleNamespace(is_exist=lambda: False)
+
+        def find_multi(self, *_args, **_kwargs):
+            return [top, bottom]
+
+    task = TpTask.__new__(TpTask)
+    task.ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=1000, device_height=500),
+        capture_region=Mock(return_value=Region()),
+        sleep=Mock(),
+    )
+    task.log = Mock()
+    task._go_teleport = object()
+
+    assert task._find_and_tap_confirm(timeout_s=0.2, initial_delay_ms=0)
+    assert top.clicks == 0
+    assert bottom.clicks == 1
+
+
 def test_js_runtime_awaits_async_iife_and_restores_python_error_text(tmp_path):
     import pythonmonkey as pm
 
