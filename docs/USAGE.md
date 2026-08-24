@@ -290,6 +290,8 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `Point2f`、`Region`、`ImageRegion` 与 `GameCaptureRegion` 均支持 HostType 构造语义。
 `ImageRegion.Find(Ocr/OcrMatch)` 与原版一样返回整个 ROI 的去空白合并文本，跨 OCR
 文本块执行包含/正则匹配；`Find/FindMulti` 的成功和失败回调重载也会同步触发。
+模板识别会遵循 `Use3Channels`、`UseMask`（默认忽略纯绿色背景）、
+`TemplateMatchMode` 与 `MaxMatchCount`，并兼容 `TemplateMatch(mat, true)` 构造重载。
 `GameCaptureRegion.gameRegion1080PPosClick()` 会直接使用 1920×1080 参考坐标触控，
 背包任务相关的 `GridScreenName` 和 `ItemIconRecognitionMode` 枚举也已暴露。
 `DesktopRegion`、`Color`、`Pen`、`BvImage` 以及 `OpenCvSharp.Vec3b` 已提供；其中

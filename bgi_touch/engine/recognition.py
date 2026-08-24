@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from typing import TYPE_CHECKING, Optional
 
@@ -110,6 +111,13 @@ class RecognitionObject:
         self.roi: tuple[float, float, float, float] | None = None  # ref 空间 x,y,w,h
         self.threshold = 0.8
         self.name = ""
+        self.use_3_channels = False
+        self.template_match_mode = cv2.TM_CCOEFF_NORMED
+        self.use_mask = False
+        self.mask_color = (0, 255, 0)  # BGR
+        self.mask_mat: Mat | None = None
+        self.draw_on_window = False
+        self.max_match_count = -1
         self.one_contain_match_text: list[str] = []
         self.all_contain_match_text: list[str] = []
         self.regex_match_text: list[str] = []
@@ -120,9 +128,38 @@ class RecognitionObject:
         ro = cls()
         ro.recognition_type = "TemplateMatch"
         ro.template = mat
-        if None not in (x, y, w, h):
+        if isinstance(x, bool):
+            ro.use_mask = x
+            if y is not None:
+                ro.mask_color = cls._parse_mask_color(y)
+        elif None not in (x, y, w, h):
             ro.roi = (x, y, w, h)
-        return ro
+        return ro.init_template()
+
+    @staticmethod
+    def _parse_mask_color(value) -> tuple[int, int, int]:
+        value = getattr(value, "__wrapped__", value)
+        if isinstance(value, dict):
+            folded = {str(key).casefold(): item for key, item in value.items()}
+            return (
+                int(folded.get("b", folded.get("blue", 0))),
+                int(folded.get("g", folded.get("green", 255))),
+                int(folded.get("r", folded.get("red", 0))),
+            )
+        channels = []
+        for name in ("B", "G", "R"):
+            channel = getattr(value, name, getattr(value, name.lower(), None))
+            if channel is None:
+                channels = []
+                break
+            channels.append(int(channel))
+        if channels:
+            return tuple(channels)
+        if isinstance(value, (list, tuple)) and len(value) >= 3:
+            # BetterGI accepts System.Drawing.Color; array callers generally
+            # provide RGB, so convert it to OpenCV's BGR order.
+            return int(value[2]), int(value[1]), int(value[0])
+        return (0, 255, 0)
 
     @classmethod
     def ocr(cls, x: float, y: float, w: float, h: float) -> "RecognitionObject":
@@ -159,6 +196,37 @@ class RecognitionObject:
         lambda self: self.template,
         lambda self, value: setattr(self, "template", value),
     )
+    templateImageGreyMat = property(
+        lambda self: Mat(self.template.gray()) if self.template is not None else None,
+    )
+    use3Channels = property(
+        lambda self: self.use_3_channels,
+        lambda self, value: setattr(self, "use_3_channels", bool(value)),
+    )
+    templateMatchMode = property(
+        lambda self: self.template_match_mode,
+        lambda self, value: setattr(self, "template_match_mode", int(value)),
+    )
+    useMask = property(
+        lambda self: self.use_mask,
+        lambda self, value: setattr(self, "use_mask", bool(value)),
+    )
+    maskColor = property(
+        lambda self: self.mask_color,
+        lambda self, value: setattr(self, "mask_color", self._parse_mask_color(value)),
+    )
+    maskMat = property(
+        lambda self: self.mask_mat,
+        lambda self, value: setattr(self, "mask_mat", getattr(value, "__wrapped__", value)),
+    )
+    drawOnWindow = property(
+        lambda self: self.draw_on_window,
+        lambda self, value: setattr(self, "draw_on_window", bool(value)),
+    )
+    maxMatchCount = property(
+        lambda self: self.max_match_count,
+        lambda self, value: setattr(self, "max_match_count", int(value)),
+    )
     oneContainMatchText = property(
         lambda self: self.one_contain_match_text,
         lambda self, value: setattr(self, "one_contain_match_text", list(value)),
@@ -174,6 +242,7 @@ class RecognitionObject:
     RecognitionType = recognitionType
     RegionOfInterest = regionOfInterest
     TemplateImageMat = templateImageMat
+    TemplateImageGreyMat = templateImageGreyMat
     Name = property(
         lambda self: self.name,
         lambda self, value: setattr(self, "name", str(value)),
@@ -182,14 +251,33 @@ class RecognitionObject:
         lambda self: self.threshold,
         lambda self, value: setattr(self, "threshold", float(value)),
     )
+    Use3Channels = use3Channels
+    TemplateMatchMode = templateMatchMode
+    UseMask = useMask
+    MaskColor = maskColor
+    MaskMat = maskMat
+    DrawOnWindow = drawOnWindow
+    MaxMatchCount = maxMatchCount
     OneContainMatchText = oneContainMatchText
     AllContainMatchText = allContainMatchText
     RegexMatchText = regexMatchText
 
     def init_template(self) -> "RecognitionObject":
+        if self.use_mask and self.template is not None and self.mask_mat is None:
+            color = np.array(self.mask_color, dtype=np.uint8)
+            ignored = cv2.inRange(self.template.bgr, color, color)
+            self.mask_mat = Mat(cv2.bitwise_not(ignored))
         return self
 
     initTemplate = init_template
+    InitTemplate = init_template
+
+    def clone(self) -> "RecognitionObject":
+        # BetterGI shares Mat/list references when cloning RecognitionObject;
+        # copy.copy preserves that contract while isolating scalar options.
+        return copy.copy(self)
+
+    Clone = clone
 
     def dispose(self) -> None:
         """OpenCV resources are Python-owned; retain BetterGI lifecycle API."""
@@ -490,20 +578,37 @@ class ImageRegion(Region):
                 raise ValueError("TemplateMatch 缺少模板图像")
             if not isinstance(template, Mat):
                 raise TypeError("TemplateMatch 模板必须为 Mat")
-            tpl = template.gray()
+            ro.init_template()
+            tpl = template.bgr if ro.use_3_channels else template.gray()
             th, tw = tpl.shape[:2]
             tpl = cv2.resize(tpl, (max(1, round(tw * t.scale)), max(1, round(th * t.scale))),
                              interpolation=cv2.INTER_AREA if t.scale < 1 else cv2.INTER_LINEAR)
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            if gray.shape[0] < tpl.shape[0] or gray.shape[1] < tpl.shape[1]:
+            source = crop if ro.use_3_channels else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            if source.shape[0] < tpl.shape[0] or source.shape[1] < tpl.shape[1]:
                 results = []
                 if callable(fail_action):
                     fail_action()
                 return results
-            res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+            mask = None
+            mask_mat = getattr(ro.mask_mat, "__wrapped__", ro.mask_mat)
+            if ro.use_mask and isinstance(mask_mat, Mat) and not mask_mat.empty():
+                mask = mask_mat.bgr
+                if mask.ndim == 3:
+                    mask = mask[:, :, 0]
+                mask = cv2.resize(
+                    mask, (tpl.shape[1], tpl.shape[0]), interpolation=cv2.INTER_NEAREST,
+                )
+            method = int(ro.template_match_mode)
+            res = cv2.matchTemplate(source, tpl, method, mask=mask)
+            if method in (cv2.TM_SQDIFF, cv2.TM_CCORR, cv2.TM_CCOEFF):
+                res = cv2.normalize(res, None, 0, 1, cv2.NORM_MINMAX)
+            work = 1.0 - res if method in (cv2.TM_SQDIFF, cv2.TM_SQDIFF_NORMED) else res
+            work = np.nan_to_num(work, nan=-1.0, posinf=-1.0, neginf=-1.0)
             out: list[Region] = []
-            work = res.copy()
-            for _ in range(max(1, limit)):
+            match_limit = max(1, int(limit))
+            if ro.max_match_count > 0:
+                match_limit = min(match_limit, ro.max_match_count)
+            for _ in range(match_limit):
                 _, max_val, _, max_loc = cv2.minMaxLoc(work)
                 if max_val < ro.threshold:
                     break
