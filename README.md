@@ -72,10 +72,11 @@ bgi-touch launch                       # 启动原神
 bgi-touch close-game                   # 测试后停止/后台挂起原神
 bgi-touch screenshot -o shot.png       # 截图（自动转横屏）
 bgi-touch calibrate -o cal.png         # 输出布局标注图，用于校准触控坐标
-bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/pathing/键鼠宏/战斗txt）
+bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/pathing/键鼠宏/战斗txt/json）
 bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼容）
 bgi-touch notify "测试消息"             # 测试 Gotify；不会连接 iPhone
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
+bgi-touch combat 公式化锄地.json          # 执行 BetterGI JSON 优先级战斗策略
 bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑页完成未演奏曲目
 bgi-touch task MusicPlayer --config '{"file":"score.json","customBpm":120}' # 自由演奏曲谱
@@ -117,7 +118,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 模板匹配 / OCR（RapidOCR=PaddleOCR 模型） | ✅ |
 | JS 兼容运行时（sleep/log/settings/file/http/识别/键鼠 API） | ✅ 自测通过 |
 | BetterGI 通知 / Gotify（JS 权限、事件订阅、后台队列） | ✅ 离线与请求契约测试通过 |
-| 战斗策略 DSL（combat txt / action_params） | ✅ 解析+执行 |
+| 战斗策略（combat txt / JSON 优先级 / action_params） | ✅ 解析+执行；JSON 社区语料离线验证 |
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |
 | WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
@@ -132,7 +133,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 实时触发器（AutoPick / AutoSkip 选项、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
-| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ AutoFight 已接入队伍页确认与快速检查；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
+| SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ AutoFight 已接入 TXT/JSON 策略、条件历史、技能条件、队伍页确认与快速检查；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ AutoFishing 已含找鱼、选饵、HutaoFisher 抛竿、提竿与拉条闭环；需真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | 自由演奏 MusicPlayer | ⚠️ 原琴/MIDI JSON/网络键谱、播放模式、自定义 BPM、自动换乐器已迁移；21 键布局待真机校准 |

@@ -117,12 +117,24 @@ def cmd_convert(args) -> int:
 
 
 def cmd_combat(args) -> int:
-    from .combat.dsl import CombatExecutor
     ctx = _context(args)
-    executor = CombatExecutor.for_context(ctx, party_slots=_load_party())
-    executor.run(Path(args.file).read_text(encoding="utf-8"))
-    ctx.close()
-    return 0
+    try:
+        path = Path(args.file)
+        if path.suffix.casefold() == ".json":
+            from .tasks.auto_fight import AutoFightTask
+            result = AutoFightTask(
+                ctx,
+                str(path),
+                timeout_s=args.timeout,
+                party_slots=_load_party(),
+            ).run()
+            return 0 if result else 1
+        from .combat.dsl import CombatExecutor
+        executor = CombatExecutor.for_context(ctx, party_slots=_load_party())
+        executor.run(path.read_text(encoding="utf-8"))
+        return 0
+    finally:
+        ctx.close()
 
 
 def cmd_task(args) -> int:
@@ -330,8 +342,9 @@ def main() -> int:
     p = sub.add_parser("convert", help="转换 bettergi-scripts-list 脚本")
     p.add_argument("sources", nargs="+")
     p.add_argument("-o", "--output", default="scripts")
-    p = sub.add_parser("combat", help="执行战斗策略 .txt")
+    p = sub.add_parser("combat", help="执行战斗策略 .txt/.json")
     p.add_argument("file")
+    p.add_argument("--timeout", type=float, default=120, help="JSON 策略超时秒数")
     p = sub.add_parser("task", help="执行 BetterGI SoloTask（含自动吃药/音游/七圣召唤/幽境）")
     p.add_argument("name", help="SoloTask 名称")
     p.add_argument("--config", default="{}", help="内联 JSON 参数")

@@ -5,7 +5,7 @@
   内嵌键鼠宏资产同时转出 .touch.json 预览
 - pathing JSON（含 positions 数组）→ 校验 + 统计 + 复制
 - 键鼠宏 JSON（含 macroEvents）→ 触控时间线 .touch.json
-- 战斗策略 .txt → DSL 校验 + 复制
+- 战斗策略 .txt/.json → DSL/优先级策略校验 + 复制
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import shutil
 from pathlib import Path
 
 from ..combat.dsl import parse_combat_script
+from ..combat.json_strategy import load_json_strategy
 from ..macro.keymouse import convert_keymouse
 from ..pathing.model import PathingTask
 from ..engine.js_modules import rewrite_import_specifiers
@@ -99,6 +100,9 @@ def detect_kind(path: Path) -> str:
             return "keymouse"
         if isinstance(raw, dict) and "positions" in raw:
             return "pathing"
+        normalized = {str(key).casefold() for key in raw} if isinstance(raw, dict) else set()
+        if {"info", "actions"}.issubset(normalized):
+            return "combat"
         return "unknown"
     if path.suffix.lower() == ".txt":
         return "combat"
@@ -127,12 +131,17 @@ def convert_pathing_file(src: Path, out_dir: Path) -> tuple[Path, dict]:
     return out, task.summary()
 
 
-def convert_combat_file(src: Path, out_dir: Path) -> tuple[Path, int]:
-    lines = parse_combat_script(src.read_text(encoding="utf-8"))
+def convert_combat_file(src: Path, out_dir: Path) -> tuple[Path, dict[str, int]]:
+    if src.suffix.casefold() == ".json":
+        strategy = load_json_strategy(src)
+        stats = {"actions": len(strategy.actions)}
+    else:
+        lines = parse_combat_script(src.read_text(encoding="utf-8"))
+        stats = {"lines": len(lines)}
     out = out_dir / src.name
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(src, out)
-    return out, len(lines)
+    return out, stats
 
 
 def scan_js_compat(pkg_dir: Path) -> dict:
@@ -248,6 +257,6 @@ def convert_any(src: str | Path, out_dir: str | Path) -> dict:
         out, summary = convert_pathing_file(src, out_dir / "pathing")
         return {"kind": kind, "output": str(out), **summary}
     if kind == "combat":
-        out, n = convert_combat_file(src, out_dir / "combat")
-        return {"kind": kind, "output": str(out), "lines": n}
+        out, stats = convert_combat_file(src, out_dir / "combat")
+        return {"kind": kind, "output": str(out), **stats}
     raise ValueError(f"无法识别脚本类型: {src}")

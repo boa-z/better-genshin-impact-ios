@@ -460,6 +460,11 @@ attack(2), jump, w(0.5)            // 无角色名 = 当前角色：普攻2秒�
 `dash(秒)`、`jump`、`w/a/s/d(秒)`、`walk(方向,秒)`、`wait(秒)`、`aim`、
 `keydown/keyup/keypress(键)`、`moveby(dx,dy)`（转视角）、`ready`、`check`。
 
+`bgi-touch combat strategy.json` 也可直接执行 BetterGI JSON 优先级策略，支持
+`Info.PreActions`、`MorePriorities`、`EnsureCast`，以及 `t/battle-time`、
+`since/count/last-exec`、`q-ready/e-ready/e-cd/low-hp`、`in-party/onfield`、
+`min/max/last-check` 条件。每轮条件判断只获取一张 DeviceHub 截图并在所有视觉条件间复用。
+
 `AutoFight` 的 `finishDetectConfig` 兼容 BetterGI 最新的 `fastCheckEnabled`、
 `fastCheckParams`、`checkAfterSwitchAvatar`、`checkEndDelay`、`beforeDetectDelay`、
 `skipFightEndCheckWhenEnemyVisible`、`blockCheckBeforeBattleSeconds`、
