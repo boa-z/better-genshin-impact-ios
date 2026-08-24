@@ -74,6 +74,22 @@
       "nx": 0.8296257062146892,
       "ny": 0.06572637686719256
     },
+    "inventory": {
+      "nx": 0.8725337658898306,
+      "ny": 0.06712302491188529
+    },
+    "characterMenu": {
+      "nx": 0.924183,
+      "ny": 0.056713
+    },
+    "notificationDetails": {
+      "nx": 0.2282673463983051,
+      "ny": 0.05633346920181265
+    },
+    "specialEnvironmentInfo": {
+      "nx": 0.656294138418079,
+      "ny": 0.06054139592874098
+    },
     "paimonMenu": {
       "nx": 0.065,
       "ny": 0.06
@@ -85,6 +101,22 @@
     "questNavigation": {
       "nx": 0.09708658854166669,
       "ny": 0.2976794122766565
+    },
+    "tutorialDetails": {
+      "nx": 0.6337782091564607,
+      "ny": 0.4143798178213614
+    },
+    "contextInteraction": {
+      "nx": 0.7573920355902778,
+      "ny": 0.6742144097222222
+    },
+    "drop": {
+      "nx": 0.9580629855225988,
+      "ny": 0.950589829045484
+    },
+    "chat": {
+      "nx": 0.07227665960451977,
+      "ny": 0.921104370968902
     },
     "partyRow1": {
       "nx": 0.96,
@@ -149,7 +181,7 @@
     },
     "T": {
       "type": "button",
-      "button": "gadget"
+      "button": "contextInteraction"
     },
     "R": {
       "type": "button",
@@ -158,6 +190,37 @@
     "M": {
       "type": "button",
       "button": "map"
+    },
+    "B": {
+      "type": "button",
+      "button": "inventory",
+      "profileCode": "KeyC"
+    },
+    "C": {
+      "type": "button",
+      "button": "characterMenu",
+      "profileCode": null
+    },
+    "X": {
+      "type": "button",
+      "button": "drop",
+      "profileCode": "ControlLeft"
+    },
+    "ENTER": {
+      "type": "button",
+      "button": "chat"
+    },
+    "Y": {
+      "type": "button",
+      "button": "notificationDetails"
+    },
+    "U": {
+      "type": "button",
+      "button": "specialEnvironmentInfo"
+    },
+    "G": {
+      "type": "button",
+      "button": "tutorialDetails"
     },
     "F1": {
       "type": "button",

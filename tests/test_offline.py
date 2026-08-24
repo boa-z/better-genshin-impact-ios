@@ -112,6 +112,7 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
             {"type": "Press", "bind": ["KeyE"], "position": {"x": 0.72, "y": 0.89}},
             {"type": "Press", "bind": ["KeyR"], "position": {"x": 0.697, "y": 0.746}},
             {"type": "Press", "bind": ["KeyX"], "position": {"x": 0.795, "y": 0.778}},
+            {"type": "Press", "bind": ["ControlLeft"], "position": {"x": 0.958, "y": 0.951}},
             {"type": "Press", "bind": ["KeyO"], "position": {"x": 0.742, "y": 0.064}},
             {
                 "type": "DirectionPad",
@@ -131,6 +132,7 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
     assert layout.profile_key("LSHIFT") == "Space"
     assert layout.profile_key_for_button("aim") == "KeyR"
     assert layout.profile_key_for_button("attack") == "KeyX"
+    assert layout.profile_key("X") == "ControlLeft"
     assert layout.profile_key("F5") == "KeyO"
 
     class FakeDevice:
@@ -167,6 +169,7 @@ def test_devicehub_profile_maps_native_codes_to_bettergi_keys():
         ("session-1", ["Space"]),
     ]
     assert ("session-1", ["Space", "KeyE"]) in device.inputs
+    assert ("session-1", ["Space", "ControlLeft"]) in device.inputs
     assert ("session-1", ["Space", "KeyX"]) in device.inputs
     assert device.inputs[-2:] == [
         ("session-1", ["Space", "KeyX"]),

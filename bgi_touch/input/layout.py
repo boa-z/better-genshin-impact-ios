@@ -194,10 +194,14 @@ class ControlLayout:
         if profile is None:
             return None
         binding = self.binding(key)
-        if binding is not None and binding.get("profileCode"):
-            raw = profile.raw_key_for(str(binding["profileCode"]))
-            if raw is not None:
-                return raw
+        if binding is not None and "profileCode" in binding:
+            # A null/empty override is deliberate: some user profiles use a
+            # familiar PC key merely as an arbitrary touch trigger.  Falling
+            # back to that raw label would restore the wrong PC semantics.
+            profile_code = binding.get("profileCode")
+            if profile_code is None or not str(profile_code).strip():
+                return None
+            return profile.raw_key_for(str(profile_code))
         return profile.raw_key_for(key)
 
     def profile_key_for_button(self, name: str) -> str | None:
@@ -207,9 +211,13 @@ class ControlLayout:
             return None
         # Prefer the explicit BetterGI semantic binding. Coordinate matching is
         # only a fallback for buttons such as attack that have no key binding.
+        has_semantic_binding = False
         for key, binding in self.key_map.items():
             if binding.get("type") == "button" and binding.get("button") == name:
+                has_semantic_binding = True
                 raw = self.profile_key(key)
                 if raw is not None:
                     return raw
+        if has_semantic_binding:
+            return None
         return profile.nearest_press_key(position)
