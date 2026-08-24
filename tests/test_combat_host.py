@@ -107,6 +107,6 @@ return JSON.stringify({
     input_simulator.key_down.assert_called_once_with("W")
     input_simulator.key_up.assert_called_once_with("W")
     input_simulator.move_camera_by.assert_called_once_with(12.0, -8.0)
-    input_simulator.button_down.assert_called_once_with("aim")
-    input_simulator.button_up.assert_called_once_with("aim")
+    input_simulator.button_down.assert_called_once_with("sprint")
+    input_simulator.button_up.assert_called_once_with("sprint")
     input_simulator.release_all.assert_called_once_with()

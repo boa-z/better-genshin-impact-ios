@@ -167,21 +167,21 @@ class Avatar:
         if value == "left":
             self.ctx.input.attack_down()
         elif value == "right":
-            self.ctx.input.button_down("aim")
+            self.ctx.input.button_down("sprint")
 
     def mouse_up(self, key: str = "left") -> None:
         value = str(key).lower()
         if value == "left":
             self.ctx.input.attack_up()
         elif value == "right":
-            self.ctx.input.button_up("aim")
+            self.ctx.input.button_up("sprint")
 
     def click(self, key: str = "left") -> None:
         value = str(key).lower()
         if value == "left":
             self.ctx.input.attack()
         elif value == "right":
-            self.ctx.input.key_press("R")
+            self.ctx.input.key_press("LSHIFT")
 
     def move_by(self, x: float, y: float) -> None:
         self.move_camera(x, y)

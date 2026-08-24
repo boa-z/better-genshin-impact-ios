@@ -271,9 +271,10 @@ class JsScriptRuntime:
         expose("leftButtonClick", lambda: ctx.input.attack())
         expose("leftButtonDown", lambda: ctx.input.attack_down())
         expose("leftButtonUp", lambda: ctx.input.attack_up())
-        expose("rightButtonClick", lambda: ctx.input.key_press("R"))
-        expose("rightButtonDown", lambda: ctx.input.button_down("aim"))
-        expose("rightButtonUp", lambda: ctx.input.button_up("aim"))
+        # Genshin's default PC right mouse binding is sprint, not aimed mode.
+        expose("rightButtonClick", lambda: ctx.input.key_press("LSHIFT"))
+        expose("rightButtonDown", lambda: ctx.input.button_down("sprint"))
+        expose("rightButtonUp", lambda: ctx.input.button_up("sprint"))
         expose("middleButtonClick", lambda: None)
         expose("middleButtonDown", lambda: None)
         expose("middleButtonUp", lambda: None)

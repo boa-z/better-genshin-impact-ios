@@ -171,8 +171,8 @@ def test_dsl_mouse_down_up_maps_to_touch_holds():
         executor.exec(command)
     input_sim.attack_down.assert_called_once_with()
     input_sim.attack_up.assert_called_once_with()
-    assert input_sim.button_down.call_args_list == [call("aim")]
-    assert input_sim.button_up.call_args_list == [call("aim")]
+    assert input_sim.button_down.call_args_list == [call("sprint")]
+    assert input_sim.button_up.call_args_list == [call("sprint")]
 
 
 def test_upstream_default_macro_corpus_is_fully_supported():

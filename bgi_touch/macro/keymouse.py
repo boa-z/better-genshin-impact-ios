@@ -33,7 +33,7 @@ def vk_to_key(code: int) -> str | None:
 @dataclass
 class TouchEvent:
     t: float  # ms since start
-    kind: str  # keyDown / keyUp / cameraBy / verticalScroll / tapRef / attackDown / attackUp
+    kind: str  # keyDown / keyUp / cameraBy / verticalScroll / tapRef / attack* / sprint*
     key: str | None = None
     x: float = 0
     y: float = 0
@@ -104,16 +104,18 @@ def convert_keymouse(macro: dict) -> tuple[list[TouchEvent], list[str]]:
             cursor = (float(ev.get("mouseX", 0)) * sx, float(ev.get("mouseY", 0)) * sy)
             cursor_fresh = True
         elif etype in (4, 5):
-            button = ev.get("mouseButton", "Left")
-            if button != "Left":
-                continue  # 右/中键无触控对应
-            if etype == 4:
+            button = str(ev.get("mouseButton", "Left")).casefold()
+            if button == "right":
+                events.append(TouchEvent(
+                    t=t, kind="sprintDown" if etype == 4 else "sprintUp",
+                ))
+            elif button == "left" and etype == 4:
                 if cursor_fresh and cursor:
                     events.append(TouchEvent(t=t, kind="tapRef", x=cursor[0], y=cursor[1]))
                     cursor_fresh = False
                 else:
                     events.append(TouchEvent(t=t, kind="attackDown"))
-            else:
+            elif button == "left":
                 if events and events[-1].kind == "attackDown":
                     # down/up 配对 → 由回放端按时长决定普攻或蓄力
                     events.append(TouchEvent(t=t, kind="attackUp"))
@@ -151,6 +153,10 @@ class MacroPlayer:
                 self.input.move_camera_by(ev.x, ev.y)
             elif ev.kind == "verticalScroll":
                 self.input.vertical_scroll(ev.amount)
+            elif ev.kind == "sprintDown":
+                self.input.button_down("sprint")
+            elif ev.kind == "sprintUp":
+                self.input.button_up("sprint")
             elif ev.kind == "tapRef":
                 self.input.click_ref(ev.x, ev.y)
             elif ev.kind == "attackDown":
