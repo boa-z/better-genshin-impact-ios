@@ -193,8 +193,9 @@ def cmd_pathing(args) -> int:
 def cmd_trigger(args) -> int:
     """长驻运行实时触发器（Ctrl-C 停止）。"""
     ctx = _context(args)
-    if not (args.pick or args.skip or args.eat or args.map_mask or args.skill_cd):
-        print("未指定触发器（--pick / --skip / --eat / --map-mask / --skill-cd）")
+    if not (args.pick or args.skip or args.eat or args.map_mask or args.skill_cd
+            or args.quick_teleport):
+        print("未指定触发器（--pick / --skip / --eat / --map-mask / --skill-cd / --quick-teleport）")
         ctx.close()
         return 2
     try:
@@ -208,6 +209,8 @@ def cmd_trigger(args) -> int:
             ctx.enable_trigger("MapMask", map_name=args.map_name)
         if args.skill_cd:
             ctx.enable_trigger("SkillCd", party_slots=_load_party())
+        if args.quick_teleport:
+            ctx.enable_trigger("QuickTeleport")
         import time
         while True:
             time.sleep(1)
@@ -285,6 +288,7 @@ def main() -> int:
     p.add_argument("--map-mask", action="store_true", help="地图遮罩与位置追踪")
     p.add_argument("--map-name", default="Teyvat", help="追踪地图名称（默认 Teyvat）")
     p.add_argument("--skill-cd", action="store_true", help="显示四人队伍元素战技冷却")
+    p.add_argument("--quick-teleport", action="store_true", help="地图选点后自动确认传送")
 
     args = parser.parse_args()
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,

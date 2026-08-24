@@ -878,6 +878,17 @@ class TaskDispatcher:
                 "GameLoading",
                 timeout_s=float(_value(config, "timeoutSeconds", 300) or 300),
             )
+        elif name in ("QuickTeleport", "快速传送"):
+            self.ctx.enable_trigger(
+                "QuickTeleport",
+                teleport_list_click_delay_ms=int(
+                    _value(config, "teleportListClickDelay", 200) or 0
+                ),
+                wait_teleport_panel_delay_ms=int(
+                    _value(config, "waitTeleportPanelDelay", 50) or 0
+                ),
+                hotkey_tp_enabled=bool(_value(config, "hotkeyTpEnabled", False)),
+            )
         else:
             self.ctx.enable_trigger(name)
 

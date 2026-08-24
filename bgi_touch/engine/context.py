@@ -258,9 +258,12 @@ class GameContext:
         elif name in ("GameLoading", "自动开门"):
             from ..triggers.game_loading import GameLoadingTrigger
             self.triggers.add(GameLoadingTrigger(self, log=self.triggers.log, **kwargs))
+        elif name in ("QuickTeleport", "快速传送"):
+            from ..triggers.quick_teleport import QuickTeleportTrigger
+            self.triggers.add(QuickTeleportTrigger(self, log=self.triggers.log, **kwargs))
         else:
             raise ValueError(
-                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask/SkillCd/GameLoading）"
+                f"未知触发器 {name}（支持 AutoPick/AutoSkip/AutoEat/MapMask/SkillCd/GameLoading/QuickTeleport）"
             )
         self.triggers.start()
 

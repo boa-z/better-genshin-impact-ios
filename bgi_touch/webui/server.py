@@ -524,7 +524,7 @@ def api_triggers_set(body: dict):
     """Toggle realtime triggers without creating extra capture producers."""
     try:
         ctx = get_ctx()
-        for name in ("AutoPick", "AutoSkip", "AutoEat", "SkillCd"):
+        for name in ("AutoPick", "AutoSkip", "AutoEat", "SkillCd", "QuickTeleport"):
             if name not in body:
                 continue
             if body[name]:
@@ -537,6 +537,21 @@ def api_triggers_set(body: dict):
         return {"active": [t.name for t in ctx.triggers.triggers]}
     except Exception as e:
         return _err(e)
+
+
+@app.post("/api/quick-teleport/tick")
+def api_quick_teleport_tick():
+    """Arm one QuickTeleport pass for manual-hotkey mode."""
+    try:
+        ctx = get_ctx()
+        trigger = ctx.triggers.get("QuickTeleport")
+        if trigger is None:
+            ctx.enable_trigger("QuickTeleport", hotkey_tp_enabled=True)
+            trigger = ctx.triggers.get("QuickTeleport")
+        trigger.activate()
+        return {"ok": True, "active": True}
+    except Exception as error:
+        return _err(error)
 
 
 # ---- BetterGI 技能冷却提示 ----

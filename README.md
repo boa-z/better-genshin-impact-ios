@@ -84,6 +84,7 @@ bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
 bgi-touch trigger --map-mask --map-name Teyvat  # 长驻地图遮罩/坐标追踪
 bgi-touch trigger --skill-cd            # 四人队伍元素战技冷却提示
+bgi-touch trigger --quick-teleport      # 地图选点后自动点击候选项与传送
 bgi-touch web                          # WebUI 控制台（实况画面/点按/脚本管理）
 ```
 
@@ -114,6 +115,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | MapMask 地图遮罩（小地图坐标/大地图视野/多楼层/WebUI 本地底图） | ✅ 离线链路，待真机视觉回归 |
 | SkillCd 技能冷却（输入边沿/缓存帧 OCR/角色 CD 兜底/WebUI 遮罩） | ✅ 离线回归，待真机视觉阈值验证 |
 | GameLoading 自动开门（进入/顶号确认/适龄提示/月卡与原石弹窗） | ✅ 离线链路，待真机门页复验 |
+| QuickTeleport 快速传送（候选点识别/列表选择/传送确认） | ✅ 离线链路，待真机地图面板复验 |
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
 | pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路；已接入锄地日上限与统计，待真机路线实测 |
 | 实时触发器（AutoPick / AutoSkip 选项、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
