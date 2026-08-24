@@ -94,6 +94,7 @@ class TaskDispatcher:
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment", "OneDragon", "ScriptGroup", "MusicPlayer", "Shell",
+        "OneKeyExpedition",
     })
 
     def __init__(
@@ -184,6 +185,8 @@ class TaskDispatcher:
             return self.run_quick_serenitea_pot_task(cfg, ct)
         if name in ("QuickClaimReward", "OneKeyClaimReward"):
             return self.run_quick_claim_reward_task(cfg, ct)
+        if name in ("OneKeyExpedition", "Expedition"):
+            return self.run_one_key_expedition_task(cfg, ct)
         if name in ("QuickBuy", "BuyMax"):
             return self.run_quick_buy_task(cfg, ct)
         if name in ("UseRedemptionCode", "UseRedeemCode", "AutoRedeemCode"):
@@ -722,6 +725,18 @@ class TaskDispatcher:
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
+    def run_one_key_expedition_task(self, param: Any = None, ct: Any = None) -> bool:
+        from .expedition import OneKeyExpeditionTask
+
+        return OneKeyExpeditionTask(
+            self.ctx,
+            collect_retries=int(_value(param, "collectRetries", 2) or 2),
+            redispatch_retries=int(_value(param, "redispatchRetries", 3) or 3),
+            timeout_s=float(_value(param, "timeoutSeconds", 12) or 12),
+            close_page=_boolean(_value(param, "closePage", True), True),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
     def run_quick_buy_task(self, param: Any = None, ct: Any = None) -> bool:
         from .quick_buy import QuickBuyTask
 
@@ -917,6 +932,9 @@ class TaskDispatcher:
                     0, int(_value(config, "beforeClickConfirmDelay", 0) or 0)
                 ),
                 close_popup_pages=bool(_value(config, "closePopupPagedEnabled", True)),
+                auto_re_explore_enabled=_boolean(
+                    _value(config, "autoReExploreEnabled", True), True,
+                ),
             )
         elif name in ("MapMask", "地图遮罩"):
             self.ctx.enable_trigger(

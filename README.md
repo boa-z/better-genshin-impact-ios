@@ -81,6 +81,7 @@ bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --co
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑页完成未演奏曲目
 bgi-touch task MusicPlayer --config '{"file":"score.json","customBpm":120}' # 自由演奏曲谱
 bgi-touch task QuickSereniteaPot       # 从背包部署并进入/离开尘歌壶
+bgi-touch task OneKeyExpedition         # 在探索派遣页全部领取并再次派遣
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
 bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
@@ -130,7 +131,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | QuickTeleport 快速传送（候选点识别/列表选择/传送确认） | ✅ 离线链路，待真机地图面板复验 |
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
 | pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路；已接入锄地日上限与统计，待真机路线实测 |
-| 实时触发器（AutoPick / AutoSkip 选项、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
+| 实时触发器（AutoPick / AutoSkip 选项、派遣、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
 | SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ AutoFight 已接入 TXT/JSON 策略、条件历史、技能条件、队伍页确认与快速检查；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
@@ -138,7 +139,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | 自由演奏 MusicPlayer | ⚠️ 原琴/MIDI JSON/网络键谱、播放模式、自定义 BPM、自动换乐器已迁移；21 键布局待真机校准 |
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ Boss/地脉内置官方路线与树脂策略；幽境已迁移活动导航与领奖状态机；七圣召唤需策略 |
-| 快捷任务：尘歌壶 / 一键领取 / 快速购买 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
+| 快捷任务：尘歌壶 / 一键领取 / 探索派遣 / 快速购买 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
 | SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |

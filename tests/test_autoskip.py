@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -101,6 +102,35 @@ def test_autoskip_custom_priority_still_applies_to_no_default_selection():
 
     first.click.assert_not_called()
     target.click.assert_called_once_with()
+
+
+def test_autoskip_expedition_option_runs_one_key_task():
+    from bgi_touch.tasks.expedition import OneKeyExpeditionTask
+
+    trigger, ctx, _clock = make_trigger(auto_re_explore_enabled=True)
+    option = Hit(x=1200, y=500)
+    region = Region(trigger, options=[option], texts={500: "探索派遣"})
+
+    with patch.object(OneKeyExpeditionTask, "run", return_value=True) as run:
+        trigger.on_frame(region)
+
+    option.click.assert_called_once_with()
+    ctx.sleep.assert_called_with(800)
+    run.assert_called_once_with()
+
+
+def test_autoskip_can_disable_expedition_automation():
+    from bgi_touch.tasks.expedition import OneKeyExpeditionTask
+
+    trigger, _ctx, _clock = make_trigger(auto_re_explore_enabled=False)
+    option = Hit(x=1200, y=500)
+    region = Region(trigger, options=[option], texts={500: "探索派遣"})
+
+    with patch.object(OneKeyExpeditionTask, "run") as run:
+        trigger.on_frame(region)
+
+    option.click.assert_called_once_with()
+    run.assert_not_called()
 
 
 def test_autoskip_page_close_requires_recent_dialogue_and_stable_detection():

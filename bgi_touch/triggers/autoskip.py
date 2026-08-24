@@ -43,6 +43,7 @@ class AutoSkipTrigger:
                  after_choose_delay_ms: int = 0,
                  before_confirm_delay_ms: int = 0,
                  close_popup_pages: bool = True,
+                 auto_re_explore_enabled: bool = True,
                  log: Callable[[str], None] = print,
                  clock: Callable[[], float] = time.monotonic,
                  main_ui_detector: Callable[[object, np.ndarray], bool] = is_main_ui,
@@ -56,6 +57,7 @@ class AutoSkipTrigger:
         self.after_choose_delay_ms = max(0, int(after_choose_delay_ms))
         self.before_confirm_delay_ms = max(0, int(before_confirm_delay_ms))
         self.close_popup_pages = bool(close_popup_pages)
+        self.auto_re_explore_enabled = bool(auto_re_explore_enabled)
         self.log = log
         self._clock = clock
         self._main_ui_detector = main_ui_detector
@@ -119,8 +121,8 @@ class AutoSkipTrigger:
 
         options = sorted(options, key=lambda option: option.y)
         chosen = None
+        texts = []
         if self.priority_texts:
-            texts = []
             for option in options:
                 line = region.find(RecognitionObject.ocr(
                     option.x + 30, option.y - 12, 800, 60
@@ -151,6 +153,19 @@ class AutoSkipTrigger:
         if self.after_choose_delay_ms:
             self.ctx.sleep(self.after_choose_delay_ms)
         chosen.click()
+        if self.auto_re_explore_enabled:
+            chosen_index = options.index(chosen)
+            if texts:
+                chosen_text = texts[chosen_index]
+            else:
+                line = region.find(RecognitionObject.ocr(
+                    chosen.x + 30, chosen.y - 12, 800, 60
+                ))
+                chosen_text = line.text if line.is_exist() else ""
+            if "探索" in chosen_text or "派遣" in chosen_text:
+                self.ctx.sleep(800)
+                from ..tasks.expedition import OneKeyExpeditionTask
+                OneKeyExpeditionTask(self.ctx, log=self.log).run()
         return True
 
     def _handle_post_dialogue_popup(self, region: ImageRegion, now: float) -> bool:

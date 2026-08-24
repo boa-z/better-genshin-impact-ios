@@ -264,8 +264,10 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `CreateDirectory`、`RenamePathSync` 和大小写不敏感调用，也为使用特性检测的社区
 脚本提供 `file.mkdir` 别名；所有创建、写入和重命名仍限制在当前脚本目录内。
 脚本也可按上游方式直接 `new ImageRegion(mat, x, y)` 对本地图片做识别，或通过
-`new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先文本、点击延迟和
-`closePopupPagedEnabled`。弹出页关闭仅在刚识别过对话后的有限窗口内生效，并要求
+`new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先文本、点击延迟、
+`autoReExploreEnabled` 和 `closePopupPagedEnabled`。开启自动重新派遣后，AutoSkip 只对
+实际选中的选项做一次本地 OCR；命中“探索/派遣”后在派遣页领取并再次派遣，不会增加
+触发器的 DeviceHub 截图请求。弹出页关闭仅在刚识别过对话后的有限窗口内生效，并要求
 关闭按钮连续两帧稳定命中；主界面、大地图、引导札记、聊天记录和且试身手不会被关闭。
 `BvPage/BvLocator` 的 OCR、模板定位、等待重试、点击和“点击直到消失”链式 API 也已
 接入同一截图上下文；`OpenCvSharp.OpenCvSharp.Rect` 会映射为 1080p 参考坐标 ROI。
@@ -309,9 +311,10 @@ bgi-touch task AutoAlbum --config '{"musicLevel":"传说","songCount":13}'
 # 自由演奏曲谱；与活动六轨 AutoMusicGame 是两个独立功能
 bgi-touch task MusicPlayer --config \
   '{"file":"score.json","playbackMode":"Sequential","useCustomBpm":true,"customBpm":120}'
-# 快捷尘歌壶、一键领取当前页面、兑换码
+# 快捷尘歌壶、一键领取当前页面、探索派遣、兑换码
 bgi-touch task QuickSereniteaPot
 bgi-touch task QuickClaimReward --config '{"scrollDown":true,"maxScrolls":3}'
+bgi-touch task OneKeyExpedition
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 # 安全预览：选择 1~4 星后停在复查页，不会执行最终分解
 bgi-touch task AutoArtifactSalvage --config '{"star":4}'
@@ -383,6 +386,8 @@ Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模�
 
 `QuickClaimReward` 复用 BetterGI 的“领取/礼物领取/点击空白继续”模板；开启
 `scrollDown` 后会把原版滚轮下滑语义转换为奖励列表内的触控上滑。
+`OneKeyExpedition` 应在已有派遣完成的探索派遣页运行：识别“全部领取”，等待奖励弹窗
+结束后识别“再次派遣”，成功后按 `ESCAPE` 退出；没有完成项时保持当前页面不变。
 `UseRedemptionCode` 会从主界面打开设置和账户页，使用 DeviceHub 文本输入逐个提交
 `codes`；任务结束会返回主界面。兑换结果保存在任务返回对象中并写入日志。
 

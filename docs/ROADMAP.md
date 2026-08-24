@@ -80,7 +80,7 @@
 
 ## P1 — 实时触发器与任务视觉回归
 
-AutoPick、AutoSkip 已有后台截图循环；AutoSkip 已对齐自定义选项优先级、黑屏推进、
+AutoPick、AutoSkip 已有后台截图循环；AutoSkip 已对齐自定义选项优先级、探索派遣领奖、黑屏推进、
 普通剧情页关闭、底部三角道具页与初见角色横幅，并保护主界面、大地图、引导札记、
 聊天记录和且试身手。需要在更多 iOS HUD 缩放下校准模板与颜色阈值。
 AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼类 YOLO、鱼饵 ItemV2 识别、
