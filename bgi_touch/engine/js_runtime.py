@@ -823,6 +823,28 @@ class JsScriptRuntime:
         )
         expose("oneKeyFight", wrap(self._one_key_fight), proxy=False)
 
+        from ..macro.hotkeys import HotkeyMacroHost
+        self._hotkey_macros = HotkeyMacroHost(
+            ctx,
+            runaround_mouse_x_interval=float(
+                self.settings.get("runaroundMouseXInterval", 500) or 1
+            ),
+            runaround_interval_ms=int(
+                self.settings.get("runaroundInterval", 10) or 0
+            ),
+            enhance_wait_delay_ms=int(
+                self.settings.get("enhanceWaitDelay", 0) or 0
+            ),
+            f_fire_interval_ms=int(
+                self.settings.get("fFireInterval", 100) or 100
+            ),
+            space_fire_interval_ms=int(
+                self.settings.get("spaceFireInterval", 100) or 100
+            ),
+            log=log,
+        )
+        expose("hotkeyMacros", wrap(self._hotkey_macros), proxy=False)
+
         # keyMouseScript / pathingScript
         player = MacroPlayer(ctx.input, sleep=ctx.sleep, log=log)
 
@@ -1282,6 +1304,9 @@ class JsScriptRuntime:
             one_key_fight = getattr(self, "_one_key_fight", None)
             if one_key_fight is not None:
                 one_key_fight.stop()
+            hotkey_macros = getattr(self, "_hotkey_macros", None)
+            if hotkey_macros is not None:
+                hotkey_macros.stop()
             key_mouse_hooks = getattr(self, "_key_mouse_hooks", None)
             if key_mouse_hooks is not None:
                 key_mouse_hooks.close_all()

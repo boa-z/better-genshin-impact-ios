@@ -109,6 +109,9 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
   `config/avatar_macro_default.json` 复制为本机私有的 `config/avatar_macro.json`；
   支持原版 1-5 优先级、`round(...)`、三种按键模式和文件热更新。脚本可用
   `KeyMouseHook` 把 WebUI 键盘的 keydown/keyup 分别绑定到 `KeyDown()` / `KeyUp()`。
+- 通用热键宏：JS host `hotkeyMacros` 提供 `TurnAround()`、
+  `QuickEnhanceArtifact()`，以及用于长按 F/Space 连发的 `KeyDown(key)` /
+  `KeyUp(key)`；这些操作只发送输入，不请求额外截图。
 
 ## 真机收尾
 
@@ -126,6 +129,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | BetterGI 通知 / Gotify（JS 权限、事件订阅、后台队列） | ✅ 离线与请求契约测试通过 |
 | 战斗策略（combat txt / JSON 优先级 / action_params） | ✅ 解析+执行；JSON 社区语料离线验证 |
 | 一键战斗宏（角色宏 / 轮次 / 三种热键模式 / 热更新） | ✅ 上游默认宏语料与状态机离线验证，待真机输入回归 |
+| 通用热键宏（转圈 / 快捷强化 / F、Space 长按连发） | ✅ 输入时序离线验证，待真机手感校准 |
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |
 | WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
