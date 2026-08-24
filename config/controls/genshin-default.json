@@ -58,6 +58,10 @@
       "nx": 0.128,
       "ny": 0.123
     },
+    "partySetup": {
+      "nx": 0.065,
+      "ny": 0.499
+    },
     "minimapCenter": {
       "nx": 0.128,
       "ny": 0.123
@@ -190,6 +194,11 @@
     "M": {
       "type": "button",
       "button": "map"
+    },
+    "L": {
+      "type": "button",
+      "button": "partySetup",
+      "profileCode": "KeyL"
     },
     "B": {
       "type": "button",

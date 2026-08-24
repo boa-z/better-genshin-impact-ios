@@ -74,7 +74,7 @@ PARTIAL = {
     "runAutoFightTask": "支持 combatStrategyPath、快速/切人后战斗结束检查、开战阻断、敌血条跳过与队伍页确认；掉落拾取等附加参数忽略",
     "runAutoBossTask": "支持 BetterGI AutoBoss 官方路线、树脂策略、征讨之花导航、奖励汇总和 routePath/pathingFile 覆盖",
     "runAutoLeyLine": "支持 269 个官方地脉点位、632 份路线、树脂耗尽策略、奖励树脂优先级和 routePath/pathingFile 覆盖",
-    "genshin.switchParty": "iOS 端按 config/party.json 切换当前角色槽位，不重组完整队伍",
+    "genshin.switchParty": "iOS 端使用 DeviceHub KeyL + OCR 切换游戏中的命名队伍；需要可用 OCR 和已导入的 Genshin profile",
     "genshin.setBigMapZoomLevel": "使用触控 pinch 近似 BetterGI 的 1.0-6.0 缩放等级",
     "genshin.autoFishing": "已迁移找鱼、选饵、抛竿、提竿、拉条与全天/昼夜时间策略闭环",
     "dispatcher.runAutoMusicGameTask": "已迁移六轨像素检测；需要先进入千音雅集曲目界面",

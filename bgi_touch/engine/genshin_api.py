@@ -269,30 +269,18 @@ class GenshinApi:
         return deg
 
     def switchParty(self, name):
-        """Switch the active character by the local party name mapping.
+        """Switch the game's named party through the iOS party UI."""
+        from .party import PartySwitcher
 
-        BetterGI's Windows implementation edits the full party composition.
-        On iOS this compatible method selects the corresponding visible slot;
-        `config/party.json` maps names to slots and can be replaced per user.
-        """
         try:
-            slot = int(name)
-        except (TypeError, ValueError):
-            config = Path(__file__).resolve().parents[2] / "config" / "party.json"
-            if not config.exists():
-                self.log("[genshin] 未找到 config/party.json")
-                return False
-            mapping = json.loads(config.read_text(encoding="utf-8"))
-            slot = mapping.get(str(name))
-            if isinstance(slot, dict):
-                slot = slot.get("slot")
-            if slot is None:
-                self.log(f"[genshin] 队伍配置中未找到角色/槽位：{name}")
-                return False
-        if int(slot) not in (1, 2, 3, 4):
+            return PartySwitcher(
+                self.ctx,
+                log=self.log,
+                return_main_ui=self.returnMainUi,
+            ).switch(str(name))
+        except Exception as error:
+            self.log(f"[genshin] 队伍切换失败：{error}")
             return False
-        self.ctx.input.switch_party_slot(int(slot))
-        return True
 
     def switchCharacter(self, slot1="", slot2="", slot3="", slot4="",
                         usePhysicalSlots=True):
