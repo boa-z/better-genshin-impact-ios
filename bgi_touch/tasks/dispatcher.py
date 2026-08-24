@@ -916,6 +916,12 @@ class TaskDispatcher:
                     "whitelistExclusions",
                     _value(config, "doNotPickList", None),
                 ),
+                blacklist_mode_pick_enabled=bool(_value(
+                    config, "blacklistModePickEnabled", False
+                )),
+                whitelist_mode_do_not_pick_enabled=bool(_value(
+                    config, "whitelistModeDoNotPickEnabled", True
+                )),
             )
         elif name in ("AutoEat", "自动吃药"):
             self.ctx.enable_trigger(

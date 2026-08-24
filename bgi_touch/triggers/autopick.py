@@ -15,21 +15,29 @@ from typing import Callable
 from ..engine.context import GameContext
 from ..engine.recognition import ImageRegion, RecognitionObject
 
-# 黑名单模式的移动端安全兜底（对话/进入类交互，交给 AutoSkip 或玩家）。
-DEFAULT_BLACKLIST = ["对话", "进入", "传送", "离开", "调查", "阅读", "操作", "开启", "参加"]
-DEFAULT_WHITELIST_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "assets" / "config" / "pick" / "default_pick_white_lists.json"
-)
+# Synced from BetterGI.Assets.Other 1.0.24, used by current upstream BetterGI.
+DEFAULT_LIST_ROOT = Path(__file__).resolve().parents[2] / "assets" / "config" / "pick"
+DEFAULT_BLACKLIST_PATH = DEFAULT_LIST_ROOT / "default_pick_black_lists.json"
+DEFAULT_WHITELIST_PATH = DEFAULT_LIST_ROOT / "default_pick_white_lists.json"
+FALLBACK_BLACKLIST = frozenset({"对话", "进入", "传送", "离开", "阅读", "操作", "开启"})
+
+
+def _load_default_list(path: Path) -> frozenset[str]:
+    try:
+        values = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, TypeError):
+        return frozenset()
+    return frozenset(_normalize_text(value) for value in values if _normalize_text(value))
+
+
+@lru_cache(maxsize=1)
+def _default_blacklist() -> frozenset[str]:
+    return _load_default_list(DEFAULT_BLACKLIST_PATH) or FALLBACK_BLACKLIST
 
 
 @lru_cache(maxsize=1)
 def _default_whitelist() -> frozenset[str]:
-    try:
-        values = json.loads(DEFAULT_WHITELIST_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return frozenset()
-    return frozenset(_normalize_text(value) for value in values if _normalize_text(value))
+    return _load_default_list(DEFAULT_WHITELIST_PATH)
 
 
 def _normalize_text(value: object) -> str:
@@ -55,6 +63,8 @@ class AutoPickTrigger:
         whitelist: list[str] | None = None,
         fuzzy_blacklist: list[str] | None = None,
         whitelist_exclusions: list[str] | None = None,
+        blacklist_mode_pick_enabled: bool = False,
+        whitelist_mode_do_not_pick_enabled: bool = True,
         mode: str = "Whitelist",
         log: Callable[[str], None] = print,
         force_interaction: bool = False,
@@ -62,22 +72,25 @@ class AutoPickTrigger:
         self.ctx = ctx
         self.enabled = True
         self.mode = _normalize_mode(mode)
-        self.blacklist = {
-            _normalize_text(value) for value in (
-                blacklist if blacklist is not None else DEFAULT_BLACKLIST
-            ) if _normalize_text(value)
-        }
+        self.blacklist = set(_default_blacklist())
+        self.blacklist.update(
+            _normalize_text(value) for value in (blacklist or []) if _normalize_text(value)
+        )
         self.fuzzy_blacklist = tuple(
             _normalize_text(value) for value in (fuzzy_blacklist or []) if _normalize_text(value)
         )
-        selected_whitelist = (
-            _default_whitelist() if whitelist is None
-            else {_normalize_text(value) for value in whitelist if _normalize_text(value)}
-        )
+        custom_whitelist = {
+            _normalize_text(value) for value in (whitelist or []) if _normalize_text(value)
+        }
+        selected_whitelist = set(_default_whitelist()) | custom_whitelist
         exclusions = {
             _normalize_text(value) for value in (whitelist_exclusions or []) if _normalize_text(value)
         }
-        self.whitelist = frozenset(selected_whitelist) - exclusions
+        if whitelist_mode_do_not_pick_enabled:
+            selected_whitelist.difference_update(exclusions)
+        self.whitelist = frozenset(selected_whitelist)
+        self.blacklist_pick_list = frozenset(custom_whitelist)
+        self.blacklist_mode_pick_enabled = bool(blacklist_mode_pick_enabled)
         self.log = log
         self.force_interaction = bool(force_interaction)
         self._last_action_at = 0.0
@@ -115,6 +128,8 @@ class AutoPickTrigger:
             return False
         if self.mode == "Whitelist":
             return text in self.whitelist
+        if self.blacklist_mode_pick_enabled and text in self.blacklist_pick_list:
+            return True
         if text in self.blacklist:
             return False
         return not any(value in text for value in self.fuzzy_blacklist)

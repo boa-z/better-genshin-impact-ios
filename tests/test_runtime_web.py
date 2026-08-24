@@ -128,6 +128,8 @@ def test_dispatcher_passes_bettergi_force_interaction_config():
             "fuzzyBlacklist": ["进入"],
             "whiteList": ["甜甜花"],
             "doNotPickList": ["薄荷"],
+            "blacklistModePickEnabled": True,
+            "whitelistModeDoNotPickEnabled": False,
         },
     })
     assert ctx.calls == [(('AutoPick',), {
@@ -137,6 +139,8 @@ def test_dispatcher_passes_bettergi_force_interaction_config():
         "blacklist": ["调查"],
         "fuzzy_blacklist": ["进入"],
         "whitelist_exclusions": ["薄荷"],
+        "blacklist_mode_pick_enabled": True,
+        "whitelist_mode_do_not_pick_enabled": False,
     })]
 
 
@@ -148,6 +152,8 @@ def test_autopick_defaults_to_recommended_whitelist_and_supports_blacklist():
     trigger.whitelist = frozenset({"甜甜花", "薄荷"})
     trigger.blacklist = {"调查"}
     trigger.fuzzy_blacklist = ("进入",)
+    trigger.blacklist_mode_pick_enabled = False
+    trigger.blacklist_pick_list = frozenset()
 
     assert trigger._should_pick("甜甜花")
     assert not trigger._should_pick("优兰尼娅湖")
@@ -157,6 +163,30 @@ def test_autopick_defaults_to_recommended_whitelist_and_supports_blacklist():
     assert trigger._should_pick("甜甜花")
     assert not trigger._should_pick("调查")
     assert not trigger._should_pick("进入秘境")
+
+
+def test_autopick_uses_upstream_default_lists_and_mode_specific_overrides():
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+
+    whitelist = AutoPickTrigger(
+        object(),
+        whitelist=["自定义采集物"],
+        whitelist_exclusions=["甜甜花"],
+    )
+    assert whitelist._should_pick("自定义采集物")
+    assert not whitelist._should_pick("甜甜花")
+
+    blacklist = AutoPickTrigger(
+        object(),
+        mode="Blacklist",
+        blacklist=["自定义机关"],
+        whitelist=["进入"],
+        blacklist_mode_pick_enabled=True,
+    )
+    assert len(blacklist.blacklist) >= 4900
+    assert not blacklist._should_pick("自定义机关")
+    assert not blacklist._should_pick("退出秘境")
+    assert blacklist._should_pick("进入")
 
 
 def test_teleport_panel_wait_does_not_fail_on_first_empty_frame():
