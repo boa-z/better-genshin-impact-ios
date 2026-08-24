@@ -543,26 +543,30 @@ class JsScriptRuntime:
             return wrap(DesktopRegion(ctx, width, height))
 
         def _desktop_click(x, y, width=0, height=0):
-            ctx.input.click_ref(
+            pointer.click_at(
+                float(x) + float(width) / 2,
+                float(y) + float(height) / 2,
+            )
+
+        def _desktop_move(x, y, width=0, height=0):
+            pointer.move_to(
                 float(x) + float(width) / 2,
                 float(y) + float(height) / 2,
             )
 
         desktop_region_type = pm.eval(r"""
-            (factory, click, moveBy) => {
+            (factory, click, move, moveBy) => {
               function DesktopRegion(width, height) {
                 return factory(width, height);
               }
               Object.assign(DesktopRegion, {
                 desktopRegionClick: click, DesktopRegionClick: click,
-                desktopRegionMove: () => {}, DesktopRegionMove: () => {},
+                desktopRegionMove: move, DesktopRegionMove: move,
                 desktopRegionMoveBy: moveBy, DesktopRegionMoveBy: moveBy
               });
               return DesktopRegion;
             }
-        """)(_create_desktop_region, _desktop_click, lambda dx, dy: ctx.input.move_camera_by(
-            float(dx), float(dy)
-        ))
+        """)(_create_desktop_region, _desktop_click, _desktop_move, pointer.move_by)
         g["DesktopRegion"] = desktop_region_type
 
         pm.eval(r"""
@@ -633,33 +637,41 @@ class JsScriptRuntime:
                 ctx.transform.device_width, ctx.transform.device_height,
             )
             point = position(size, ctx.transform.scale)
-            ctx.device.tap(
-                float(point[0]), float(point[1]),
-                image_width=ctx.transform.device_width,
-                image_height=ctx.transform.device_height,
+            ref_x, ref_y = ctx.transform.to_ref(float(point[0]), float(point[1]))
+            pointer.click_at_ref(ref_x, ref_y)
+
+        def _game_region_move(position):
+            size = pm.eval("(w, h) => ({width:w,height:h,Width:w,Height:h})")(
+                ctx.transform.device_width, ctx.transform.device_height,
             )
+            point = position(size, ctx.transform.scale)
+            ref_x, ref_y = ctx.transform.to_ref(float(point[0]), float(point[1]))
+            pointer.move_to_ref(ref_x, ref_y)
 
         def _game_region_move_by(delta):
             size = pm.eval("(w, h) => ({width:w,height:h,Width:w,Height:h})")(
                 ctx.transform.device_width, ctx.transform.device_height,
             )
             point = delta(size, ctx.transform.scale)
-            ctx.input.move_camera_by(
+            pointer.move_by(
                 float(point[0]) / ctx.transform.scale,
                 float(point[1]) / ctx.transform.scale,
             )
 
         def _game_region_1080p_click(x, y):
-            ctx.input.click_ref(float(x), float(y))
+            pointer.click_at_ref(float(x), float(y))
+
+        def _game_region_1080p_move(x, y):
+            pointer.move_to_ref(float(x), float(y))
 
         game_capture_region_type = pm.eval(r"""
-            (factory, click, moveBy, click1080, move1080) => {
+            (factory, click, move, moveBy, click1080, move1080) => {
               function GameCaptureRegion(mat, x = 0, y = 0) {
                 return factory(mat, x, y);
               }
               Object.assign(GameCaptureRegion, {
                 gameRegionClick: click, GameRegionClick: click,
-                gameRegionMove: move1080, GameRegionMove: move1080,
+                gameRegionMove: move, GameRegionMove: move,
                 gameRegionMoveBy: moveBy, GameRegionMoveBy: moveBy,
                 gameRegion1080PPosClick: click1080, GameRegion1080PPosClick: click1080,
                 gameRegion1080PPosMove: move1080, GameRegion1080PPosMove: move1080
@@ -667,8 +679,9 @@ class JsScriptRuntime:
               return GameCaptureRegion;
             }
         """)(
-            _create_image_region, _game_region_click, _game_region_move_by,
-            _game_region_1080p_click, lambda *_args: None,
+            _create_image_region, _game_region_click, _game_region_move,
+            _game_region_move_by, _game_region_1080p_click,
+            _game_region_1080p_move,
         )
         g["GameCaptureRegion"] = game_capture_region_type
 

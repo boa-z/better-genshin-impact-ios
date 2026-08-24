@@ -74,7 +74,13 @@ class TouchPointer:
         return self._drag_start is not None
 
     def move_to(self, x: float, y: float) -> None:
-        self.cursor = self._to_ref(x, y)
+        self.move_to_ref(*self._to_ref(x, y))
+
+    def move_to_ref(self, x: float, y: float) -> None:
+        self.cursor = (
+            min(REF_WIDTH, max(0.0, float(x))),
+            min(REF_HEIGHT, max(0.0, float(y))),
+        )
         self._arm()
 
     def move_by(self, dx: float, dy: float) -> None:
@@ -91,6 +97,11 @@ class TouchPointer:
 
     def click_at(self, x: float, y: float) -> None:
         self.move_to(x, y)
+        assert self.cursor is not None
+        self.input.click_ref(*self.cursor)
+
+    def click_at_ref(self, x: float, y: float) -> None:
+        self.move_to_ref(x, y)
         assert self.cursor is not None
         self.input.click_ref(*self.cursor)
 

@@ -58,10 +58,11 @@ return JSON.stringify({
         "material": "Materials",
         "iconMode": "GridIcon",
     }
-    input_simulator.click_ref.assert_called_once_with(297.0, 437.0)
-    device.tap.assert_called_once_with(
-        1389.0, 642.0, image_width=2778, image_height=1284,
-    )
+    assert [item.args for item in input_simulator.click_ref.call_args_list] == [
+        (297.0, 437.0),
+        (960.0, 540.0),
+    ]
+    device.tap.assert_not_called()
 
 
 def test_region_click_to_uses_reference_coordinates():

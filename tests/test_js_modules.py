@@ -115,6 +115,35 @@ def test_js_runtime_replays_virtual_cursor_drag_and_mouse_virtual_keys(tmp_path)
     ctx.input.tap_button.assert_called_once_with("elementalSight")
 
 
+def test_js_region_static_move_apis_share_virtual_pointer(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"main": "main.js"}), encoding="utf-8",
+    )
+    (tmp_path / "main.js").write_text(
+        """
+(async function () {
+  DesktopRegion.DesktopRegionMove(100, 200, 20, 40);
+  leftButtonDown();
+  DesktopRegion.DesktopRegionMoveBy(0, 100);
+  leftButtonUp();
+  GameCaptureRegion.GameRegion1080PPosMove(300, 400);
+  keyPress('LBUTTON');
+})();
+""",
+        encoding="utf-8",
+    )
+    ctx = _context()
+
+    JsScriptRuntime(ctx, tmp_path).run()
+
+    drag = ctx.input.drag_ref.call_args
+    assert drag.args[:4] == (110, 220, 110, 320)
+    ctx.input.click_ref.assert_called_once_with(300, 400)
+
+
 def test_js_module_loader_rejects_path_outside_sandbox(tmp_path):
     pytest.importorskip("pythonmonkey")
     import pythonmonkey as pm
