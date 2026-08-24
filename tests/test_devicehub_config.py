@@ -41,6 +41,48 @@ def test_devicehub_config_without_file_keeps_default_mcp_url(tmp_path: Path):
     assert config.headless.executable is None
 
 
+def test_devicehub_config_loads_device_id_and_environment_overrides_it(
+        tmp_path: Path, monkeypatch):
+    from bgi_touch.device.config import DeviceHubConfig
+
+    config_path = tmp_path / "devicehub.json"
+    config_path.write_text(json.dumps({
+        "deviceId": "iphone-from-config::wifi",
+    }), encoding="utf-8")
+
+    monkeypatch.delenv("BGI_DEVICE_ID", raising=False)
+    assert DeviceHubConfig.load(config_path).device_id == "iphone-from-config::wifi"
+
+    monkeypatch.setenv("BGI_DEVICE_ID", "iphone-from-env::usb")
+    assert DeviceHubConfig.load(config_path).device_id == "iphone-from-env::usb"
+
+
+def test_game_context_passes_exact_device_id_to_devicehub(tmp_path: Path):
+    from bgi_touch.engine.context import GameContext
+
+    config_path = tmp_path / "devicehub.json"
+    config_path.write_text(json.dumps({
+        "deviceId": "iphone-from-config::wifi",
+    }), encoding="utf-8")
+    device = Mock()
+    device.status.return_value = {
+        "status": "connected",
+        "screen_size": [2778, 1284],
+    }
+
+    with patch("bgi_touch.engine.context.DeviceClient", return_value=device), \
+            patch.object(GameContext, "capture_bgr", return_value=None), \
+            patch.object(GameContext, "_start_orientation_watch"):
+        context = GameContext(
+            devicehub_config_path=config_path,
+            device_id="iphone-from-cli::wifi",
+            keymap_profile=None,
+        )
+
+    assert context.device_id == "iphone-from-cli::wifi"
+    device.connect_device.assert_called_once_with("iphone-from-cli::wifi")
+
+
 def test_headless_start_uses_configured_executable_and_working_directory(tmp_path: Path):
     from bgi_touch.device.client import DeviceClient
     from bgi_touch.device.config import HeadlessConfig

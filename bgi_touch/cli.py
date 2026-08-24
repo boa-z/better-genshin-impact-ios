@@ -20,6 +20,7 @@ def _context(args):
         keymap_profile=None if args.no_keymap_profile else args.keymap_profile,
         keymap_profile_path=args.keymap_profile_file,
         devicehub_config_path=args.devicehub_config,
+        device_id=args.device_id,
     )
 
 
@@ -232,7 +233,7 @@ def cmd_reconnect(args) -> int:
 def cmd_web(args) -> int:
     from .webui.server import serve
     serve(host=args.host, port=args.port, mcp_url=args.url,
-          devicehub_config_path=args.devicehub_config)
+          devicehub_config_path=args.devicehub_config, device_id=args.device_id)
     return 0
 
 
@@ -242,6 +243,8 @@ def main() -> int:
     parser.add_argument("--url", default=None, help="MCP 地址（优先于配置文件）")
     parser.add_argument("--devicehub-config", default=os.environ.get("BGI_DEVICEHUB_CONFIG"),
                         help="DeviceHub 配置文件（默认 config/devicehub.json）")
+    parser.add_argument("--device-id", default=os.environ.get("BGI_DEVICE_ID"),
+                        help="精确设备选择 ID/UDID（多设备环境推荐）")
     parser.add_argument("--layout", default=os.environ.get("BGI_LAYOUT_PATH"),
                         help="本地触控布局 JSON；支持 config/controls 下的 extends 覆盖")
     parser.add_argument("--keymap-profile", default=os.environ.get(

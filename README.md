@@ -44,6 +44,8 @@ DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
 `headless.executable` 改为 `devicehub-headless` 的绝对路径后，MCP 不可用时程序会
 按配置自动启动 headless；可同时设置 `workingDirectory`、`args`、启动超时和
 `shutdownOnExit`。相对路径以该配置文件所在目录为基准。
+多设备环境可在同一配置中设置 `"deviceId": "UDID::wifi"`，也可使用
+`--device-id` 或 `BGI_DEVICE_ID`，避免自动化误连其他 iPhone/iPad。
 
 ## 安装
 

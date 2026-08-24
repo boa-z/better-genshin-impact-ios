@@ -25,7 +25,8 @@ class GameContext:
     def __init__(self, mcp_url: str | None = None, layout_path: str | Path = DEFAULT_LAYOUT,
                  keymap_profile: str | None = DEFAULT_KEYMAP_PROFILE,
                  keymap_profile_path: str | Path | None = None,
-                 devicehub_config_path: str | Path | None = None):
+                 devicehub_config_path: str | Path | None = None,
+                 device_id: str | None = None):
         self._frame_lock = threading.Lock()
         self._last_frame: np.ndarray | None = None
         self._last_frame_at = 0.0
@@ -34,7 +35,8 @@ class GameContext:
             mcp_url or self.devicehub_config.mcp_url,
             headless=self.devicehub_config.headless,
         )
-        self.device.connect_device()
+        self.device_id = device_id or self.devicehub_config.device_id
+        self.device.connect_device(self.device_id)
         status = self.device.status()
         if status.get("status") != "connected":
             raise RuntimeError(f"设备未连接（status={status.get('status')}），请检查 DeviceHub Mask")

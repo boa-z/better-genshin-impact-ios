@@ -78,6 +78,7 @@ class HeadlessConfig:
 @dataclass(frozen=True)
 class DeviceHubConfig:
     mcp_url: str = DEFAULT_MCP_URL
+    device_id: str | None = None
     headless: HeadlessConfig = HeadlessConfig()
     path: Path | None = None
 
@@ -89,6 +90,7 @@ class DeviceHubConfig:
         if not config_path.exists():
             return cls(
                 mcp_url=os.environ.get("BGI_MCP_URL", DEFAULT_MCP_URL),
+                device_id=os.environ.get("BGI_DEVICE_ID") or None,
                 path=config_path,
             )
 
@@ -101,6 +103,10 @@ class DeviceHubConfig:
 
         configured_url = _first(raw, "mcp_url", "mcpUrl", "url")
         mcp_url = os.environ.get("BGI_MCP_URL") or str(configured_url or DEFAULT_MCP_URL)
+        configured_device = _first(raw, "device_id", "deviceId", "udid", "device")
+        device_id = os.environ.get("BGI_DEVICE_ID") or (
+            str(configured_device).strip() if configured_device else None
+        )
         nested = _first(raw, "headless", "devicehub_headless", "devicehubHeadless", default={})
         if isinstance(nested, str):
             nested = {"executable": nested}
@@ -146,6 +152,7 @@ class DeviceHubConfig:
         )
         return cls(
             mcp_url=mcp_url,
+            device_id=device_id,
             headless=HeadlessConfig(
                 executable=executable,
                 working_directory=working_directory,

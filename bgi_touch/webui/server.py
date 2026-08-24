@@ -50,6 +50,7 @@ _ctx: GameContext | None = None
 _ctx_lock = threading.Lock()
 _mcp_url: str | None = None
 _devicehub_config_path: str | Path | None = None
+_device_id: str | None = None
 _preview_refresh_lock = threading.Lock()
 _preview_refresh_thread: threading.Thread | None = None
 _PREVIEW_STALE_S = 1.25
@@ -61,7 +62,8 @@ def get_ctx() -> GameContext:
         if _ctx is None:
             weblog("[web] 连接设备…")
             _ctx = GameContext(mcp_url=_mcp_url,
-                               devicehub_config_path=_devicehub_config_path)
+                               devicehub_config_path=_devicehub_config_path,
+                               device_id=_device_id)
             weblog(f"[web] 设备已连接 {_ctx.transform.device_width}x{_ctx.transform.device_height}")
         return _ctx
 
@@ -842,12 +844,14 @@ def serve(
     *,
     mcp_url: str | None = None,
     devicehub_config_path: str | Path | None = None,
+    device_id: str | None = None,
 ) -> None:
     import uvicorn
 
-    global _mcp_url, _devicehub_config_path
+    global _mcp_url, _devicehub_config_path, _device_id
     _mcp_url = mcp_url
     _devicehub_config_path = devicehub_config_path
+    _device_id = device_id
     weblog(f"[web] 控制台 http://{host}:{port}")
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
