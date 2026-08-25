@@ -60,6 +60,10 @@ MAP_MOVE_STALE_RETRY_DELAY_MS = 250
 TELEPORT_PANEL_TIMEOUT_S = 4.0
 TELEPORT_PANEL_INITIAL_DELAY_MS = 200
 TELEPORT_PANEL_SELECTION_SETTLE_MS = 600
+# A mobile overlap row can consume the first tap while its panel is still
+# animating. Match BetterGI's bounded retry contract instead of repeatedly
+# clicking the same row until the whole panel timeout is exhausted.
+TELEPORT_PANEL_CANDIDATE_CLICK_RETRIES = 2
 TELEPORT_COMPLETION_MINIMUM_S = 1.0
 TELEPORT_COMPLETION_STABLE_CHECKS = 2
 ABSOLUTE_ICON_MAX_CORRECTION_REF = 60.0
@@ -104,7 +108,50 @@ class _TeleportPanelCandidate:
     row_y: float
 
     def click(self) -> None:
-        self.text_hit.click()
+        """Click a forgiving row-sized hit area when a native Region is available.
+
+        OCR bounds are often only the glyphs on iOS. Tapping that tiny box can
+        miss the actual overlap-list row while the desktop implementation taps
+        a wider rectangle beside the icon. Keep lightweight test/fallback
+        hosts compatible by using the old Region.click() path when the native
+        coordinates are unavailable.
+        """
+        text_hit = self.text_hit
+        icon_hit = self.icon_hit
+        context = getattr(text_hit, "ctx", None) or getattr(icon_hit, "ctx", None)
+        if context is None or text_hit is None:
+            fallback = text_hit or icon_hit
+            if fallback is not None:
+                fallback.click()
+            return
+        try:
+            transform = context.transform
+            scale = max(0.5, float(getattr(transform, "scale", 1.0)))
+            if icon_hit is not None:
+                left = float(icon_hit.dx) + float(icon_hit.dw)
+                top = float(icon_hit.dy) - 8.0 * scale
+                height = float(icon_hit.dh) + 16.0 * scale
+            else:
+                left = float(text_hit.dx) - 8.0 * scale
+                top = float(text_hit.dy) - 8.0 * scale
+                height = float(text_hit.dh) + 16.0 * scale
+            # BetterGI's row click rectangle is at least 220 reference pixels
+            # wide. A fixed width also handles short OCR strings reliably.
+            width = 220.0 * scale
+            device_width = float(getattr(transform, "device_width", left + width))
+            device_height = float(getattr(transform, "device_height", top + height))
+            left = max(0.0, min(left, device_width - width))
+            top = max(0.0, min(top, device_height - height))
+            context.device.tap(
+                left + width / 2.0,
+                top + height / 2.0,
+                image_width=transform.device_width,
+                image_height=transform.device_height,
+            )
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            fallback = text_hit or icon_hit
+            if fallback is not None:
+                fallback.click()
 
 
 MAP_ICON_FILES: dict[str, tuple[str, ...]] = {
@@ -233,6 +280,11 @@ class TpTask:
         loop = getattr(self.ctx, "_trigger_loop", None)
         if loop is None:
             yield
+            return
+        exclusive = getattr(loop, "exclusive", None)
+        if callable(exclusive):
+            with exclusive():
+                yield
             return
         # ``active`` only describes a currently running producer. A trigger
         # list can still be configured while its thread is between stop/start
@@ -1052,6 +1104,7 @@ class TpTask:
             self.ctx.sleep(initial_delay_ms)
         deadline = time.monotonic() + max(0.2, timeout_s)
         selected_entry = False
+        candidate_click_attempts = 0
         selected_at = 0.0
         while time.monotonic() < deadline:
             region = self.ctx.capture_region()
@@ -1102,6 +1155,7 @@ class TpTask:
                 self.log(f"[tp] 点击候选列表：「{candidate.text.strip()}」")
                 candidate.click()
                 selected_entry = True
+                candidate_click_attempts = 1
                 selected_at = time.monotonic()
                 self.ctx.sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
                 continue
@@ -1110,6 +1164,16 @@ class TpTask:
             # precomputed icon fallback instead of clicking the same stale row
             # repeatedly for the whole panel timeout.
             if selected_entry and candidate is not None and time.monotonic() - selected_at >= 0.8:
+                if candidate_click_attempts < TELEPORT_PANEL_CANDIDATE_CLICK_RETRIES:
+                    candidate_click_attempts += 1
+                    self.log(
+                        f"[tp] 传送候选列表仍在，重试点选 "
+                        f"{candidate_click_attempts}/{TELEPORT_PANEL_CANDIDATE_CLICK_RETRIES}"
+                    )
+                    candidate.click()
+                    selected_at = time.monotonic()
+                    self.ctx.sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
+                    continue
                 self.log("[tp] 传送候选列表仍在，判定本次点选未生效")
                 return False
             self.ctx.sleep(250)

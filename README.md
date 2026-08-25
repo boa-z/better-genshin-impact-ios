@@ -25,7 +25,7 @@ bettergi-scripts-list 脚本 ──bgi-touch convert──▶ 可运行脚本 + 
 
 关键设计（与原版语义对齐）：
 
-- **同步语义**：原版脚本是 ClearScript 绑定同步 C# 方法的调用风格。本项目所有 API 均为阻塞式，`await sleep()` 在阻塞后立即 resolve，时序一致。
+- **宿主语义**：普通识别、输入和文件 API 保持同步外观；原版 `dispatcher.run*Task` / `runCombatScript` 入口返回真正的 Promise，由后台任务线程执行，JS 线程仍可并发 OCR、计时和响应取消。`await sleep()` 仍按移动端节奏阻塞后 resolve。
 - **手势泵**：devicehub-mask 触控手势原子且 ≤5s，"按住 W"由后台线程连发 multi_touch 维持；W+Shift 等组合合并进同一手势的多个触点。
 - **坐标系**：脚本/模板资产按 1920×1080 基准；按高度等比缩放 + 依元素所在三分位做左/中/右锚点重定位（原神移动端 HUD 贴边锚定，iPhone 19.5:9 比 16:9 宽）。
 - **朝向自适应**（真机实测）：游戏横屏时截图流仍是竖屏帧（内容旋转 90°），而 tap 坐标空间跟随 `status.orientation` 动态变化。截图按帧宽高自动旋转；点按映射按 status 动态启停。
@@ -98,6 +98,7 @@ bgi-touch task AutoTrack                # 自动跟随当前蓝色任务追踪�
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
 bgi-touch task CountInventoryItem --config '{"gridScreenName":"Materials","itemNames":["萃凝晶","白铁块"]}'
+bgi-touch task GridIconsAccuracyTest --config '{"gridScreenName":"Materials","maxNumToTest":24}' # 离线/真机逐格校验图标模型
 bgi-touch task CharacterDevelopment --config '{"characterName":"钟离","categories":"属性;武器;天赋"}'
 bgi-touch task AutoDomain --config '{"domainRoundNum":2,"rewardRecognitionEnabled":true}'
 bgi-touch task OneDragon --config-file '/path/to/User/OneDragon/日常.json'
@@ -170,7 +171,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ Boss/地脉内置官方路线与树脂策略；幽境已迁移活动导航与领奖状态机；七圣召唤需策略 |
 | 快捷任务：尘歌壶进出/奖励 / 一键领取 / 纪行/邮件 / 探索派遣 / 快速购买 / 兑换码 | ⚠️ 已迁移；纪行/邮件状态机含离线回归，待对应界面真机回归 |
 | SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
-| 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
+| 背包网格：CountInventoryItem / GetGridIcons / GridIconsAccuracyTest / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |
 | 一条龙 OneDragonFlowConfig | ⚠️ 顺序、重复任务 ID、NextTaskId、内置任务与安全完成动作已迁移，待真机回归 |
 | ScriptGroup / TaskProgress | ✅ 原版 JSON、四类项目、RunNum、周期/完成跳过、失败策略与原子崩溃续跑 |

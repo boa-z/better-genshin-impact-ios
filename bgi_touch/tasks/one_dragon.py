@@ -20,6 +20,17 @@ def _get(obj: Mapping[str, Any], key: str, default: Any = None) -> Any:
     return default
 
 
+def _get_any(obj: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
+    """Return the first value found for a list of compatible config keys."""
+
+    missing = object()
+    for key in keys:
+        value = _get(obj, key, missing)
+        if value is not missing:
+            return value
+    return default
+
+
 def _bool(value: Any, default: bool = False) -> bool:
     """Coerce JSON/config variants without treating ``"false"`` as true."""
 
@@ -83,6 +94,7 @@ class OneDragonFlowTask:
         *,
         continue_on_error: bool = True,
         close_game_on_completion: bool = True,
+        config_source: str | Path | None = None,
         log: Callable[[str], None] = print,
     ):
         self.ctx = ctx
@@ -90,6 +102,11 @@ class OneDragonFlowTask:
         self.dispatcher = dispatcher
         self.continue_on_error = _bool(continue_on_error, True)
         self.close_game_on_completion = _bool(close_game_on_completion, True)
+        self.config_source = (
+            Path(config_source).expanduser().resolve()
+            if config_source is not None
+            else None
+        )
         self.log = log
         self.genshin = GenshinApi(ctx, log=log)
 
@@ -242,16 +259,169 @@ class OneDragonFlowTask:
             return self.dispatcher.run_auto_leyline_task(task_config)
         raise KeyError(item.name)
 
-    def _run_item(self, item: OneDragonItem) -> Any:
+    def _path_candidates(self, value: Any) -> list[Path]:
+        """Expand a user path against the same roots as the desktop app."""
+        if value is None or not str(value).strip():
+            return []
+        path = Path(str(value)).expanduser()
+        if path.is_absolute():
+            return [path]
+        bases = [Path.cwd(), Path(__file__).resolve().parents[2]]
+        if self.config_source is not None:
+            bases.insert(0, self.config_source.parent)
+        result: list[Path] = []
+        for base in bases:
+            candidate = (base / path).resolve()
+            if candidate not in result:
+                result.append(candidate)
+        return result
+
+    def _script_group_file(
+        self,
+        item: OneDragonItem,
+        task_config: Mapping[str, Any],
+    ) -> Path:
+        """Resolve an upstream OneDragon custom item to its ScriptGroup file.
+
+        Desktop BetterGI stores non-built-in OneDragon items as
+        ``User/ScriptGroup/<item name>.json``.  The iOS port also accepts an
+        explicit file/path in ``taskConfigs`` or a configurable root so a
+        checkout can keep user data outside the repository.
+        """
+        nested = _get_any(
+            task_config,
+            "scriptGroup",
+            "script_group",
+            "group",
+            default={},
+        )
+        nested = nested if isinstance(nested, Mapping) else {}
+        explicit = _get_any(
+            task_config,
+            "scriptGroupFile",
+            "scriptGroupPath",
+            "groupFile",
+            "configFile",
+            "path",
+            default=_get_any(
+                nested,
+                "file",
+                "path",
+                "configFile",
+                "scriptGroupFile",
+                default=None,
+            ),
+        )
+        if explicit is not None:
+            candidates = self._path_candidates(explicit)
+            expanded: list[Path] = []
+            for candidate in candidates:
+                expanded.append(candidate)
+                if candidate.suffix.casefold() != ".json":
+                    expanded.append(candidate.with_suffix(".json"))
+                if candidate.is_dir():
+                    expanded.append(candidate / f"{item.name}.json")
+            for candidate in expanded:
+                if candidate.is_file():
+                    return candidate
+            raise FileNotFoundError(
+                f"一条龙配置组「{item.name}」文件不存在：{explicit}"
+            )
+
+        root_values = [
+            _get_any(
+                task_config,
+                "scriptGroupRoot",
+                "scriptGroupDirectory",
+                default=None,
+            ),
+            _get_any(
+                nested,
+                "root",
+                "directory",
+                "scriptGroupRoot",
+                default=None,
+            ),
+            _get_any(
+                self.config,
+                "scriptGroupRoot",
+                "scriptGroupDirectory",
+                default=None,
+            ),
+        ]
+        roots: list[Path] = []
+        for value in root_values:
+            for root in self._path_candidates(value):
+                if root not in roots:
+                    roots.append(root)
+
+        if self.config_source is not None:
+            source_parent = self.config_source.parent
+            sibling_roots = [source_parent / "ScriptGroup", source_parent / "script_group"]
+            if source_parent.name.casefold() in {"onedragon", "one_dragon"}:
+                sibling_roots.append(source_parent.parent / "ScriptGroup")
+            roots.extend(root for root in sibling_roots if root not in roots)
+
+        # These are the portable equivalents of BetterGI/User/ScriptGroup and
+        # the repository-local configuration location.  Missing roots are
+        # harmless; they are only used when a caller did not provide a path.
+        for root in (
+            Path.cwd() / "User" / "ScriptGroup",
+            Path(__file__).resolve().parents[2] / "User" / "ScriptGroup",
+            Path(__file__).resolve().parents[2] / "config" / "ScriptGroup",
+        ):
+            if root not in roots:
+                roots.append(root)
+
+        filename = item.name if item.name.casefold().endswith(".json") else f"{item.name}.json"
+        for root in roots:
+            candidate = (root / filename).resolve()
+            if candidate.is_file():
+                return candidate
+        searched = "、".join(str(root / filename) for root in roots)
+        raise FileNotFoundError(
+            f"一条龙配置组「{item.name}」未找到 ScriptGroup 文件；已搜索：{searched}"
+        )
+
+    @staticmethod
+    def _run_dispatcher(dispatcher: Any, runner_name: str, value: Any, cancelled):
+        runner = getattr(dispatcher, runner_name, None)
+        if not callable(runner):
+            return None
+        if cancelled is None:
+            return runner(value)
+        return runner(value, cancelled)
+
+    def _run_item(
+        self,
+        item: OneDragonItem,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Any:
         if item.name in self.BUILTIN_NAMES:
             return self._run_builtin(item)
         config = self._task_config(item)
-        task_name = str(config.pop("taskName", item.name))
+        task_name = str(_get(config, "taskName", default=item.name) or item.name)
+        config.pop("taskName", None)
         if task_name in self.dispatcher.IMPLEMENTED and task_name != "OneDragon":
-            return self.dispatcher.run_task({"name": task_name, "config": config})
-        raise NotImplementedError(
-            f"一条龙配置组「{item.name}」尚未转换；请在 taskConfigs 中指定 taskName"
+            task = {"name": task_name, "config": config}
+            return self._run_dispatcher(self.dispatcher, "run_task", task, cancelled)
+
+        # A normal BetterGI OneDragon custom item is a ScriptGroup, not an
+        # unknown SoloTask.  Preserve the explicit taskName escape hatch above
+        # while making the original desktop JSON directly usable on iOS.
+        script_group = self._script_group_file(item, config)
+        params = dict(config)
+        params["configFile"] = str(script_group)
+        result = self._run_dispatcher(
+            self.dispatcher, "run_script_group_task", params, cancelled,
         )
+        if result is not None:
+            return result
+        task = {"name": "ScriptGroup", "config": params}
+        result = self._run_dispatcher(self.dispatcher, "run_task", task, cancelled)
+        if result is not None:
+            return result
+        raise NotImplementedError("dispatcher 未提供 ScriptGroup 执行入口")
 
     def _finish(self) -> None:
         action = str(_get(self.config, "completionAction", "") or "")
@@ -286,7 +456,7 @@ class OneDragonFlowTask:
                 break
             self.log(f"[OneDragon] {index}/{len(enabled)}：{item.name} ({item.id})")
             try:
-                task_result = self._run_item(item)
+                task_result = self._run_item(item, cancelled=cancelled)
                 result["results"][item.id] = task_result
                 if task_result is False:
                     raise RuntimeError("任务返回失败")

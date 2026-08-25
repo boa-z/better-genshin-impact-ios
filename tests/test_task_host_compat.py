@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -67,6 +69,7 @@ return JSON.stringify({
   wood: typeof dispatcher.runAutoWoodTask,
   grid: typeof dispatcher.runGetGridIconsTask,
   compare: typeof dispatcher.runInventoryCountComparisonTask,
+  accuracy: typeof dispatcher.runGridIconsAccuracyTestTask,
   character: typeof dispatcher.runCharacterDevelopmentTask,
   daily: typeof dispatcher.runCheckRewardsTask,
   pot: typeof dispatcher.runSereniteaPotRewardsTask,
@@ -84,10 +87,11 @@ return JSON.stringify({
         "wood": "function",
         "grid": "function",
         "compare": "function",
+        "accuracy": "function",
         "character": "function",
-    "daily": "function",
-    "pot": "function",
-    "group": "function",
+        "daily": "function",
+        "pot": "function",
+        "group": "function",
         "music": "function",
         "shell": "function",
     }
@@ -106,6 +110,7 @@ return JSON.stringify({
   fight: typeof dispatcher.RunAutoFightTask,
   leyLine: typeof dispatcher.RunAutoLeyLineOutcropTask,
   expedition: typeof dispatcher.RunOneKeyExpeditionTask,
+  accuracy: typeof dispatcher.RunGridIconsAccuracyTestTask,
   pot: typeof dispatcher.RunGoToSereniteaPotTask,
   daily: typeof dispatcher.RunCheckRewardsTask,
   shell: typeof dispatcher.RunShellTask,
@@ -128,8 +133,9 @@ return JSON.stringify({
         "domain": "function",
         "fight": "function",
         "leyLine": "function",
-    "expedition": "function",
-    "pot": "function",
+        "expedition": "function",
+        "accuracy": "function",
+        "pot": "function",
         "daily": "function",
         "shell": "function",
         "combat": "function",
@@ -238,6 +244,130 @@ return JSON.stringify({
         "scanPascal": "function",
         "lowerPascal": "function",
     }
+
+
+def test_dispatcher_task_returns_concurrent_promise_and_snapshots_parameters(
+    tmp_path, monkeypatch,
+):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    calls = []
+
+    def fake_auto_fight(self, param, ct=None):
+        calls.append((param, ct))
+        time.sleep(0.08)
+        return {"timeout": param["timeout"], "worker": threading.current_thread().name}
+
+    monkeypatch.setattr(TaskDispatcher, "run_auto_fight_task", fake_auto_fight)
+    (tmp_path / "main.js").write_text(
+        """
+const param = new AutoFightParam('snapshot.txt');
+param.Timeout = 321;
+const task = dispatcher.runAutoFightTask(param);
+const isPromise = task instanceof Promise;
+param.Timeout = 999;
+let ticks = 0;
+const timer = setInterval(() => ticks++, 5);
+const result = await task;
+clearInterval(timer);
+return JSON.stringify({isPromise, result, ticks});
+""",
+        encoding="utf-8",
+    )
+
+    result = json.loads(JsScriptRuntime(_context(), tmp_path).run())
+
+    assert result["isPromise"] is True
+    assert result["result"]["timeout"] == 321
+    assert result["ticks"] >= 3
+    assert len(calls) == 1
+    assert calls[0][0] == {
+        "combatStrategyPath": "snapshot.txt",
+        "timeout": 321,
+        "fightFinishDetectEnabled": False,
+        "finishDetectConfig": {
+            "battleEndProgressBarColor": "",
+            "battleEndProgressBarColorTolerance": "",
+            "fastCheckEnabled": False,
+            "fastCheckParams": "",
+            "checkAfterSwitchAvatar": False,
+            "checkEndDelay": "0.4;钟离,1.4;",
+            "beforeDetectDelay": "0.4",
+            "rotateFindEnemyEnabled": False,
+            "skipFightEndCheckWhenEnemyVisible": False,
+            "blockCheckBeforeBattleSeconds": 0,
+            "paimonEndCheckEnabled": True,
+            "paimonEndCheckDelay": 0.075,
+        },
+        "pickDropsAfterFightEnabled": False,
+        "pickDropsAfterFightSeconds": 15,
+        "kazuhaPickupEnabled": True,
+        "kazuhaPartyName": "",
+        "actionSchedulerByCd": "",
+        "onlyPickEliteDropsMode": "",
+        "battleThresholdForLoot": -1,
+        "guardianAvatar": "",
+        "guardianCombatSkip": False,
+        "guardianAvatarHold": False,
+        "checkBeforeBurst": False,
+        "isFirstCheck": True,
+        "rotaryFactor": 10,
+        "burstEnabled": False,
+        "qinDoublePickUp": False,
+    }
+
+
+def test_dispatcher_task_rejection_is_catchable_from_js(tmp_path, monkeypatch):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    def fake_auto_fight(self, _param, _ct=None):
+        raise ValueError("模拟任务失败")
+
+    monkeypatch.setattr(TaskDispatcher, "run_auto_fight_task", fake_auto_fight)
+    (tmp_path / "main.js").write_text(
+        """
+const message = await dispatcher.runAutoFightTask({}).catch(error => error.message);
+return message;
+""",
+        encoding="utf-8",
+    )
+
+    assert JsScriptRuntime(_context(), tmp_path).run() == "ValueError: 模拟任务失败"
+
+
+def test_dispatcher_task_uses_external_cancellation_token(tmp_path, monkeypatch):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    started = threading.Event()
+
+    def fake_auto_fight(self, _param, ct=None):
+        started.set()
+        while not ct.isCancellationRequested:
+            time.sleep(0.002)
+        raise RuntimeError("任务已取消")
+
+    monkeypatch.setattr(TaskDispatcher, "run_auto_fight_task", fake_auto_fight)
+    (tmp_path / "main.js").write_text(
+        """
+const cts = new CancellationTokenSource();
+const task = dispatcher.runAutoFightTask({}, cts.Token)
+  .catch(error => error.message);
+setTimeout(() => cts.cancel(), 25);
+return await task;
+""",
+        encoding="utf-8",
+    )
+
+    result = JsScriptRuntime(_context(), tmp_path).run()
+
+    assert started.is_set()
+    assert result == "RuntimeError: 任务已取消"
 
 
 def test_dispatcher_exposes_genshin_common_job_entrypoints(tmp_path):

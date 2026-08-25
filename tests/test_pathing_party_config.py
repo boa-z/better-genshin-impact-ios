@@ -50,3 +50,43 @@ def test_walk_avatar_prefers_main_slot_and_excludes_hurry_blacklist():
     party = {"玛薇卡": 1, "希诺宁": 2, "钟离": 3, "夜兰": 4}
 
     assert config.resolve_walk_avatar(party, "玛薇卡") == "钟离"
+
+
+def test_pathing_party_config_parses_nested_auto_eat_defaults():
+    config = PathingPartyConfig.from_mapping({
+        "PathingConfig": {
+            "AutoEatConfig": {
+                "DefaultAtkBoostingDishName": "攻击料理",
+                "DefaultAdventurersDishName": "冒险料理",
+                "DefaultDefBoostingDishName": "防御料理",
+            },
+        },
+    })
+
+    assert config.auto_eat_config.default_atk_boosting_dish_name == "攻击料理"
+    assert config.auto_eat_config.default_adventurers_dish_name == "冒险料理"
+    assert config.auto_eat_config.default_def_boosting_dish_name == "防御料理"
+
+
+def test_pathing_party_config_uses_upstream_default_attack_dish():
+    config = PathingPartyConfig.from_mapping({"PathingConfig": {}})
+
+    assert config.auto_eat_config.default_atk_boosting_dish_name == "炸萝卜丸子"
+
+
+def test_pathing_party_config_parses_recovery_timing_and_gadget_interval():
+    config = PathingPartyConfig.from_mapping({
+        "PathingConfig": {
+            "OnlyInTeleportRecover": True,
+            "UseGadgetIntervalMs": "2500",
+        },
+    })
+    never = PathingPartyConfig.from_mapping({
+        "RecoverTiming": "Never",
+        "UseGadgetIntervalMs": -1,
+    })
+
+    assert config.recover_timing == "OnlyTeleport"
+    assert config.use_gadget_interval_ms == 2500
+    assert never.recover_timing == "Never"
+    assert never.use_gadget_interval_ms == 0

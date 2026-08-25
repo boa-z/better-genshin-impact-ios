@@ -244,8 +244,9 @@ bgi-touch convert \
 - ✅ 未发现不兼容 API —— 可直接 `bgi-touch run`
 - ⚠️ 部分能力为近似实现 —— 能跑，个别行为与 PC 不同（例如持续鼠标拖动会在
   左键释放时合并为单次触控滑动，实时触发器也按移动端能力执行）
-- ❌ 存在未移植依赖 —— 列出的调用（如 `genshin.tp`、`dispatcher.runTask`）
-  执行到会抛错；若它们只在可选分支里，脚本主流程仍可能可用
+- ❌ 存在未移植依赖 —— 列出的调用（例如仍未实现的 `genshin.tp`）
+  执行到会抛错；`dispatcher.runTask` 已提供异步 Promise 兼容入口。若未移植调用只在
+  可选分支里，脚本主流程仍可能可用
 
 ### 5.3 运行 JS 脚本包
 
@@ -518,6 +519,10 @@ bgi-touch task AutoArtifactSalvage --config-file artifact-salvage.json
 
 `GetGridIcons` 会把去重后的网格图标写入 `log/gridIcons/`，可配置
 `gridScreenName`、`starAsSuffix`、`maxNumToGet` 和 `outputDirectory`。
+`GridIconsAccuracyTest` 会逐格点击当前背包分类，用 ItemV2 模型预测名称/稀有度，
+再与详情面板 OCR 的名称/星级比较；返回并写入 `results.json`，可配置
+`gridScreenName`、`maxNumToTest`、`maxPages`、`scoreThreshold` 和 `outputDirectory`。
+该诊断任务要求先安装 `assets/models/item.onnx` 与 `item.csv`，缺少模型时会在打开背包前失败。
 `InventoryCountComparison` 会输出页面截图、常规/裁剪 OCR 的 CSV 以及异常数字标准化图；
 `target` 支持 `CharacterDevelopmentItems`、`Food`、`Materials` 和 `CurrentPage`。
 
@@ -707,7 +712,7 @@ ctx.close()
 | 脚本运行到一半没反应 | iOS 弹层（游戏模式横幅、控制中心、通知）会吞触控。长跑前开勿扰模式，别碰设备 |
 | OCR 相关识别永远为空 | 未装 OCR 后端：`pip install -e '.[ocr]'` |
 | `bgi-touch run` 报 pythonmonkey 缺失 | `pip install -e '.[js]'` |
-| JS 脚本抛 `NotImplementedError` | 依赖未移植能力（COMPAT.md 会预警），常见是 `genshin.tp` / `dispatcher.runTask`，见 docs/ROADMAP.md |
+| JS 脚本抛 `NotImplementedError` | 依赖未移植能力（COMPAT.md 会预警），常见是 `genshin.tp`，见 docs/ROADMAP.md |
 | 切人切错角色 | `config/party.json` 与游戏内编队顺序不一致；或脚本中途手动切过人导致内部活跃槽位记录偏移（重启脚本复位） |
 | 设备操作偶发超时（CoreDevice timed out） | 设备侧瞬态错误，重试即可；频繁出现则重连设备 |
 

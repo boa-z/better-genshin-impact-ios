@@ -21,6 +21,7 @@ from ..engine.recognition import ImageRegion, Mat, RecognitionObject, Region
 from ..pathing.executor import PathingExecutor
 from ..pathing.model import PathingTask
 from .auto_fight import AutoFightTask
+from .common_jobs import exclusive_realtime_triggers
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -805,6 +806,11 @@ class AutoStygianOnslaughtTask:
         ).run(cancelled=cancelled)
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
+        """Run the event flow while owning the shared frame/input channel."""
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> bool:
         self._validate()
         completed = False
         self.log("[AutoStygianOnslaught] 开始")

@@ -44,6 +44,54 @@ def _normalize_text(value: object) -> str:
     return "".join(str(value or "").split()).strip()
 
 
+def _process_ocr_text(value: object) -> str:
+    """Normalize AutoPick OCR with BetterGI's edge-noise semantics.
+
+    Mobile OCR often adds brackets or punctuation around an interaction
+    label.  The desktop trigger converts square brackets to the game's corner
+    quotes, trims non-Chinese noise at both edges, and repairs an unmatched
+    quote before applying its lists.  Keep this separate from list-file
+    normalization so configured names remain literal.
+    """
+    text = str(value or "")
+    if not text:
+        return ""
+    text = (
+        text.replace("【", "「")
+        .replace("[", "「")
+        .replace("】", "」")
+        .replace("]", "」")
+    )
+    text = "".join(text.split())
+
+    def is_edge_character(char: str, *, right: bool = False) -> bool:
+        if char == "「":
+            return not right
+        if right and char in {"」", "！"}:
+            return True
+        # Match BetterGI's Chinese-character boundary rule while retaining
+        # the corner quotes used to repair OCR output.
+        return "\u4e00" <= char <= "\u9fff"
+
+    start = 0
+    end = len(text) - 1
+    while start <= end and not is_edge_character(text[start]):
+        start += 1
+    while end >= start and not is_edge_character(text[end], right=True):
+        end -= 1
+    if start > end:
+        return ""
+
+    cleaned = text[start:end + 1]
+    has_left = "「" in cleaned
+    has_right = "」" in cleaned
+    if has_left and not has_right:
+        cleaned += "」"
+    elif has_right and not has_left:
+        cleaned = "「" + cleaned
+    return cleaned
+
+
 def _normalize_mode(value: object) -> str:
     mode = str(value or "Whitelist").strip().casefold()
     if mode in {"whitelist", "white", "白名单", "白名單"}:
@@ -118,7 +166,7 @@ class AutoPickTrigger:
         # the input edge deterministic when several drops are visible.
         hits = sorted(hits, key=lambda hit: (float(hit.y), float(hit.x)))
         for h in hits:
-            text = _normalize_text(h.text)
+            text = _process_ocr_text(h.text)
             if not self._should_pick(text):
                 continue
             now = time.monotonic()

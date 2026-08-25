@@ -211,31 +211,11 @@ class PathingExecutor:
             for index, wp in enumerate(task.positions, start=1):
                 self.log(f"[pathing] 路点 {index}/{len(task.positions)} id={wp.id}")
 
-                # BetterGI handles four-leaf seals before normal movement. The
-                # waypoint itself is a camera target, not a walking target.
-                if wp.action == "up_down_grab_leaf":
-                    self._run_with_retry(lambda: self._face_to(wp), wp, retry_count)
-                    self._do_action(wp)
-                    continue
-
-                if wp.action == "log_output":
-                    self._do_action(wp)
-
-                if wp.type == "teleport" or wp.action == "force_tp":
-                    self._run_with_retry(lambda: self._teleport(wp), wp, retry_count)
-                elif wp.type == "orientation":
-                    self._run_with_retry(lambda: self._face_to(wp), wp, retry_count)
-                elif wp.type in ("path", "target"):
-                    self._run_with_retry(
-                        lambda: self._move_to(wp, arrive_dist=2.0 if wp.type == "target" else 4.0),
-                        wp,
-                        retry_count,
-                    )
-                else:
-                    self.log(f"[pathing] 未知路点类型 {wp.type}，跳过移动")
-
-                if wp.action and wp.action not in {"force_tp", "log_output"}:
-                    self._do_action(wp)
+                self._run_with_retry(
+                    lambda wp=wp: self._run_waypoint(wp),
+                    wp,
+                    retry_count,
+                )
             success = True
             return True
         finally:
@@ -248,6 +228,116 @@ class PathingExecutor:
                     )
                 except Exception as error:
                     self.log(f"[farming] 锄地进度记录失败：{error}")
+
+    def _run_waypoint(self, wp: Waypoint) -> None:
+        """Execute one waypoint, including the upstream recovery pre-check."""
+
+        self._recover_when_low_hp(wp)
+
+        # BetterGI handles four-leaf seals before normal movement. The
+        # waypoint itself is a camera target, not a walking target.
+        if wp.action == "up_down_grab_leaf":
+            self._face_to(wp)
+            self._do_action(wp)
+            return
+
+        if wp.action == "log_output":
+            self._do_action(wp)
+
+        if wp.type == "teleport" or wp.action == "force_tp":
+            self._teleport(wp)
+        elif wp.type == "orientation":
+            self._face_to(wp)
+        elif wp.type in ("path", "target"):
+            self._move_to(wp, arrive_dist=2.0 if wp.type == "target" else 4.0)
+        else:
+            self.log(f"[pathing] 未知路点类型 {wp.type}，跳过移动")
+
+        if wp.action and wp.action not in {"force_tp", "log_output"}:
+            self._do_action(wp)
+
+    def _latest_frame(self) -> np.ndarray | None:
+        """Read the trigger-owned frame before falling back to device capture."""
+
+        def valid_frame(value: object) -> np.ndarray | None:
+            # Test hosts and partially initialized device contexts often expose
+            # MagicMock/callable placeholders.  Treat those as unavailable
+            # instead of passing them into OpenCV/template matching.
+            if isinstance(value, np.ndarray) and value.ndim >= 2:
+                return value
+            return None
+
+        loop = getattr(self.ctx, "_trigger_loop", None)
+        if loop is not None and bool(getattr(loop, "active", False)):
+            cached_frame = getattr(self.ctx, "cached_frame", None)
+            if callable(cached_frame):
+                try:
+                    value = cached_frame()
+                    frame = value[0] if isinstance(value, (tuple, list)) else value
+                    frame = valid_frame(frame)
+                    if frame is not None:
+                        return frame
+                except Exception as error:
+                    self.log(f"[pathing] 恢复检查读取缓存帧失败：{error}")
+        try:
+            return valid_frame(self.ctx.capture_bgr())
+        except Exception as error:
+            self.log(f"[pathing] 恢复检查截图失败：{error}")
+            return None
+
+    def _recovery_icon_visible(self, frame: np.ndarray) -> bool:
+        """Reuse AutoEat's cached template definitions for the revive modal."""
+
+        from ..engine.recognition import ImageRegion
+        from ..tasks.auto_eat import AutoEatTrigger
+
+        probe = getattr(self, "_recovery_probe", None)
+        if probe is None:
+            probe = AutoEatTrigger(self.ctx, log=self.log)
+            self._recovery_probe = probe
+        return bool(probe._has_resurrection(ImageRegion(self.ctx, frame)))
+
+    def _recover_to_statue(self) -> None:
+        from .tp import TpTask
+
+        self.log("[pathing] 当前角色需要恢复，前往七天神像")
+        # A route may be running on an independent map; statue recovery always
+        # uses the Teyvat map just like BetterGI's TpStatueOfTheSeven helper.
+        TpTask(self.ctx, log=self.log, map_name="Teyvat").tp_to_statue()
+        self.log("[pathing] 七天神像恢复完成")
+
+    def _recover_when_low_hp(self, wp: Waypoint) -> None:
+        timing = self.party_config.recover_timing
+        if timing == "Never" or (
+            timing == "OnlyTeleport" and wp.type != "teleport"
+        ):
+            return
+
+        frame = self._latest_frame()
+        if frame is None:
+            return
+
+        from ..tasks.auto_eat import current_avatar_is_low_hp
+
+        revive_visible = self._recovery_icon_visible(frame)
+        low_hp = current_avatar_is_low_hp(frame)
+        if not low_hp and not revive_visible:
+            return
+
+        # Match the mobile AutoEat trigger first: the quick-use gadget can
+        # recover without a map trip. Reuse the cached trigger frame after the
+        # wait, so an active realtime loop remains the sole screenshot owner.
+        self.ctx.input.key_press("Z")
+        self.ctx.sleep(1200 if low_hp else 3500)
+        after = self._latest_frame()
+        if after is not None and not current_avatar_is_low_hp(after):
+            return
+
+        self._recover_to_statue()
+        # The statue changes the player's position. Retry the waypoint through
+        # the existing bounded route retry path instead of continuing with a
+        # stale local position prior.
+        raise TimeoutError("低血量恢复完成，重试当前路点")
 
     @staticmethod
     def _retry_count(task: PathingTask) -> int:
@@ -441,6 +531,7 @@ class PathingExecutor:
         last_fix: tuple[float, float, float] | None = None  # (x, y, t)
         prev_err: float | None = None
         last_stuck_sample_at = 0.0
+        last_gadget_at = float("-inf")
         last_map_recognition_at = float("-inf")
         last_good_position: tuple[float, float] | None = None
         lost_fixes = 0
@@ -612,6 +703,14 @@ class PathingExecutor:
                 if not moving:
                     self.ctx.input.key_down("W")
                     moving = True
+                if (
+                    self.party_config.use_gadget_interval_ms > 0
+                    and now - last_gadget_at
+                    >= self.party_config.use_gadget_interval_ms / 1000.0
+                ):
+                    self.ctx.input.key_press("Z")
+                    last_gadget_at = now
+                    self.log("[pathing] 按配置使用小道具")
                 if now - self._last_mode_action_at >= 1.0:
                     if (
                         wp.move_mode in ("run", "dash")

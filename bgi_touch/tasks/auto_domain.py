@@ -17,6 +17,7 @@ from typing import Callable
 from ..engine.context import GameContext
 from ..engine.recognition import Mat, RecognitionObject
 from .auto_fight import AutoFightTask
+from .common_jobs import exclusive_realtime_triggers
 
 
 TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "assets" / "templates" / "stygian"
@@ -136,6 +137,10 @@ class AutoDomainTask:
             self.reward_summary[name] = self.reward_summary.get(name, 0) + quantity
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> dict[str, int]:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> dict[str, int]:
         for rd in range(1, self.rounds + 1):
             if cancelled and cancelled():
                 return dict(self.reward_summary)

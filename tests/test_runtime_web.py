@@ -215,6 +215,44 @@ def test_teleport_exclusive_scope_pauses_configured_inactive_trigger_loop():
     assert not loop.active
 
 
+def test_trigger_loop_exclusive_scopes_are_serialized_and_reentrant():
+    from bgi_touch.triggers.loop import TriggerLoop
+
+    loop = TriggerLoop(SimpleNamespace(), log=lambda _: None)
+    entered = threading.Event()
+    release = threading.Event()
+    second_entered = threading.Event()
+    order = []
+
+    def first():
+        with loop.exclusive():
+            order.append("first-enter")
+            entered.set()
+            assert release.wait(1.0)
+            with loop.exclusive():
+                order.append("nested-enter")
+            order.append("first-exit")
+
+    def second():
+        assert entered.wait(1.0)
+        with loop.exclusive():
+            order.append("second-enter")
+            second_entered.set()
+
+    first_thread = threading.Thread(target=first)
+    second_thread = threading.Thread(target=second)
+    first_thread.start()
+    second_thread.start()
+    assert entered.wait(1.0)
+    time.sleep(0.03)
+    assert not second_entered.is_set()
+    release.set()
+    first_thread.join(1.0)
+    second_thread.join(1.0)
+
+    assert order == ["first-enter", "nested-enter", "first-exit", "second-enter"]
+
+
 def test_trigger_loop_runs_only_the_exclusive_trigger():
     from bgi_touch.triggers.loop import TriggerLoop
 
@@ -433,6 +471,14 @@ def test_autopick_uses_upstream_default_lists_and_mode_specific_overrides():
     assert not blacklist._should_pick("自定义机关")
     assert not blacklist._should_pick("退出秘境")
     assert blacklist._should_pick("进入")
+
+
+def test_autopick_processes_ocr_edge_noise_like_bettergi():
+    from bgi_touch.triggers.autopick import _process_ocr_text
+
+    assert _process_ocr_text("  [甜甜花 ") == "「甜甜花」"
+    assert _process_ocr_text("...甜甜花!!!") == "甜甜花"
+    assert _process_ocr_text("--") == ""
 
 
 def test_teleport_panel_wait_does_not_fail_on_first_empty_frame():

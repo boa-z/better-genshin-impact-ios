@@ -86,14 +86,15 @@ SUPPORTED = [
     "dispatcher.runUseRedemptionCodeTask",
     "dispatcher.runAutoArtifactSalvageTask",
     "dispatcher.runCountInventoryItemTask", "dispatcher.runGetGridIconsTask",
-    "dispatcher.runInventoryCountComparisonTask", "dispatcher.runCharacterDevelopmentTask",
+    "dispatcher.runInventoryCountComparisonTask", "dispatcher.runGridIconsAccuracyTestTask",
+    "dispatcher.runCharacterDevelopmentTask",
     "dispatcher.runScriptGroupTask", "dispatcher.runMusicPlayerTask", "dispatcher.runShellTask",
     "CountInventoryItemParam",
     "characterDevelopmentTask.getCharacter", "characterDevelopmentTask.getMultiCharacters",
 ]
 PARTIAL = {
     "notification.": "本地日志始终可用；远程推送需在 config/notification.json 显式允许 JS 并启用 Gotify",
-    "dispatcher.runTask": "已支持 AutoFight/AutoTrack/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/MusicPlayer/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/SereniteaPotRewards/QuickClaimReward/OneKeyExpedition/CheckRewards/WalkToF/ScanPick/LowerHeadThenWalkTo/LinneaMining/奖励/协会导航/合成/调时/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/CharacterDevelopment/OneDragon/ScriptGroup/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
+    "dispatcher.runTask": "已支持 AutoFight/AutoTrack/AutoWood/AutoDomain/AutoCook/AutoFishing/AutoOpenChest/AutoBoss/AutoLeyLine/AutoEat/AutoMusicGame/AutoAlbum/MusicPlayer/AutoGeniusInvokation/AutoStygianOnslaught/QuickSereniteaPot/SereniteaPotRewards/QuickClaimReward/OneKeyExpedition/CheckRewards/WalkToF/ScanPick/LowerHeadThenWalkTo/LinneaMining/奖励/协会导航/合成/调时/QuickBuy/UseRedemptionCode/AutoArtifactSalvage/CountInventoryItem/GetGridIcons/InventoryCountComparison/GridIconsAccuracyTest/CharacterDevelopment/OneDragon/ScriptGroup/Shell；AutoBoss/地脉已内置官方路线，幽境已内置活动导航状态机",
     "runAutoFightTask": "支持 combatStrategyPath、快速/切人后战斗结束检查、开战阻断、敌血条跳过、队伍页确认，以及经验图标门控的万叶/琴战后聚怪和扫描拾取；拾取队伍自动恢复仍需真机回归",
     "runAutoBossTask": "支持 BetterGI AutoBoss 官方路线、树脂策略、征讨之花导航、奖励汇总和 routePath/pathingFile 覆盖",
     "runAutoLeyLine": "支持 269 个官方地脉点位、632 份路线、树脂耗尽策略、奖励树脂优先级和 routePath/pathingFile 覆盖",
@@ -117,6 +118,7 @@ PARTIAL = {
     "dispatcher.runAutoArtifactSalvageTask": "支持低星快速选择、五星 OCR+JavaScript 筛选；最终分解需要显式确认参数",
     "Shell": "跨平台宿主命令已支持；必须先在 config/shell.json 显式启用，且应只运行可信脚本",
     "dispatcher.runCountInventoryItemTask": "遍历 iOS 背包网格，通过详情名称和数量区域 OCR 返回单项或多项计数",
+    "dispatcher.runGridIconsAccuracyTestTask": "使用 ItemV2 模型逐格对比图标名称/稀有度与详情 OCR，返回结构化准确率报告；模型缺失时需先下载 assets/models",
 }
 UNSUPPORTED = {}
 

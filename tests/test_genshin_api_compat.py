@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, call, patch
 
@@ -561,6 +563,92 @@ def test_js_runtime_awaits_genshin_tp_without_host_object_recursion(tmp_path, mo
         JsScriptRuntime(ctx, tmp_path, log=lambda _message: None).run()
 
     assert calls == [(4328.0, 3960.0, None, False)]
+
+
+def test_js_runtime_exposes_genshin_actions_as_concurrent_promises(tmp_path, monkeypatch):
+    """Task-returning upstream genshin methods must not block JS timers."""
+    pytest.importorskip("pythonmonkey")
+
+    from bgi_touch.engine.genshin_api import GenshinApi
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    calls = []
+
+    def fake_move_map(self, x, y, force_country=None):
+        calls.append((x, y, force_country, threading.current_thread().name))
+        time.sleep(0.08)
+        return {"x": x, "y": y}
+
+    monkeypatch.setattr(GenshinApi, "moveMapTo", fake_move_map)
+    (tmp_path / "main.js").write_text(
+        """
+const task = genshin.moveMapTo(123, 456, '枫丹');
+const isPromise = task instanceof Promise;
+let ticks = 0;
+const timer = setInterval(() => ticks++, 5);
+const result = await task;
+clearInterval(timer);
+return JSON.stringify({isPromise, result, ticks});
+""",
+        encoding="utf-8",
+    )
+    input_simulator = SimpleNamespace(
+        key_down=Mock(), key_up=Mock(), key_press=Mock(), click_ref=Mock(),
+        move_camera_by=Mock(), attack=Mock(), attack_down=Mock(),
+        attack_up=Mock(), button_down=Mock(), button_up=Mock(),
+        release_all=Mock(), tap_button=Mock(),
+    )
+    ctx = SimpleNamespace(
+        input=input_simulator,
+        device=SimpleNamespace(paste_text=Mock(), tap=Mock()),
+        transform=ScreenTransform(2778, 1284),
+        sleep=lambda _ms: None,
+    )
+
+    result = json.loads(JsScriptRuntime(ctx, tmp_path).run())
+
+    assert result["isPromise"] is True
+    assert result["result"] == {"x": 123, "y": 456}
+    assert result["ticks"] >= 3
+    assert calls and calls[0][:3] == (123, 456, "枫丹")
+    assert calls[0][3].startswith("bgi-js-task")
+
+
+def test_js_runtime_catches_genshin_action_rejection(tmp_path, monkeypatch):
+    pytest.importorskip("pythonmonkey")
+
+    from bgi_touch.engine.genshin_api import GenshinApi
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    def fail_return_main_ui(self):
+        raise RuntimeError("返回主界面失败")
+
+    monkeypatch.setattr(GenshinApi, "returnMainUi", fail_return_main_ui)
+    (tmp_path / "main.js").write_text(
+        """
+const message = await genshin.returnMainUi().catch(error => error.message);
+return message;
+""",
+        encoding="utf-8",
+    )
+
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    input_simulator = SimpleNamespace(
+        key_down=Mock(), key_up=Mock(), key_press=Mock(), click_ref=Mock(),
+        move_camera_by=Mock(), attack=Mock(), attack_down=Mock(),
+        attack_up=Mock(), button_down=Mock(), button_up=Mock(),
+        release_all=Mock(), tap_button=Mock(),
+    )
+    ctx = SimpleNamespace(
+        input=input_simulator,
+        device=SimpleNamespace(paste_text=Mock(), tap=Mock()),
+        transform=ScreenTransform(1920, 1080),
+        sleep=lambda _ms: None,
+    )
+
+    assert JsScriptRuntime(ctx, tmp_path).run() == "RuntimeError: 返回主界面失败"
 
 
 def test_js_runtime_exposes_lazy_navigation_as_plain_facade(tmp_path):

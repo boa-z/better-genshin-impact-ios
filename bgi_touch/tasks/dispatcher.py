@@ -92,6 +92,7 @@ class TaskDispatcher:
         "SereniteaPotRewards", "GoToSereniteaPot", "GoToSereniteaPotTask",
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
+        "GridIconsAccuracyTest",
         "CharacterDevelopment", "OneDragon", "ScriptGroup", "MusicPlayer", "Shell",
         "OneKeyExpedition",
         "AutoTrack",
@@ -115,6 +116,7 @@ class TaskDispatcher:
         strategy_roots: list[str | Path] | None = None,
         restrict_strategy_roots: bool = False,
         notification_service=None,
+        pathing_config: Mapping[str, Any] | Any | None = None,
     ):
         self.ctx = ctx
         self.party_slots = self._normalize_party_slots(party_slots)
@@ -127,6 +129,14 @@ class TaskDispatcher:
         ]
         self.restrict_strategy_roots = bool(restrict_strategy_roots)
         self.notification_service = notification_service
+        if pathing_config is None:
+            pathing_config = getattr(ctx, "pathing_config", None)
+        if pathing_config is not None:
+            from ..pathing.party_config import PathingPartyConfig
+
+            self.pathing_config = PathingPartyConfig.from_mapping(pathing_config)
+        else:
+            self.pathing_config = None
         self._genshin_api_instance = None
 
     @staticmethod
@@ -303,6 +313,8 @@ class TaskDispatcher:
             return self.run_get_grid_icons_task(cfg, ct)
         if name == "InventoryCountComparison":
             return self.run_inventory_count_comparison_task(cfg, ct)
+        if name in ("GridIconsAccuracyTest", "GridIconsAccuracyTestTask"):
+            return self.run_grid_icons_accuracy_test_task(cfg, ct)
         if name in ("CharacterDevelopment", "CharacterDevelopmentTask"):
             return self.run_character_development_task(cfg, ct)
         if name in ("OneDragon", "OneDragonFlow"):
@@ -537,6 +549,7 @@ class TaskDispatcher:
             close_game_on_completion=_boolean(
                 _value(param, "closeGameOnCompletion", True), True
             ),
+            config_source=source if isinstance(source, (str, Path)) else None,
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
@@ -954,7 +967,7 @@ class TaskDispatcher:
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
-    def run_auto_eat_task(self, param: Any = None, ct: Any = None) -> bool:
+    def run_auto_eat_task(self, param: Any = None, ct: Any = None) -> bool | int | None:
         from .auto_eat import AutoEatTask
 
         food_name = _value(param, "foodName", None)
@@ -964,24 +977,55 @@ class TaskDispatcher:
         if food_name is not None and food_effect is not None:
             raise ValueError("不能同时指定 foodName 和 foodEffectType")
         if food_effect is not None:
-            defaults = _value(param, "defaultFoodNames", _value(param, "foodNames", {}))
-            if not isinstance(defaults, Mapping):
-                defaults = {}
-            effect_names = {
-                1: "ATKBoostingDish",
-                2: "AdventurersDish",
-                3: "DEFBoostingDish",
-            }
-            effect_key = effect_names.get(food_effect, str(food_effect))
-            food_name = defaults.get(effect_key, defaults.get(str(food_effect)))
-            if food_name is None:
-                raise ValueError(
-                    "foodEffectType 需要 defaultFoodNames/foodNames 配置，"
-                    "且只支持攻击、冒险、防御类料理"
+            try:
+                if isinstance(food_effect, bool):
+                    raise ValueError
+                food_effect = int(food_effect)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError("JS脚本入参错误：错误的foodEffectType") from error
+
+            if food_effect not in (1, 2, 3):
+                raise ValueError("JS脚本入参错误：错误的foodEffectType")
+
+            # ScriptGroup/JS execution receives the same nested config as
+            # BetterGI's PathingPartyConfig.  Keep explicit task mappings as
+            # a compatibility extension for direct CLI/WebUI callers.
+            if self.pathing_config is not None:
+                defaults = {
+                    1: self.pathing_config.auto_eat_config.default_atk_boosting_dish_name,
+                    2: self.pathing_config.auto_eat_config.default_adventurers_dish_name,
+                    3: self.pathing_config.auto_eat_config.default_def_boosting_dish_name,
+                }
+                food_name = defaults[food_effect]
+            else:
+                raw_defaults = _value(
+                    param,
+                    "defaultFoodNames",
+                    _value(param, "foodNames", None),
                 )
-            food_name = str(food_name).strip() or None
-            if food_name is None:
-                raise ValueError("foodEffectType 对应的料理名称为空")
+                defaults = raw_defaults if isinstance(raw_defaults, Mapping) else None
+                if defaults is None:
+                    raise ValueError(
+                        "foodEffectType 参数需要调度器配置，请在调度器下使用"
+                    )
+                effect_names = {
+                    1: "ATKBoostingDish",
+                    2: "AdventurersDish",
+                    3: "DEFBoostingDish",
+                }
+                effect_key = effect_names[food_effect]
+                food_name = defaults.get(
+                    effect_key,
+                    defaults.get(str(food_effect)),
+                )
+
+            if food_name is None or not str(food_name).strip():
+                labels = {1: "攻击", 2: "冒险", 3: "防御"}
+                self.log(
+                    f"[autoEat] 缺少默认的{labels[food_effect]}类料理配置，跳过吃Buff"
+                )
+                return None
+            food_name = str(food_name).strip()
 
         check_interval = _value(
             param,
@@ -1004,6 +1048,7 @@ class TaskDispatcher:
                 (720, 900, 480, 140),
             ),
             min_width_ref=int(_value(param, "minWidthRef", 55) or 55),
+            max_pages=int(_value(param, "maxPages", 100) or 100),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
@@ -1440,6 +1485,30 @@ class TaskDispatcher:
             _value(param, "target", "CurrentPage"),
             max_pages=int(_value(param, "maxPages", 100) or 100),
             output_dir=_value(param, "outputDirectory", _value(param, "outputDir", None)),
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
+    def run_grid_icons_accuracy_test_task(
+        self, param: Any = None, ct: Any = None,
+    ) -> dict[str, object]:
+        from .inventory_grid import GridIconsAccuracyTestTask
+
+        category = _value(
+            param, "gridScreenName", _value(param, "gridName", _value(param, "category", None))
+        )
+        if category is None:
+            raise ValueError("GridIconsAccuracyTest 需要 gridScreenName/gridName")
+        max_num = _value(param, "maxNumToTest", _value(param, "maxNum", None))
+        threshold = _value(
+            param, "scoreThreshold", _value(param, "minScore", 0.75),
+        )
+        return GridIconsAccuracyTestTask(
+            self.ctx,
+            category,
+            max_num_to_test=int(max_num) if max_num is not None else None,
+            max_pages=int(_value(param, "maxPages", 100) or 100),
+            output_dir=_value(param, "outputDirectory", _value(param, "outputDir", None)),
+            score_threshold=float(threshold if threshold is not None else 0.75),
             log=self.log,
         ).run(cancelled=self._callback(ct))
 

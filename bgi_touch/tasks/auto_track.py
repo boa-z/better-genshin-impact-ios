@@ -101,7 +101,15 @@ class AutoTrackTask:
     def _exclusive_triggers(self):
         """Prevent realtime triggers from acting on stale tracking frames."""
         loop = getattr(self.ctx, "_trigger_loop", None)
-        if loop is None or not getattr(loop, "active", False):
+        if loop is None:
+            yield
+            return
+        exclusive = getattr(loop, "exclusive", None)
+        if callable(exclusive):
+            with exclusive():
+                yield
+            return
+        if not getattr(loop, "active", False):
             yield
             return
         state = loop.pause()

@@ -517,6 +517,7 @@ def api_scripts():
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode",
         "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
+        "GridIconsAccuracyTest",
         "CharacterDevelopment",
         "OneDragon",
         "Shell",

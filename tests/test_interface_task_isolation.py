@@ -84,3 +84,17 @@ def test_quick_serenitea_and_redeem_use_the_same_exclusive_scope():
         (([], False, 1),),
         (([], False, 1),),
     ]
+
+
+def test_auto_stygian_isolates_event_menu_and_reward_flow():
+    from bgi_touch.tasks.auto_stygian import AutoStygianOnslaughtTask
+
+    ctx, loop = _context()
+    task = AutoStygianOnslaughtTask.__new__(AutoStygianOnslaughtTask)
+    task.ctx = ctx
+    task._run_impl = Mock(return_value=True)
+
+    assert task.run() is True
+    task._run_impl.assert_called_once_with(None)
+    loop.pause.assert_called_once_with()
+    loop.resume.assert_called_once_with(([], False, 1))

@@ -15,7 +15,7 @@ executor falls back to ordinary movement when that evidence is unavailable.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from ..config_values import as_bool
@@ -38,6 +38,7 @@ HURRY_AVATARS = (
 # Keep the order from BetterGI's picker.  Empty/automatic entries are handled
 # separately so they can never become an accidental character name.
 AUTO_HURRY_PRIORITY = tuple(value for value in HURRY_AVATARS if value not in {"", "自动"})
+RECOVER_TIMINGS = frozenset({"AnyWaypoint", "OnlyTeleport", "Never"})
 
 
 def _folded_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -79,6 +80,91 @@ def _slot_number(value: Any) -> int | None:
     return slot if 1 <= slot <= 4 else None
 
 
+def _recover_timing(value: Any, legacy_only_teleport: Any = False) -> str:
+    """Normalize BetterGI's enum and its retired boolean spelling."""
+
+    if value is None:
+        return "OnlyTeleport" if as_bool(legacy_only_teleport, False) else "AnyWaypoint"
+    if isinstance(value, bool):
+        return "OnlyTeleport" if value else "AnyWaypoint"
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        numeric = None
+    if numeric is not None:
+        return {0: "AnyWaypoint", 1: "OnlyTeleport", 2: "Never"}.get(
+            numeric, "AnyWaypoint"
+        )
+    normalized = str(value).strip().casefold().replace("_", "")
+    aliases = {
+        "anywaypoint": "AnyWaypoint",
+        "any": "AnyWaypoint",
+        "任何路径点": "AnyWaypoint",
+        "onlyteleport": "OnlyTeleport",
+        "teleport": "OnlyTeleport",
+        "只在传送点": "OnlyTeleport",
+        "never": "Never",
+        "none": "Never",
+        "不回复": "Never",
+    }
+    return aliases.get(normalized, "AnyWaypoint")
+
+
+_MISSING = object()
+
+
+def _optional_name(value: Any, default: str | None = None) -> str | None:
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+@dataclass(frozen=True)
+class AutoEatConfig:
+    """Portable BetterGI ``PathingConfig.AutoEatConfig`` values.
+
+    The desktop dispatcher resolves ``foodEffectType`` against these fields
+    before creating ``AutoEatTask``.  Keeping the nested object separate from
+    the route executor also lets old ScriptGroup JSON pass through unchanged.
+    """
+
+    default_atk_boosting_dish_name: str | None = "炸萝卜丸子"
+    default_adventurers_dish_name: str | None = None
+    default_def_boosting_dish_name: str | None = None
+
+    @classmethod
+    def from_mapping(
+        cls,
+        raw: Mapping[str, Any] | "AutoEatConfig" | None = None,
+    ) -> "AutoEatConfig":
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, Mapping):
+            return cls()
+
+        def read_name(*names: str, default: str | None = None) -> str | None:
+            value = _value(raw, *names, default=_MISSING)
+            if value is _MISSING:
+                return default
+            return _optional_name(value)
+
+        return cls(
+            default_atk_boosting_dish_name=read_name(
+                "defaultAtkBoostingDishName",
+                default=cls.default_atk_boosting_dish_name,
+            ),
+            default_adventurers_dish_name=read_name(
+                "defaultAdventurersDishName",
+                default=cls.default_adventurers_dish_name,
+            ),
+            default_def_boosting_dish_name=read_name(
+                "defaultDefBoostingDishName",
+                default=cls.default_def_boosting_dish_name,
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class PathingPartyConfig:
     """Portable subset of BetterGI's pathing party configuration.
@@ -101,7 +187,10 @@ class PathingPartyConfig:
     auto_skip_enabled: bool = True
     auto_run_enabled: bool = True
     auto_eat_enabled: bool = False
+    auto_eat_config: AutoEatConfig = field(default_factory=AutoEatConfig)
     auto_fight_enabled: bool = True
+    recover_timing: str = "AnyWaypoint"
+    use_gadget_interval_ms: int = 0
     distance: int = 45
     approach_stop_distance: int = 25
     hurry_on_avatar: str = ""
@@ -129,6 +218,12 @@ class PathingPartyConfig:
         nested = _value(raw, "pathingConfig", default=None)
         if isinstance(nested, Mapping):
             raw = nested
+
+        auto_eat_raw = _value(raw, "autoEatConfig", default=None)
+        if not isinstance(auto_eat_raw, Mapping) and not isinstance(
+            auto_eat_raw, AutoEatConfig
+        ):
+            auto_eat_raw = {}
 
         distance = max(1, _int(_value(raw, "distance", default=45), 45))
         approach = max(
@@ -195,8 +290,17 @@ class PathingPartyConfig:
             auto_eat_enabled=as_bool(
                 _value(raw, "autoEatEnabled", default=False), False
             ),
+            auto_eat_config=AutoEatConfig.from_mapping(auto_eat_raw),
             auto_fight_enabled=as_bool(
                 _value(raw, "autoFightEnabled", default=True), True
+            ),
+            recover_timing=_recover_timing(
+                _value(raw, "recoverTiming", default=None),
+                _value(raw, "onlyInTeleportRecover", default=False),
+            ),
+            use_gadget_interval_ms=max(
+                0,
+                _int(_value(raw, "useGadgetIntervalMs", default=0), 0),
             ),
             distance=distance,
             approach_stop_distance=approach,
@@ -300,6 +404,8 @@ class PathingPartyConfig:
 
 __all__ = [
     "AUTO_HURRY_PRIORITY",
+    "AutoEatConfig",
     "HURRY_AVATARS",
     "PathingPartyConfig",
+    "RECOVER_TIMINGS",
 ]

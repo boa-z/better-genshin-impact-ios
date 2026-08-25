@@ -32,6 +32,8 @@ class ItemIconRecognizer:
         self,
         model_path: str | Path = MODELS / "item.onnx",
         prototypes_path: str | Path = MODELS / "item.csv",
+        *,
+        include_quality_levels: bool = False,
     ):
         import onnxruntime as ort
 
@@ -47,11 +49,13 @@ class ItemIconRecognizer:
         )
         self.input_name = self.session.get_inputs()[0].name
         self.names, self.quality_levels, self.prototypes = self._load_prototypes(
-            prototypes_path
+            prototypes_path, include_quality_levels=include_quality_levels,
         )
 
     @staticmethod
-    def _load_prototypes(path: Path) -> tuple[list[str], np.ndarray, np.ndarray]:
+    def _load_prototypes(
+        path: Path, *, include_quality_levels: bool = False,
+    ) -> tuple[list[str], np.ndarray, np.ndarray]:
         names: list[str] = []
         qualities: list[int] = []
         vectors: list[np.ndarray] = []
@@ -67,7 +71,9 @@ class ItemIconRecognizer:
                 class_id = row["item_class_id"].strip().casefold()
                 quality = row.get("quality_level", "").strip()
                 qualities.append(
-                    int(quality) if class_id.startswith("relic:") and quality else -1
+                    int(quality)
+                    if quality and (include_quality_levels or class_id.startswith("relic:"))
+                    else -1
                 )
                 vectors.append(vector / norm)
         if not vectors:

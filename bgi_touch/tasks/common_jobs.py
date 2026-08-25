@@ -39,10 +39,27 @@ def _compact(value: object) -> str:
     return "".join(str(value or "").split()).casefold()
 
 
+def _existing_trigger_loop(ctx: GameContext):
+    """Return a configured trigger loop without forcing lazy construction."""
+    loop = getattr(ctx, "_trigger_loop", None)
+    if loop is not None:
+        return loop
+    values = getattr(ctx, "__dict__", None)
+    if isinstance(values, Mapping) and values.get("triggers") is not None:
+        return values["triggers"]
+    if not isinstance(ctx, GameContext):
+        return getattr(ctx, "triggers", None)
+    return None
+
+
 def _pause_realtime_triggers(ctx: GameContext):
     """Pause the caller-owned screenshot producer while a job consumes frames."""
     try:
-        loop = getattr(ctx, "triggers", None)
+        # Do not lazily create GameContext.triggers for a task that was started
+        # without any realtime trigger.  Besides avoiding an unnecessary
+        # object, this keeps a no-trigger task from becoming a screenshot
+        # producer merely because it entered a cleanup scope.
+        loop = _existing_trigger_loop(ctx)
         pause = getattr(loop, "pause", None)
         if callable(pause):
             return loop, pause()
@@ -71,6 +88,13 @@ def exclusive_realtime_triggers(ctx: GameContext):
     AutoPick/AutoSkip 在页面切换期间抢先发送输入，也不会创建第二个截图
     生产者。没有触发器循环的轻量测试宿主则直接执行任务。
     """
+    loop = _existing_trigger_loop(ctx)
+    exclusive = getattr(loop, "exclusive", None)
+    if callable(exclusive):
+        with exclusive():
+            yield
+        return
+
     loop, state = _pause_realtime_triggers(ctx)
     try:
         yield

@@ -1495,6 +1495,48 @@ def test_one_dragon_runner_dispatches_custom_task_configs_and_continues():
     assert "x" in result["failed"]
 
 
+def test_one_dragon_runs_original_script_group_for_custom_item(tmp_path):
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.one_dragon import OneDragonFlowTask, OneDragonItem
+
+    source = tmp_path / "OneDragon" / "daily.json"
+    source.parent.mkdir()
+    source.write_text("{}", encoding="utf-8")
+    group = tmp_path / "ScriptGroup" / "每日配置.json"
+    group.parent.mkdir()
+    group.write_text('{"Name":"每日配置","Projects":[]}', encoding="utf-8")
+
+    class Dispatcher:
+        IMPLEMENTED = set()
+
+        def __init__(self):
+            self.params = None
+
+        def run_script_group_task(self, params, ct=None):
+            self.params = params
+            assert ct is not None
+            return {"status": "completed"}
+
+    dispatcher = Dispatcher()
+    flow = OneDragonFlowTask(
+        SimpleNamespace(sleep=lambda _ms: None),
+        {
+            "taskEnabledList": {"group": True},
+            "taskOrder": ["group"],
+            "taskDefinitions": {"group": "每日配置"},
+        },
+        dispatcher,
+        config_source=source,
+        log=lambda _message: None,
+    )
+
+    result = flow.run(cancelled=lambda: False)
+
+    assert result["completed"] == ["group"]
+    assert dispatcher.params["configFile"] == str(group.resolve())
+
+
 def test_one_dragon_maps_current_auto_boss_config():
     from types import SimpleNamespace
 
@@ -1941,6 +1983,113 @@ def test_pathing_executor_handles_four_leaf_before_movement():
     executor._face_to.assert_called_once_with(task.positions[0])
     executor._do_action.assert_called_once_with(task.positions[0])
     executor._move_to.assert_not_called()
+
+
+def test_pathing_executor_recovers_low_hp_with_gadget_before_statue(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import Waypoint
+
+    ctx = MagicMock()
+    ctx.input = MagicMock()
+    ctx.sleep = lambda _ms: None
+    executor = PathingExecutor(ctx, log=lambda _message: None)
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    executor._latest_frame = MagicMock(return_value=frame)
+    executor._recovery_icon_visible = MagicMock(return_value=False)
+    executor._recover_to_statue = MagicMock()
+    monkeypatch.setattr(
+        "bgi_touch.tasks.auto_eat.current_avatar_is_low_hp",
+        MagicMock(side_effect=[True, False]),
+    )
+
+    executor._recover_when_low_hp(
+        Waypoint(id=1, x=10, y=20, type="target", move_mode="walk")
+    )
+
+    ctx.input.key_press.assert_called_once_with("Z")
+    executor._recover_to_statue.assert_not_called()
+
+
+def test_pathing_executor_retries_waypoint_after_statue_recovery(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import Waypoint
+
+    ctx = MagicMock()
+    ctx.input = MagicMock()
+    ctx.sleep = lambda _ms: None
+    executor = PathingExecutor(ctx, log=lambda _message: None)
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    executor._latest_frame = MagicMock(return_value=frame)
+    executor._recovery_icon_visible = MagicMock(return_value=False)
+    executor._recover_to_statue = MagicMock()
+    monkeypatch.setattr(
+        "bgi_touch.tasks.auto_eat.current_avatar_is_low_hp",
+        MagicMock(side_effect=[True, True]),
+    )
+
+    with pytest.raises(TimeoutError, match="低血量恢复完成"):
+        executor._recover_when_low_hp(
+            Waypoint(id=1, x=10, y=20, type="target", move_mode="walk")
+        )
+
+    ctx.input.key_press.assert_called_once_with("Z")
+    executor._recover_to_statue.assert_called_once_with()
+
+
+def test_pathing_executor_uses_configured_gadget_interval(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import Waypoint
+
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+    clock = Clock()
+    monkeypatch.setattr("bgi_touch.pathing.executor.time.monotonic", clock.monotonic)
+    monkeypatch.setattr(
+        "bgi_touch.pathing.executor.camera_orientation_deg",
+        lambda _ctx, _frame: None,
+    )
+
+    ctx = MagicMock()
+    ctx.input = MagicMock()
+    ctx.capture_bgr.return_value = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    ctx.sleep = lambda milliseconds: setattr(clock, "now", clock.now + milliseconds / 1000)
+    positions = iter([(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (10.0, 0.0), (20.0, 0.0)])
+    positioner = SimpleNamespace(get_position=lambda _frame: next(positions))
+    executor = PathingExecutor(
+        ctx,
+        positioner=positioner,
+        pathing_config={"UseGadgetIntervalMs": 1000},
+        log=lambda _message: None,
+    )
+
+    executor._move_to(
+        Waypoint(id=1, x=20, y=0, type="target", move_mode="walk"),
+        timeout_s=5,
+        arrive_dist=1,
+    )
+
+    gadget_presses = [
+        call for call in ctx.input.key_press.call_args_list
+        if call.args == ("Z",)
+    ]
+    assert len(gadget_presses) == 2
 
 
 def test_pathing_executor_enables_all_migrated_realtime_triggers():

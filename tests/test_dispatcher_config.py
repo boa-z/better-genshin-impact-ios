@@ -55,6 +55,42 @@ def test_auto_fishing_dispatcher_coerces_string_boolean_values():
     assert kwargs["quit_on_finish"] is False
 
 
+def test_auto_eat_dispatcher_resolves_food_effect_from_pathing_config():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    with patch("bgi_touch.tasks.auto_eat.AutoEatTask") as task:
+        task.return_value.run.return_value = 1
+        result = TaskDispatcher(
+            object(),
+            pathing_config={
+                "PathingConfig": {
+                    "AutoEatConfig": {
+                        "DefaultAdventurersDishName": "冒险料理",
+                    },
+                },
+            },
+        ).run_auto_eat_task({"foodEffectType": 2})
+
+    assert result == 1
+    assert task.call_args.kwargs["food_name"] == "冒险料理"
+
+
+def test_auto_eat_dispatcher_skips_unconfigured_food_effect():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    logs = []
+    with patch("bgi_touch.tasks.auto_eat.AutoEatTask") as task:
+        result = TaskDispatcher(
+            object(),
+            pathing_config={"PathingConfig": {"AutoEatConfig": {}}},
+            log=logs.append,
+        ).run_auto_eat_task({"foodEffectType": 2})
+
+    assert result is None
+    task.assert_not_called()
+    assert any("冒险类料理" in line for line in logs)
+
+
 def test_timer_dispatcher_coerces_string_boolean_values():
     from bgi_touch.tasks.dispatcher import TaskDispatcher
 

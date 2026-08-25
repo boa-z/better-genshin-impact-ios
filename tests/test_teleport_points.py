@@ -152,6 +152,83 @@ def test_named_panel_candidate_rejects_combined_long_ocr_label():
     assert candidate.text == "优兰尼娅湖"
 
 
+def test_panel_candidate_click_uses_wide_mobile_row_hit_area():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import _TeleportPanelCandidate
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    device = SimpleNamespace(tap=Mock())
+    ctx = SimpleNamespace(
+        device=device,
+        transform=ScreenTransform(1920, 1080),
+    )
+    icon = SimpleNamespace(ctx=ctx, dx=1350, dy=300, dw=36, dh=36)
+    text = SimpleNamespace(ctx=ctx, dx=1386, dy=304, dw=70, dh=24)
+    candidate = _TeleportPanelCandidate(1, {"TeleportWaypoint"}, "优兰尼娅湖", icon, text, 300)
+
+    candidate.click()
+
+    device.tap.assert_called_once_with(
+        1496.0,
+        318.0,
+        image_width=1920,
+        image_height=1080,
+    )
+
+
+def test_panel_candidate_retries_a_tap_before_reporting_failure(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import bgi_touch.pathing.tp as module
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    candidate_text = SimpleNamespace(text="优兰尼娅湖", click=Mock())
+    candidate = module._TeleportPanelCandidate(
+        1, {"TeleportWaypoint"}, "优兰尼娅湖", None, candidate_text, 300,
+    )
+
+    class Region:
+        def __init__(self, confirmed=False):
+            self.confirmed = confirmed
+
+        def find(self, _recognition):
+            return SimpleNamespace(
+                is_exist=lambda: self.confirmed,
+                click=Mock(),
+            )
+
+        def find_multi(self, *_args, **_kwargs):
+            return []
+
+    regions = [Region(), Region(), Region(confirmed=True)]
+    task = module.TpTask.__new__(module.TpTask)
+    task.ctx = SimpleNamespace(
+        capture_region=Mock(side_effect=regions),
+        sleep=Mock(),
+        transform=ScreenTransform(1920, 1080),
+    )
+    task.log = Mock()
+    task._go_teleport = object()
+    task._find_panel_candidates = Mock(side_effect=[[candidate], [candidate]])
+    task._find_target_text_candidate = Mock(return_value=None)
+    # Advance the monotonic clock enough for the bounded retry, without
+    # making this offline test sleep through the mobile settle delays.
+    ticks = [0.0]
+
+    def monotonic():
+        value = ticks[0]
+        ticks[0] += 0.45
+        return value
+
+    monkeypatch.setattr(module.time, "monotonic", monotonic)
+
+    assert task._find_and_tap_confirm(timeout_s=5, initial_delay_ms=0)
+    assert candidate_text.click.call_count == 2
+
+
 def test_absolute_map_icon_alignment_recovers_small_layer_translation():
     from pytest import approx
 

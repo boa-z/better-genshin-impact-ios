@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from typing import Callable, Protocol
 
 from ..engine.context import GameContext
@@ -37,6 +38,13 @@ class TriggerLoop:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._restart_requested = False
+        # Interface tasks and map gestures share the same input channel.  A
+        # plain pause/resume pair is not enough when two callers overlap: the
+        # second caller can observe the temporarily empty trigger list and the
+        # first caller may restore AutoPick while the second task is still
+        # consuming frames.  Keep the scope re-entrant for nested tasks (for
+        # example genshin.tp inside AutoTrack) and serialize independent ones.
+        self._exclusive_lock = threading.RLock()
 
     def add(self, trigger: Trigger) -> None:
         with self._state_lock:
@@ -149,6 +157,23 @@ class TriggerLoop:
             self._generation += 1
         if was_active:
             self.start()
+
+    @contextmanager
+    def exclusive(self):
+        """Temporarily give one task sole ownership of frames and input.
+
+        ``pause``/``resume`` remain public for older callers and lightweight
+        test hosts.  New code should use this scope so overlapping menu/map
+        tasks cannot restore a realtime trigger in the middle of another
+        task.  The lock is deliberately re-entrant because a task may call a
+        nested helper that also protects its own interaction flow.
+        """
+        with self._exclusive_lock:
+            state = self.pause()
+            try:
+                yield
+            finally:
+                self.resume(state)
 
     def _run(self) -> None:
         self.log(f"[trigger] 帧循环启动（{1/self.interval:.1f} fps）")

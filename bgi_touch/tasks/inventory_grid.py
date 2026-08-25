@@ -10,12 +10,14 @@ on Windows-only packaged assets.
 from __future__ import annotations
 
 import csv
+import json
+import math
 import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 import cv2
 import numpy as np
@@ -213,6 +215,78 @@ def detect_artifact_set_filter_cells(grid_bgr: np.ndarray, columns: int = 2) -> 
     return cells
 
 
+def _artifact_set_filter_bounds(ctx: GameContext) -> tuple[int, int, int, int]:
+    """Return the device-space ROI used by the upstream two-column filter."""
+    scale = ctx.transform.scale
+    return tuple(round(value * scale) for value in (40, 100, 1300, 852))
+
+
+def crop_artifact_set_filter_icon(
+    card_bgr: np.ndarray,
+    scale: float,
+) -> np.ndarray:
+    """Crop the 60px flower icon from one ArtifactSetFilter card.
+
+    The filter card is a wide row rather than a regular inventory tile.  The
+    icon is approximately 267 reference pixels to the left of the row center;
+    keeping that geometry here makes GetGridIcons and the accuracy diagnostic
+    use exactly the same ItemV2 input.
+    """
+    if card_bgr.size == 0:
+        return np.empty((0, 0, 3), dtype=np.uint8)
+    try:
+        scale = max(0.5, float(scale))
+    except (TypeError, ValueError):
+        scale = 1.0
+    icon_size = max(1, round(60 * scale))
+    center_x = card_bgr.shape[1] / 2
+    center_y = card_bgr.shape[0] / 2
+    left = round(center_x - 267 * scale - icon_size / 2)
+    top = round(center_y - icon_size / 2)
+    right = left + icon_size
+    bottom = top + icon_size
+    left = max(0, min(left, card_bgr.shape[1]))
+    top = max(0, min(top, card_bgr.shape[0]))
+    right = max(left, min(right, card_bgr.shape[1]))
+    bottom = max(top, min(bottom, card_bgr.shape[0]))
+    crop = card_bgr[top:bottom, left:right]
+    if crop.size == 0:
+        return np.empty((0, 0, 3), dtype=np.uint8)
+    return cv2.resize(crop, (125, 125), interpolation=cv2.INTER_AREA)
+
+
+def recognize_artifact_set_filter_name(
+    ctx: GameContext,
+    frame: np.ndarray,
+) -> str:
+    """Read the flower/set name from the ArtifactSetFilter detail panel."""
+    transform = ctx.transform
+    x0, y0 = transform.to_device(1371, 545, "right")
+    x1, y1 = transform.to_device(1863, 945, "right")
+    left, right = sorted((round(x0), round(x1)))
+    top, bottom = sorted((round(y0), round(y1)))
+    items = get_ocr().recognize(frame[max(0, top):bottom, max(0, left):right])
+    items.sort(key=lambda item: (item.y, item.x))
+    for index, item in enumerate(items):
+        clean = str(item.text).replace(" ", "")
+        if (
+            "套装包含" in clean
+            or "套裝包含" in clean
+            or "Set Includes" in str(item.text)
+        ) and index + 1 < len(items):
+            return str(items[index + 1].text).strip().lstrip("✿❀ ")
+    ignored = ("套装", "套裝", "筛选", "篩選", "Set", "件套")
+    candidates = [
+        str(item.text).strip().lstrip("✿❀ ")
+        for item in items
+        if str(item.text).strip()
+    ]
+    return next(
+        (text for text in candidates if not any(word in text for word in ignored)),
+        "",
+    )
+
+
 _FULLWIDTH_NUMBERS = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
@@ -287,6 +361,23 @@ def count_stars(star_bgr: np.ndarray) -> int:
     mask = cv2.inRange(star_bgr, (45, 199, 250), (55, 209, 255))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return len([contour for contour in contours if cv2.contourArea(contour) >= 2])
+
+
+def normalize_grid_icon(card_bgr: np.ndarray) -> np.ndarray:
+    """Return the 125×125 model crop used by BetterGI's ``GetGridIcon``.
+
+    Inventory cards contain a 125×153 image: the bottom 28 pixels are the
+    quantity strip.  The desktop implementation first normalizes the whole
+    card to 125×153 and then keeps the upper square.  Keeping that ordering is
+    important on iPhone layouts because the contour detector may return a
+    slightly different card size after safe-area scaling.
+    """
+    if card_bgr.size == 0:
+        return np.empty((0, 0, 3), dtype=np.uint8)
+    if card_bgr.shape[:2] == (125, 125):
+        return card_bgr.copy()
+    normalized = cv2.resize(card_bgr, (125, 153), interpolation=cv2.INTER_AREA)
+    return normalized[:125, :125].copy()
 
 
 class InventoryGridScanner:
@@ -412,6 +503,113 @@ class InventoryGridScanner:
                 return
 
 
+class ArtifactSetFilterGridScanner:
+    """Scanner for the manually opened ArtifactSetFilter two-column grid."""
+
+    category = InventoryCategory(
+        "ArtifactSetFilter", "artifactsetfilter", (40, 100, 1300, 852), 2,
+    )
+
+    def __init__(
+        self,
+        ctx: GameContext,
+        *,
+        max_pages: int = 100,
+        log: Callable[[str], None] = print,
+    ):
+        self.ctx = ctx
+        self.max_pages = max(1, min(100, int(max_pages)))
+        self.log = log
+
+    def open(self) -> bool:
+        """The upstream task intentionally requires this page to be open."""
+        return True
+
+    def close(self) -> bool:
+        # Do not close the manually opened filter page.  This mirrors
+        # BetterGI's GetGridIcons/accuracy diagnostic behavior and lets a
+        # caller inspect the selected set after the scan.
+        return True
+
+    def _bounds(self) -> tuple[int, int, int, int]:
+        return _artifact_set_filter_bounds(self.ctx)
+
+    def cells(self, frame: np.ndarray) -> list[GridCell]:
+        x, y, width, height = self._bounds()
+        local = detect_artifact_set_filter_cells(
+            frame[y:y + height, x:x + width], columns=2,
+        )
+        return [
+            GridCell(
+                cell.x + x, cell.y + y, cell.width, cell.height,
+                cell.row, cell.column,
+            )
+            for cell in local
+        ]
+
+    def tap(self, cell: GridCell) -> None:
+        transform = self.ctx.transform
+        center_x, center_y = cell.center
+        self.ctx.device.tap(
+            center_x,
+            center_y,
+            image_width=transform.device_width,
+            image_height=transform.device_height,
+        )
+
+    def detail_name(self, frame: np.ndarray | None = None) -> str:
+        return recognize_artifact_set_filter_name(
+            self.ctx,
+            self.ctx.capture_bgr() if frame is None else frame,
+        )
+
+    def detail_stars(self, _frame: np.ndarray | None = None) -> int:
+        # The filter detail card describes a set/flower and has no stable
+        # rarity field.  -1 is the report's explicit "not available" value.
+        return -1
+
+    def _fingerprint(self, frame: np.ndarray) -> np.ndarray:
+        x, y, width, height = self._bounds()
+        gray = cv2.cvtColor(frame[y:y + height, x:x + width], cv2.COLOR_BGR2GRAY)
+        return cv2.resize(gray, (48, 32), interpolation=cv2.INTER_AREA)
+
+    def _scroll(self) -> None:
+        transform = self.ctx.transform
+        x1, y1 = transform.to_device(650, 850, "left")
+        x2, y2 = transform.to_device(650, 190, "left")
+        self.ctx.device.swipe(
+            x1,
+            y1,
+            x2,
+            y2,
+            duration_ms=500,
+            image_width=transform.device_width,
+            image_height=transform.device_height,
+        )
+        self.ctx.sleep(600)
+
+    def pages(
+        self,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Iterator[tuple[int, np.ndarray, list[GridCell]]]:
+        for page in range(1, self.max_pages + 1):
+            if cancelled and cancelled():
+                return
+            frame = self.ctx.capture_bgr()
+            cells = self.cells(frame)
+            if not cells:
+                self.log(f"[inventory] ArtifactSetFilter 第 {page} 页未检测到网格物品")
+                return
+            yield page, frame, cells
+            if page >= self.max_pages:
+                return
+            before = self._fingerprint(frame)
+            self._scroll()
+            after = self._fingerprint(self.ctx.capture_bgr())
+            if float(np.mean(cv2.absdiff(before, after))) < 1.5:
+                return
+
+
 def _safe_filename(value: str) -> str:
     cleaned = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", str(value)).strip(" .")
     return cleaned or "未识别"
@@ -449,25 +647,10 @@ class GetGridIconsTask:
         self.log = log
 
     def _artifact_filter_bounds(self) -> tuple[int, int, int, int]:
-        scale = self.ctx.transform.scale
-        return tuple(round(value * scale) for value in (40, 100, 1300, 852))
+        return _artifact_set_filter_bounds(self.ctx)
 
     def _artifact_filter_name(self, frame: np.ndarray) -> str:
-        transform = self.ctx.transform
-        x0, y0 = transform.to_device(1371, 545, "right")
-        x1, y1 = transform.to_device(1863, 945, "right")
-        left, right = sorted((round(x0), round(x1)))
-        top, bottom = sorted((round(y0), round(y1)))
-        items = get_ocr().recognize(frame[top:bottom, left:right])
-        items.sort(key=lambda item: (item.y, item.x))
-        for index, item in enumerate(items):
-            clean = item.text.replace(" ", "")
-            if ("套装包含" in clean or "套裝包含" in clean or "Set Includes" in item.text) \
-                    and index + 1 < len(items):
-                return items[index + 1].text.strip().lstrip("✿❀ ")
-        ignored = ("套装", "套裝", "筛选", "篩選", "Set", "件套")
-        candidates = [item.text.strip().lstrip("✿❀ ") for item in items if item.text.strip()]
-        return next((text for text in candidates if not any(word in text for word in ignored)), "")
+        return recognize_artifact_set_filter_name(self.ctx, frame)
 
     def _run_artifact_set_filter(
         self, cancelled: Callable[[], bool] | None
@@ -502,16 +685,12 @@ class GetGridIconsTask:
                 if not name or name in names:
                     continue
                 names.add(name)
-                icon_size = max(1, round(60 * transform.scale))
-                icon_x = round(cell.x + cell.width / 2 - 267 * transform.scale)
-                icon_y = round(cell.y + cell.height / 2 - icon_size / 2)
-                icon = frame[
-                    max(0, icon_y):icon_y + icon_size,
-                    max(0, icon_x):icon_x + icon_size,
-                ]
+                icon = crop_artifact_set_filter_icon(
+                    cell.crop(frame),
+                    transform.scale,
+                )
                 if icon.size == 0:
                     continue
-                icon = cv2.resize(icon, (125, 125), interpolation=cv2.INTER_AREA)
                 path = self.output_dir / f"{_safe_filename(name)}.png"
                 if cv2.imwrite(str(path), icon):
                     saved.append(str(path))
@@ -721,3 +900,231 @@ class InventoryCountComparisonTask:
         finally:
             if opened:
                 self.scanner.close()
+
+
+class GridIconsAccuracyTestTask:
+    """Compare ItemV2 icon predictions with the selected-card detail OCR.
+
+    BetterGI's Windows build uses a separate legacy ``gridIcon.onnx`` model
+    for this developer task.  The iOS port ships the current ItemV2 model,
+    which has the same 125×125 input contract and a cosine score.  This task
+    therefore keeps the original workflow (open a grid, click every card,
+    compare model output with name/star OCR) while returning a structured
+    report that is useful from JS and the WebUI.
+    """
+
+    def __init__(
+        self,
+        ctx: GameContext,
+        category: object,
+        *,
+        max_num_to_test: int | None = None,
+        max_pages: int = 100,
+        output_dir: str | Path | None = None,
+        score_threshold: float = 0.75,
+        log: Callable[[str], None] = print,
+        recognizer: Any | None = None,
+        scanner: Any | None = None,
+    ):
+        self.ctx = ctx
+        self.log = log
+        raw_category = str(category).split(".")[-1].strip()
+        self.artifact_set_filter = raw_category.casefold() in (
+            "artifactsetfilter", "圣遗物套装筛选", "聖遺物套裝篩選",
+        )
+        self.category = None if self.artifact_set_filter else inventory_category(category)
+        self.category_name = (
+            "ArtifactSetFilter" if self.artifact_set_filter else self.category.name
+        )
+        self.max_pages = max(1, min(100, int(max_pages)))
+        self.max_num_to_test = (
+            2**31 - 1 if max_num_to_test is None else max(1, int(max_num_to_test))
+        )
+        self.score_threshold = float(score_threshold)
+        if not 0.0 <= self.score_threshold <= 1.0:
+            raise ValueError("scoreThreshold 必须在 0 到 1 之间")
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        self.output_dir = Path(output_dir).expanduser() if output_dir else (
+            PROJECT_ROOT / "log" / "gridIconsAccuracy" / f"{self.category_name}{stamp}"
+        )
+        self.recognizer = recognizer
+        self.scanner = scanner or (
+            ArtifactSetFilterGridScanner(ctx, max_pages=self.max_pages, log=log)
+            if self.artifact_set_filter
+            else InventoryGridScanner(ctx, category, max_pages=self.max_pages, log=log)
+        )
+
+    def _recognizer(self) -> Any:
+        if self.recognizer is not None:
+            return self.recognizer
+        from ..vision.item_recognizer import ItemIconRecognizer
+
+        try:
+            # ItemV2 stores the quality level for all inventory classes.  The
+            # ordinary reward path keeps the upstream relic-only semantics;
+            # this diagnostic explicitly asks for all levels so its star
+            # comparison remains meaningful for food/material/weapon grids.
+            self.recognizer = ItemIconRecognizer(include_quality_levels=True)
+        except FileNotFoundError as error:
+            raise FileNotFoundError(
+                "GridIconsAccuracyTest 缺少 ItemV2 模型或原型表；请先运行 "
+                "`.venv/bin/python tools/fetch_map_assets.py --models`"
+            ) from error
+        return self.recognizer
+
+    @staticmethod
+    def _compact_name(value: object) -> str:
+        return re.sub(
+            r"[\s\u3000·•.…,:：;；!?！？'\"“”‘’()（）\[\]【】<>《》]",
+            "",
+            str(value or ""),
+        ).casefold()
+
+    @classmethod
+    def _names_match(cls, predicted: str, ocr_name: str) -> bool:
+        left, right = cls._compact_name(predicted), cls._compact_name(ocr_name)
+        return bool(left and right) and (left in right or right in left)
+
+    @staticmethod
+    def _json_score(value: object) -> float | None:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return None
+        return score if math.isfinite(score) else None
+
+    def _normalize_icon(self, cell: GridCell, frame: np.ndarray) -> np.ndarray:
+        if self.artifact_set_filter:
+            return crop_artifact_set_filter_icon(
+                cell.crop(frame),
+                self.ctx.transform.scale,
+            )
+        return normalize_grid_icon(cell.crop(frame))
+
+    def _record(
+        self,
+        page: int,
+        cell: GridCell,
+        match: Any,
+        ocr_name: str,
+        ocr_stars: int,
+    ) -> dict[str, object]:
+        raw_name = str(getattr(match, "name", "") or "")
+        score = self._json_score(getattr(match, "score", None))
+        accepted = bool(score is not None and score >= self.score_threshold and raw_name)
+        predicted_name = raw_name if accepted else ""
+        raw_stars = getattr(match, "quality_level", -1)
+        try:
+            predicted_stars = int(raw_stars)
+        except (TypeError, ValueError):
+            predicted_stars = -1
+        star_match: bool | None = (
+            predicted_stars == int(ocr_stars)
+            if predicted_stars >= 0 and int(ocr_stars) >= 0
+            else None
+        )
+        name_match = self._names_match(predicted_name, ocr_name)
+        matched = bool(name_match and star_match is not False)
+        return {
+            "page": page,
+            "row": cell.row,
+            "column": cell.column,
+            "predictedName": predicted_name or None,
+            "rawPredictedName": raw_name or None,
+            "predictedStars": predicted_stars if predicted_stars >= 0 else None,
+            "score": score,
+            "ocrName": str(ocr_name or ""),
+            "ocrStars": int(ocr_stars),
+            "nameMatch": name_match,
+            "starMatch": star_match,
+            "matched": matched,
+        }
+
+    def _write_report(self, report: dict[str, object]) -> str | None:
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            path = self.output_dir / "results.json"
+            report["reportPath"] = str(path)
+            path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return str(path)
+        except OSError as error:
+            self.log(f"[GridIconsAccuracyTest] 报告保存失败：{error}")
+            return None
+
+    def run(self, cancelled: Callable[[], bool] | None = None) -> dict[str, object]:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> dict[str, object]:
+        recognizer = self._recognizer()
+        # ArtifactSetFilter is intentionally a manual-entry page in BetterGI;
+        # its scanner.open() is a no-op, but keeping the branch documents that
+        # no inventory navigation should be injected on the user's current
+        # filter screen.
+        opened = True if self.artifact_set_filter else self.scanner.open()
+        if not opened:
+            raise RuntimeError(f"无法打开背包分类 {self.category.name}")
+
+        records: list[dict[str, object]] = []
+        was_cancelled = False
+        try:
+            for page, frame, cells in self.scanner.pages(cancelled):
+                for cell in cells:
+                    if cancelled and cancelled():
+                        was_cancelled = True
+                        break
+                    icon = self._normalize_icon(cell, frame)
+                    if icon.size == 0:
+                        self.log(
+                            f"[GridIconsAccuracyTest] 第 {page} 页 ({cell.row},{cell.column}) 图标为空"
+                        )
+                        continue
+                    match = recognizer.match(icon)
+                    self.scanner.tap(cell)
+                    self.ctx.sleep(280)
+                    detail = self.ctx.capture_bgr()
+                    ocr_name = self.scanner.detail_name(detail)
+                    ocr_stars = self.scanner.detail_stars(detail)
+                    record = self._record(page, cell, match, ocr_name, ocr_stars)
+                    records.append(record)
+                    state = "✔" if record["matched"] else "❌"
+                    self.log(
+                        f"[GridIconsAccuracyTest] {record['rawPredictedName'] or '未知'}|"
+                        f"{record['predictedStars'] if record['predictedStars'] is not None else '?'}星 "
+                        f"应为 {ocr_name or '未知'}|{ocr_stars}星，{state}，"
+                        f"分数 {record['score'] if record['score'] is not None else '?'}"
+                    )
+                    if len(records) >= self.max_num_to_test:
+                        break
+                if was_cancelled or len(records) >= self.max_num_to_test:
+                    break
+        finally:
+            self.scanner.close()
+
+        total = len(records)
+        correct = sum(bool(record["matched"]) for record in records)
+        name_correct = sum(bool(record["nameMatch"]) for record in records)
+        checked_stars = [record for record in records if record["starMatch"] is not None]
+        star_correct = sum(bool(record["starMatch"]) for record in checked_stars)
+        report: dict[str, object] = {
+            "category": self.category_name,
+            "model": "ItemV2",
+            "scoreThreshold": self.score_threshold,
+            "tested": total,
+            "correct": correct,
+            "accuracy": correct / total if total else 0.0,
+            "nameCorrect": name_correct,
+            "nameAccuracy": name_correct / total if total else 0.0,
+            "starChecked": len(checked_stars),
+            "starCorrect": star_correct,
+            "starAccuracy": star_correct / len(checked_stars) if checked_stars else None,
+            "cancelled": was_cancelled,
+            "results": records,
+        }
+        report_path = self._write_report(report)
+        if report_path is None:
+            report.pop("reportPath", None)
+        return report

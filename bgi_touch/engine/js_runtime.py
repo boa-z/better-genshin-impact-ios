@@ -5,8 +5,9 @@
 
 - 原版 ClearScript 大小写不敏感绑定（keyPress/KeyPress 混用）：所有宿主
   对象经 JS 侧 Proxy 包装做大小写回退查找。
-- 原版的同步 C# 方法在这里是阻塞的 Python 函数；`await sleep()` 等价于
-  阻塞后立即 resolve 的 Promise，时序语义保持一致。
+- 原版 ClearScript 的任务入口返回 Promise；普通识别/输入 API 仍保持同步，
+  `dispatcher.run*Task` 则在后台执行并由 JS 线程轮询完成状态，允许脚本在
+  战斗/路线任务运行时并发做 OCR、计时和取消。
 - file/http 按 manifest 沙箱化（脚本目录内读写、URL 白名单）。
 """
 
@@ -17,6 +18,7 @@ import re
 import threading
 import time
 import urllib.request
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -124,6 +126,45 @@ class ScriptCancelled(Exception):
     pass
 
 
+class _TaskCancellation:
+    """Thread-safe cancellation view used by a background dispatcher task.
+
+    A JavaScript cancellation token belongs to the PythonMonkey thread and
+    must never be inspected by a worker.  The runtime copies its state into
+    this small Python-only object before submitting a task.  The JS polling
+    callback refreshes the external token while the runtime flag is read
+    directly by the worker.
+    """
+
+    def __init__(self, runtime_cancelled: Callable[[], bool]):
+        self._event = threading.Event()
+        self._runtime_cancelled = runtime_cancelled
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    @property
+    def cancelled(self) -> bool:
+        if self._event.is_set():
+            return True
+        try:
+            return bool(self._runtime_cancelled())
+        except Exception:
+            return True
+
+    @property
+    def isCancellationRequested(self) -> bool:
+        return self.cancelled
+
+    @property
+    def canBeCanceled(self) -> bool:
+        return True
+
+    def throwIfCancellationRequested(self) -> None:
+        if self.cancelled:
+            raise ScriptCancelled()
+
+
 class JsScriptRuntime:
     def __init__(self, ctx: GameContext, script_dir: str | Path,
                  settings: dict | None = None, log: Callable[[str], None] = print,
@@ -141,6 +182,16 @@ class JsScriptRuntime:
         self.script_dir = Path(script_dir).resolve()
         self.log = log
         self.cancelled = False
+        # SoloTask/AutoFight entry points are Promise-returning in BetterGI.
+        # DeviceHub itself serializes MCP calls, but the Python task state
+        # machine must still run outside the SpiderMonkey thread so scripts
+        # can inspect frames while a task is active.
+        self._task_executor = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="bgi-js-task",
+        )
+        self._task_futures: set[Future] = set()
+        self._task_futures_lock = threading.Lock()
         # ``None`` means this runtime was started directly rather than from a
         # ScriptGroup project.  Direct JS execution has historically only
         # been governed by the global notification setting and manifest URL
@@ -236,6 +287,154 @@ class JsScriptRuntime:
     def _check_cancel(self) -> None:
         if self.cancelled:
             raise ScriptCancelled()
+
+    def _task_promise(
+        self,
+        function: Callable,
+        *args: Any,
+        cancellation_probe: Callable[[], bool] | None = None,
+    ):
+        """Run a Python task and expose a real JS Promise for its result.
+
+        PythonMonkey cannot safely invoke a JS callback from a worker thread.
+        Instead, a small JS-side interval polls a Python ``Future``. The
+        polling callback therefore always executes on the SpiderMonkey thread,
+        while the screenshot/input state machine can run concurrently in a
+        normal Python worker.
+        """
+        future = self._task_executor.submit(function, *args)
+        with self._task_futures_lock:
+            self._task_futures.add(future)
+
+        def poll() -> dict[str, Any]:
+            if cancellation_probe is not None:
+                try:
+                    cancellation_probe()
+                except BaseException as error:
+                    return {
+                        "done": True,
+                        "error": f"{type(error).__name__}: {error}",
+                    }
+            if not future.done():
+                return {"done": False}
+            with self._task_futures_lock:
+                self._task_futures.discard(future)
+            if future.cancelled():
+                return {"done": True, "error": "任务已取消"}
+            try:
+                return {"done": True, "value": future.result()}
+            except BaseException as error:
+                return {
+                    "done": True,
+                    "error": f"{type(error).__name__}: {error}",
+                }
+
+        promise_factory = getattr(self, "_task_promise_factory", None)
+        if promise_factory is None:
+            # ``_install_globals`` normally initializes this once after the
+            # built-in JS timers have been installed. The fallback keeps the
+            # helper usable from focused host tests that call it directly.
+            promise_factory = self.pm.eval(
+                "poll => new Promise((resolve, reject) => {"
+                "const timer = setInterval(() => {"
+                "let state; try { state = poll(); } catch (error) {"
+                "clearInterval(timer); reject(error); return; }"
+                "if (!state || !state.done) return; clearInterval(timer);"
+                "if (state.error != null) reject(new Error(String(state.error)));"
+                "else resolve(state.value);"
+                "}, 10); })"
+            )
+        return promise_factory(poll)
+
+    def _snapshot_js_value(self, value: Any) -> Any:
+        """Copy a JS task parameter into ordinary Python values.
+
+        PythonMonkey host objects are thread-affine.  Calling ``getattr`` on
+        a ``SoloTask`` or ``AutoFightParam`` from a worker can recurse through
+        the JS proxy, so task arguments are serialized while the JS thread is
+        still executing the dispatcher call.
+        """
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        serializer = getattr(self, "_snapshot_js_value_factory", None)
+        if serializer is None:
+            # This only applies to focused host tests that call the helper
+            # before globals are installed; ordinary runtime construction
+            # always initializes the JS factory in ``_install_globals``.
+            try:
+                encoded = self.pm.eval("value => JSON.stringify(value)")(value)
+            except Exception as error:
+                raise TypeError(f"任务参数无法序列化：{error}") from error
+        else:
+            encoded = serializer(value)
+        if encoded is None:
+            return None
+        try:
+            return json.loads(str(encoded))
+        except (TypeError, json.JSONDecodeError) as error:
+            raise TypeError(f"任务参数无法序列化：{error}") from error
+
+    @staticmethod
+    def _js_token_requested(token: Any) -> bool:
+        """Read a JS token on the JS thread only."""
+        if token is None:
+            return False
+        for name in ("isCancellationRequested", "cancelled"):
+            try:
+                value = getattr(token, name)
+                if callable(value):
+                    value = value()
+                if bool(value):
+                    return True
+            except Exception:
+                # A token may be disposed while a script is unwinding.  The
+                # runtime cancellation flag still remains authoritative.
+                continue
+        return False
+
+    def _task_cancellation(
+        self, token: Any = None,
+    ) -> tuple[_TaskCancellation, Callable[[], bool]]:
+        """Create a worker-safe token and a JS-thread synchronization probe."""
+        bridge = _TaskCancellation(lambda: self.cancelled)
+
+        def probe() -> bool:
+            if token is not None and self._js_token_requested(token):
+                bridge.cancel()
+            return bridge.isCancellationRequested
+
+        if token is not None:
+            # A normal JS ``CancellationToken`` invokes this callback on the
+            # JS event loop.  The callback only sets a threading.Event and is
+            # therefore safe for the worker to observe.
+            try:
+                register = getattr(token, "register", None)
+                if callable(register):
+                    register(lambda: bridge.cancel())
+            except Exception:
+                # The interval probe below still handles cancelAfter and
+                # tokens whose registration API is only partially emulated.
+                pass
+            probe()
+        return bridge, probe
+
+    def _stop_task_executor(self) -> None:
+        """Cancel task workers when a script runtime is being torn down."""
+        executor = getattr(self, "_task_executor", None)
+        lock = getattr(self, "_task_futures_lock", None)
+        if executor is None or lock is None:
+            return
+        with lock:
+            pending = tuple(self._task_futures)
+            self._task_futures.clear()
+        if pending:
+            # Every dispatcher task receives a cancellation bridge linked to
+            # ``self.cancelled``. Setting it here lets running tasks leave
+            # their input/screenshot loops instead of surviving the JS host.
+            self.cancelled = True
+            for future in pending:
+                future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # ---- API implementations ----
 
@@ -357,6 +556,37 @@ class JsScriptRuntime:
         self._case_proxy = pm.eval(CASE_PROXY)
         g = pm.eval("globalThis")
         self._ensure_js_timers(g)
+        self._snapshot_js_value_factory = pm.eval(r"""
+            value => {
+              const seen = new WeakSet();
+              const clone = current => {
+                if (current === null || typeof current !== 'object') {
+                  return typeof current === 'function' ? undefined : current;
+                }
+                if (seen.has(current)) return undefined;
+                seen.add(current);
+                if (Array.isArray(current)) return current.map(clone);
+                const result = {};
+                for (const key of Object.keys(current)) {
+                  const item = clone(current[key]);
+                  if (item !== undefined) result[key] = item;
+                }
+                return result;
+              };
+              const copied = clone(value);
+              return copied === undefined ? undefined : JSON.stringify(copied);
+            }
+        """)
+        self._task_promise_factory = pm.eval(
+            "poll => new Promise((resolve, reject) => {"
+            "const timer = setInterval(() => {"
+            "let state; try { state = poll(); } catch (error) {"
+            "clearInterval(timer); reject(error); return; }"
+            "if (!state || !state.done) return; clearInterval(timer);"
+            "if (state.error != null) reject(new Error(String(state.error)));"
+            "else resolve(state.value);"
+            "}, 10); })"
+        )
         ctx, log, wrap = self.ctx, self.log, self._wrap
 
         from ..input.layout import normalize_key
@@ -1083,6 +1313,48 @@ class JsScriptRuntime:
         genshin_api = GenshinApi(ctx, log, party_slots=self.party_slots)
         genshin_facade = pm.eval("({})")
 
+        # BetterGI's action-oriented ``genshin`` methods return .NET Task.
+        # Keep pure properties/recognition helpers synchronous, but execute
+        # the action methods through the same Promise bridge as dispatcher so
+        # scripts can await/catch them without blocking SpiderMonkey's event
+        # loop while a mobile screenshot or gesture is in flight.
+        genshin_async_methods = frozenset({
+            "uid",
+            "tp",
+            "moveMapTo",
+            "clickMapPoint",
+            "moveIndependentMapTo",
+            "tpToStatueOfTheSeven",
+            "teleportToStatue",
+            "setBigMapZoomLevel",
+            "switchParty",
+            "switchCharacter",
+            "returnMainUi",
+            "blessingOfTheWelkinMoon",
+            "chooseTalkOption",
+            "claimBattlePassRewards",
+            "claimEncounterPointsRewards",
+            "claimMailRewards",
+            "goToAdventurersGuild",
+            "goToCraftingBench",
+            "goCraftResin",
+            "craftMaterial",
+            "autoFishing",
+            "relogin",
+            "wonderlandCycle",
+            "setTime",
+        })
+
+        def _genshin_task(member: Callable, *args: Any):
+            frozen = tuple(rt._snapshot_js_value(value) for value in args)
+            cancellation, probe = rt._task_cancellation(None)
+
+            def execute():
+                cancellation.throwIfCancellationRequested()
+                return member(*frozen)
+
+            return rt._task_promise(execute, cancellation_probe=probe)
+
         def _navigation_facade(navigation):
             # Do not expose the Python object itself.  PythonMonkey may probe
             # arbitrary host attributes while awaiting a failed call, which
@@ -1102,6 +1374,10 @@ class JsScriptRuntime:
             member = getattr(genshin_api, member_name)
             if member_name == "lazyNavigationInstance":
                 genshin_facade[member_name] = _navigation_facade(member)
+            elif member_name in genshin_async_methods and callable(member):
+                genshin_facade[member_name] = (
+                    lambda *args, _member=member: _genshin_task(_member, *args)
+                )
             elif callable(member) or member is None or isinstance(
                 member, (bool, int, float, str)
             ):
@@ -1292,6 +1568,7 @@ class JsScriptRuntime:
             cancelled=lambda: rt.cancelled,
             strategy_roots=[rt.script_dir, *rt.strategy_roots],
             restrict_strategy_roots=True,
+            pathing_config=self.pathing_config,
         )
 
         class _CTS:
@@ -1354,112 +1631,237 @@ class JsScriptRuntime:
             def token(self): return self
 
         class _Dispatcher:
+            def _task(self, runner: Callable, *values: Any, ct: Any = None):
+                frozen = tuple(rt._snapshot_js_value(value) for value in values)
+                cancellation, probe = rt._task_cancellation(ct)
+                return rt._task_promise(
+                    lambda: runner(*frozen, cancellation),
+                    cancellation_probe=probe,
+                )
+
             def runTask(self, task, ct=None):
-                return task_dispatcher.run_task(task, ct)
+                return self._task(task_dispatcher.run_task, task, ct=ct)
 
             def runAutoDomainTask(self, param, ct=None):
-                return task_dispatcher.run_auto_domain_task(param, ct)
+                return self._task(task_dispatcher.run_auto_domain_task, param, ct=ct)
 
             def runOneDragonTask(self, param=None, ct=None):
-                return task_dispatcher.run_one_dragon_task(param, ct)
+                return self._task(task_dispatcher.run_one_dragon_task, param, ct=ct)
 
             def runCheckRewardsTask(self, param=None, ct=None):
-                return task_dispatcher.run_check_rewards_task(param, ct)
+                return self._task(task_dispatcher.run_check_rewards_task, param, ct=ct)
             def runWalkToFTask(self, param=None, ct=None):
-                return task_dispatcher.run_walk_to_f_task(param, ct)
+                return self._task(task_dispatcher.run_walk_to_f_task, param, ct=ct)
             def runScanPickTask(self, param=None, ct=None):
-                return task_dispatcher.run_scan_pick_task(param, ct)
+                return self._task(task_dispatcher.run_scan_pick_task, param, ct=ct)
             def runLowerHeadThenWalkToTask(self, param=None, ct=None):
-                return task_dispatcher.run_lower_head_then_walk_to_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_lower_head_then_walk_to_task,
+                    param,
+                    ct=ct,
+                )
             def runBlessingOfTheWelkinMoonTask(self, param=None, ct=None):
-                return task_dispatcher.run_blessing_of_the_welkin_moon_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_blessing_of_the_welkin_moon_task,
+                    param,
+                    ct=ct,
+                )
             def runClaimBattlePassRewardsTask(self, param=None, ct=None):
-                return task_dispatcher.run_claim_battle_pass_rewards_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_claim_battle_pass_rewards_task,
+                    param,
+                    ct=ct,
+                )
             def runClaimEncounterPointsRewardsTask(self, param=None, ct=None):
-                return task_dispatcher.run_claim_encounter_points_rewards_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_claim_encounter_points_rewards_task,
+                    param,
+                    ct=ct,
+                )
             def runClaimMailRewardsTask(self, param=None, ct=None):
-                return task_dispatcher.run_claim_mail_rewards_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_claim_mail_rewards_task,
+                    param,
+                    ct=ct,
+                )
             def runGoToAdventurersGuildTask(self, param=None, ct=None):
-                return task_dispatcher.run_go_to_adventurers_guild_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_go_to_adventurers_guild_task,
+                    param,
+                    ct=ct,
+                )
             def runGoToCraftingBenchTask(self, param=None, ct=None):
-                return task_dispatcher.run_go_to_crafting_bench_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_go_to_crafting_bench_task,
+                    param,
+                    ct=ct,
+                )
             def runGoCraftResinTask(self, param=None, ct=None):
-                return task_dispatcher.run_go_craft_resin_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_go_craft_resin_task,
+                    param,
+                    ct=ct,
+                )
             def runCraftMaterialTask(self, param=None, ct=None):
-                return task_dispatcher.run_craft_material_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_craft_material_task,
+                    param,
+                    ct=ct,
+                )
             def runSetTimeTask(self, param=None, ct=None):
-                return task_dispatcher.run_set_time_task(param, ct)
+                return self._task(task_dispatcher.run_set_time_task, param, ct=ct)
             def runWonderlandCycleTask(self, param=None, ct=None):
-                return task_dispatcher.run_wonderland_cycle_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_wonderland_cycle_task,
+                    param,
+                    ct=ct,
+                )
             def runReloginTask(self, param=None, ct=None):
-                return task_dispatcher.run_relogin_task(param, ct)
+                return self._task(task_dispatcher.run_relogin_task, param, ct=ct)
             def runChooseTalkOptionTask(self, param=None, ct=None):
-                return task_dispatcher.run_choose_talk_option_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_choose_talk_option_task,
+                    param,
+                    ct=ct,
+                )
             def runLinneaMiningTask(self, param=None, ct=None):
-                return task_dispatcher.run_linnea_mining_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_linnea_mining_task,
+                    param,
+                    ct=ct,
+                )
 
             def runAutoFightTask(self, param, ct=None):
-                return task_dispatcher.run_auto_fight_task(param, ct)
+                return self._task(task_dispatcher.run_auto_fight_task, param, ct=ct)
             def runAutoWoodTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_wood_task(param, ct)
+                return self._task(task_dispatcher.run_auto_wood_task, param, ct=ct)
             def runAutoCookTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_cook_task(param, ct)
+                return self._task(task_dispatcher.run_auto_cook_task, param, ct=ct)
             def runAutoFishingTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_fishing_task(param, ct)
+                return self._task(task_dispatcher.run_auto_fishing_task, param, ct=ct)
             def runAutoOpenChestTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_open_chest_task(param, ct)
+                return self._task(task_dispatcher.run_auto_open_chest_task, param, ct=ct)
             def runAutoEatTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_eat_task(param, ct)
+                return self._task(task_dispatcher.run_auto_eat_task, param, ct=ct)
             def runAutoMusicGameTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_music_game_task(param, ct)
+                return self._task(task_dispatcher.run_auto_music_game_task, param, ct=ct)
             def runAutoAlbumTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_album_task(param, ct)
+                return self._task(task_dispatcher.run_auto_album_task, param, ct=ct)
             def runAutoAlbum(self, param=None, ct=None):
-                return task_dispatcher.run_auto_album_task(param, ct)
+                return self._task(task_dispatcher.run_auto_album_task, param, ct=ct)
             def runAutoGeniusInvokationTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_genius_invokation_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_auto_genius_invokation_task,
+                    param,
+                    ct=ct,
+                )
             def runAutoStygianOnslaughtTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_stygian_onslaught_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_auto_stygian_onslaught_task,
+                    param,
+                    ct=ct,
+                )
             def runAutoBossTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_boss_task(param, ct)
+                return self._task(task_dispatcher.run_auto_boss_task, param, ct=ct)
             def runAutoLeyLineTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_leyline_task(param, ct)
+                return self._task(task_dispatcher.run_auto_leyline_task, param, ct=ct)
             def runAutoLeyLineOutcropTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_leyline_task(param, ct)
+                return self._task(task_dispatcher.run_auto_leyline_task, param, ct=ct)
             def runQuickSereniteaPotTask(self, param=None, ct=None):
-                return task_dispatcher.run_quick_serenitea_pot_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_quick_serenitea_pot_task,
+                    param,
+                    ct=ct,
+                )
             def runSereniteaPotRewardsTask(self, param=None, ct=None):
-                return task_dispatcher.run_serenitea_pot_rewards_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_serenitea_pot_rewards_task,
+                    param,
+                    ct=ct,
+                )
             def runGoToSereniteaPotTask(self, param=None, ct=None):
-                return task_dispatcher.run_serenitea_pot_rewards_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_serenitea_pot_rewards_task,
+                    param,
+                    ct=ct,
+                )
             def runQuickClaimRewardTask(self, param=None, ct=None):
-                return task_dispatcher.run_quick_claim_reward_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_quick_claim_reward_task,
+                    param,
+                    ct=ct,
+                )
             def runOneKeyExpeditionTask(self, param=None, ct=None):
-                return task_dispatcher.run_one_key_expedition_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_one_key_expedition_task,
+                    param,
+                    ct=ct,
+                )
             def runAutoTrackTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_track_task(param, ct)
+                return self._task(task_dispatcher.run_auto_track_task, param, ct=ct)
             def runQuickBuyTask(self, param=None, ct=None):
-                return task_dispatcher.run_quick_buy_task(param, ct)
+                return self._task(task_dispatcher.run_quick_buy_task, param, ct=ct)
             def runUseRedemptionCodeTask(self, param=None, ct=None):
-                return task_dispatcher.run_use_redemption_code_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_use_redemption_code_task,
+                    param,
+                    ct=ct,
+                )
             def runAutoArtifactSalvageTask(self, param=None, ct=None):
-                return task_dispatcher.run_auto_artifact_salvage_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_auto_artifact_salvage_task,
+                    param,
+                    ct=ct,
+                )
             def runCountInventoryItemTask(self, param=None, ct=None):
-                return task_dispatcher.run_count_inventory_item_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_count_inventory_item_task,
+                    param,
+                    ct=ct,
+                )
             def runGetGridIconsTask(self, param=None, ct=None):
-                return task_dispatcher.run_get_grid_icons_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_get_grid_icons_task,
+                    param,
+                    ct=ct,
+                )
             def runInventoryCountComparisonTask(self, param=None, ct=None):
-                return task_dispatcher.run_inventory_count_comparison_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_inventory_count_comparison_task,
+                    param,
+                    ct=ct,
+                )
+            def runGridIconsAccuracyTestTask(self, param=None, ct=None):
+                return self._task(
+                    task_dispatcher.run_grid_icons_accuracy_test_task,
+                    param,
+                    ct=ct,
+                )
             def runCharacterDevelopmentTask(self, param=None, ct=None):
-                return task_dispatcher.run_character_development_task(param, ct)
+                return self._task(
+                    task_dispatcher.run_character_development_task,
+                    param,
+                    ct=ct,
+                )
             def runScriptGroupTask(self, param=None, ct=None):
-                return task_dispatcher.run_script_group_task(param, ct)
+                return self._task(task_dispatcher.run_script_group_task, param, ct=ct)
             def runMusicPlayerTask(self, param=None, ct=None):
-                return task_dispatcher.run_music_player_task(param, ct)
+                return self._task(task_dispatcher.run_music_player_task, param, ct=ct)
             def runShellTask(self, param=None, ct=None):
-                return task_dispatcher.run_shell_task(param, ct)
-            def runCombatScript(self, script, avatar=None):
-                return task_dispatcher.run_combat_script(str(script), avatar)
+                return self._task(task_dispatcher.run_shell_task, param, ct=ct)
+            def runCombatScript(self, script, avatar=None, ct=None):
+                frozen_script = str(rt._snapshot_js_value(script) or "")
+                frozen_avatar = rt._snapshot_js_value(avatar)
+                cancellation, probe = rt._task_cancellation(ct)
+
+                def execute():
+                    cancellation.throwIfCancellationRequested()
+                    return task_dispatcher.run_combat_script(
+                        frozen_script,
+                        None if frozen_avatar is None else str(frozen_avatar),
+                    )
+
+                return rt._task_promise(execute, cancellation_probe=probe)
             def addTimer(self, timer):
                 try:
                     task_dispatcher.add_timer(timer)
@@ -1529,6 +1931,7 @@ class JsScriptRuntime:
             RunCountInventoryItemTask = runCountInventoryItemTask
             RunGetGridIconsTask = runGetGridIconsTask
             RunInventoryCountComparisonTask = runInventoryCountComparisonTask
+            RunGridIconsAccuracyTestTask = runGridIconsAccuracyTestTask
             RunCharacterDevelopmentTask = runCharacterDevelopmentTask
             RunScriptGroupTask = runScriptGroupTask
             RunMusicPlayerTask = runMusicPlayerTask
@@ -1893,6 +2296,7 @@ class JsScriptRuntime:
             self.log("[runtime] 脚本已取消")
             return None
         finally:
+            self._stop_task_executor()
             pointer = getattr(self, "_pointer", None)
             if pointer is not None:
                 pointer.release_all()

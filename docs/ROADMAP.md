@@ -10,8 +10,13 @@
   `ColorRangeAndOcr`，颜色识别不会再因宿主类型被错误拒绝。
 - AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（主动任务与实时触发器鱼条控制）、
   AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
+- AutoEat 已对齐上游命名料理流程：Food 网格 + ItemV2 识别、数量 OCR、白色确认按钮、
+  取消/安全返回主界面；实时触发器支持 Recovery/Resurrection 图标缓存与冷却。
 - AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught 和 AutoGeniusInvokation 的
   专用流程迁移，以及 `dispatcher.runTask` / `runAuto*Task` 入口兼容。
+- JS dispatcher 任务入口已对齐 BetterGI 的 Promise 契约：参数在 JS 线程快照后交给
+  后台任务线程，异常可由 `.catch()` 接收，外部 CancellationToken 与 Runtime 停止均可
+  中断任务；普通识别/输入 API 仍保持同步外观，不增加额外截图生产者。
 - QuickSereniteaPot、尘歌壶奖励（进壶寻找阿圆、领取好感/宝钱、按配置购买）、
   QuickClaimReward、UseRedemptionCode，以及纪行/邮件奖励领取的触控状态机；
   奖励列表滚动使用触控上滑，文本输入使用 DeviceHub 原生输入。
@@ -19,6 +24,8 @@
   JavaScript `Output` 规则；最终分解默认关闭，选择完成后保留人工复查界面。
 - 通用背包网格轮廓检测、翻页、详情名称 OCR 和数量区域预处理，以及脚本所需的
   CountInventoryItem、常规分类 GetGridIcons、InventoryCountComparison。
+- GridIconsAccuracyTest 已迁移：复用 ItemV2 125×125 图标模型逐格预测名称/稀有度，
+  与详情 OCR 对照并输出名称/星级/分数/准确率 JSON；缺少模型时不会先操作设备。
 - 背包、圣遗物分解和自动装备乐器等界面型任务会独占共享实时触发器截图/输入通道，
   页面切换期间不会让 AutoPick/AutoSkip 抢先消费过渡帧；暂停前尚未启动的触发器列表也会恢复。
 - characterDevelopmentTask 的单/多角色接口、固定尺寸角色卡选择，以及属性、武器、
@@ -26,7 +33,9 @@
 - AutoDomain 奖励页稳定等待、卡片检测、ItemV2 图标匹配、数量 OCR、多页去重与
   BetterGI 名称到累计数量的返回契约；ItemV2 模型由资产下载器按需安装。
 - OneDragonFlowConfig 的新旧格式、显式顺序、同名重复任务 ID、NextTaskId 断点、
-  内置任务编排与关闭/挂起原神完成动作；自定义配置组可通过 taskConfigs 映射任务。
+  内置任务编排与关闭/挂起原神完成动作；自定义项目兼容 BetterGI 原生
+  `User/ScriptGroup/<任务名>.json`，也可通过 `taskConfigs` 映射 dispatcher 任务或显式
+  指定 ScriptGroup 路径。
 - AutoGeniusInvokation 的完整策略元数据、投骰与重投、行动骰子、元素调和、回合状态、
   异常状态与阵亡重选；官方 TCG 模板和角色别名元数据可由资产下载器固定版本获取。
 - AutoFishing 的全天、白天、夜晚和不调整时间策略；全天模式按 BetterGI 语义依次
