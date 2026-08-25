@@ -389,7 +389,19 @@ DeviceHub Wi-Fi HID 偶发失效时，大地图按键或连续拖动会自动重
 `log/FarmingPlan/YYYYMMDD.json`，并以服务器时间凌晨 4 点切日。编辑
 `config/farming.json` 并设置 `enabled=true` 后，执行器会在路线启动前检查每日
 精英/小怪上限和 `primary_target`，达到上限的路线直接记为正常跳过。米游社字段可
-读取 BetterGI 已写入的统计数据并合并本地后续记录；iOS 端不会读取或上传 Cookie。
+读取 BetterGI 已写入的统计数据并合并本地后续记录。启用
+`miyousheDataConfig.enabled=true` 后，只有显式设置 `BGI_MIYOUSHE_COOKIE` 才会更新
+旅行札记；Cookie 不写入配置、统计文件或日志，且更新在后台执行，不会额外请求 DeviceHub
+截图。也可以在无设备时手工更新最近三个月缓存并输出当天统计：
+
+```bash
+export BGI_MIYOUSHE_COOKIE='your-mihoyo-cookie'
+bgi-touch travel-diary
+bgi-touch travel-diary --cache-dir /tmp/bgi-travel-diary --role-index 0
+```
+
+缓存默认位于 `log/logparse/<game_uid>/travelsdiarydetail/`，与 BetterGI 的
+`year_month.json` 目录契约兼容；命令输出不会回显 Cookie。
 
 Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模拟；路线设置游戏时间和
 千星奇域进入退出流程已转换为 DeviceHub 触控。`exit_and_relogin`
@@ -495,9 +507,12 @@ BetterGI 发布包使用未随源码提交的头像 ONNX 与 `avatar.csv` 选择
 attack(2), jump, w(0.5)            // 无角色名 = 当前角色：普攻2秒、跳、前进0.5秒
 ```
 
-支持动作：`e/skill[(hold)]`、`q/burst`、`attack(秒)`、`charge(秒)`、
-`dash(秒)`、`jump`、`w/a/s/d(秒)`、`walk(方向,秒)`、`wait(秒)`、`aim`、
-`keydown/keyup/keypress(键)`、`moveby(dx,dy)`（转视角）、`ready`、`check`。
+支持动作：`e/skill[(hold|wait|fast)]`、`q/burst`、`attack(秒)`、`charge(秒)`、
+`dash(秒)`、`jump/j`、`w/a/s/d(秒)`、`walk(方向,秒)`、`wait/after(秒)`、`aim/r`、
+`keydown/keyup/keypress(键)`、`moveby(dx,dy)`（转视角）、`ready`（等待战斗 HUD 就绪）、`check`。
+同时兼容 BetterGI 的中文动作别名、`verticalscroll`，以及
+`VK_LBUTTON/VK_RBUTTON/VK_MBUTTON` 的鼠标键语义。
+`ready` 不等元素战技冷却；需要等待 E 技能时使用角色 API 的 `WaitSkillCd`。
 
 `bgi-touch combat strategy.json` 也可直接执行 BetterGI JSON 优先级策略，支持
 `Info.PreActions`、`MorePriorities`、`EnsureCast`，以及 `t/battle-time`、
@@ -552,6 +567,36 @@ bgi-touch group '/path/to/User/ScriptGroup/每日.json' \
 `PhysicalPathSkipPolicy`、`SameNameSkipPolicy`、凌晨分界、服务器时间分界和
 `LastRunGapSeconds/ReferencePoint`。测试或多实例运行时可用 `--records-dir` 隔离目录；
 SoloTask 参数对应 `executionRecordDirectory`。
+
+### 5.6 离线分析 BetterGI 日志
+
+`LogParse` 已迁移为不依赖设备的结构化解析器，可读取原版日志中的配置组、脚本开始/结束
+时间、拾取物、传送重试、脱困、复活、战斗超时和异常次数，并按日志中的实例标识独立统计：
+
+```bash
+# 目录模式只读取 better-genshin-impactYYYYMMDD[_nnn].log
+bgi-touch log-parse /path/to/log --format text
+# 生成可直接保存/浏览的自包含 HTML 报告（不连接设备）
+bgi-touch log-parse /path/to/log --format html --title "日志分析" > report.html
+
+# 手工导出的文件名没有日期时显式指定日期
+bgi-touch log-parse exported.log --date 2026-08-25 > report.json
+
+# 将已缓存的旅行札记加入 HTML 报告（可重复指定，不发起网络请求）
+bgi-touch log-parse log/ --format html \
+  --diary-file log/logparse/123456789/travelsdiarydetail/2026_08.json \
+  > report.html
+# 也可以读取某个 UID 的全部月度缓存
+bgi-touch log-parse log/ --format html \
+  --diary-cache-dir log/logparse --game-uid 123456789 \
+  > report.html
+```
+
+默认输出 JSON，`--format text` 输出适合终端查看的摘要。该命令不会创建 `GameContext`、
+不会连接 DeviceHub，也不会启动截图循环；解析结果可直接被其他 Python 代码导入为
+`LogParseReport`。提供札记缓存时，HTML 会额外显示按凌晨 4 点切分的每日摩拉表，以及
+配置组/脚本的小怪、精英、锄地摩拉和摩拉每秒列；所有表头均可点击排序，报告仍是单文件
+且不加载外部资源。
 
 ---
 
@@ -648,6 +693,6 @@ run <脚本目录> [--set k=v]   运行 JS 脚本包
 combat <文件.txt>            执行战斗策略 DSL
 macro <宏.json>              回放键鼠宏（自动翻译为触控）
 pathing <文件.json> [--dry-run]  解析/执行 pathing 路线
-trigger [--pick|--skip|--eat|--map-mask]  长驻实时触发器
+trigger [--pick|--skip|--eat|--fish|--map-mask]  长驻实时触发器
 web [--host H] [--port P]    启动 WebUI 控制台（默认 127.0.0.1:8899）
 ```

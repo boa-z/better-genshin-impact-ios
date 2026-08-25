@@ -12,7 +12,7 @@ import re
 import time
 from typing import Any, Callable, Mapping
 
-from ..combat.hud import is_skill_ready
+from ..combat.hud import wait_for_party_hud
 
 
 def _unwrap(value: Any) -> Any:
@@ -134,10 +134,7 @@ class Avatar:
         self.ctx.sleep(max(0, int(milliseconds)))
 
     def ready(self) -> None:
-        for _ in range(20):
-            if self._check_cancel() or is_skill_ready(self.ctx):
-                return
-            self.ctx.sleep(150)
+        wait_for_party_hud(self.ctx, cancelled=self._check_cancel)
 
     def is_skill_ready(self, _print_log: bool = False) -> bool:
         return self.get_skill_cd_seconds() <= 0

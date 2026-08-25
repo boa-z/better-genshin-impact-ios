@@ -51,6 +51,8 @@ _ctx_lock = threading.Lock()
 _mcp_url: str | None = None
 _devicehub_config_path: str | Path | None = None
 _device_id: str | None = None
+_notification_config_path: str | Path | None = None
+_notification_service = None
 _preview_refresh_lock = threading.Lock()
 _preview_refresh_thread: threading.Thread | None = None
 _preview_encode_lock = threading.Lock()
@@ -71,19 +73,34 @@ def get_ctx() -> GameContext:
         return _ctx
 
 
+def get_notification_service():
+    global _notification_service
+    if _notification_service is None:
+        from ..notification import NotificationService
+
+        _notification_service = NotificationService.load(
+            _notification_config_path, log=weblog,
+        )
+    return _notification_service
+
+
 def _err(e: Exception, code: int = 503) -> JSONResponse:
     return JSONResponse({"error": str(e)}, status_code=code)
 
 
 def _shutdown_context() -> None:
     """Release automation input, the MCP session, and owned headless process."""
-    global _ctx
+    global _ctx, _notification_service
     runner.stop()
     with _ctx_lock:
         ctx = _ctx
         _ctx = None
     if ctx is not None:
         ctx.close()
+    service = _notification_service
+    _notification_service = None
+    if service is not None:
+        service.close()
     with _preview_encode_lock:
         _preview_jpeg_cache.clear()
 
@@ -172,8 +189,13 @@ class TaskRunner:
                     task = json.loads(task_path.read_text(encoding="utf-8"))
                 else:
                     task = {"name": path, "config": settings}
-                TaskDispatcher(ctx, party_slots=self._party(), log=weblog,
-                               cancelled=self.stop_event.is_set).run_task(task)
+                TaskDispatcher(
+                    ctx,
+                    party_slots=self._party(),
+                    log=weblog,
+                    cancelled=self.stop_event.is_set,
+                    notification_service=get_notification_service(),
+                ).run_task(task)
             else:
                 raise ValueError(f"未知任务类型 {kind}")
             self.info = {**self.info, "state": "done", "ended": datetime.now().strftime("%H:%M:%S")}
@@ -592,7 +614,7 @@ def api_triggers_set(body: dict):
     """Toggle realtime triggers without creating extra capture producers."""
     try:
         ctx = get_ctx()
-        for name in ("AutoPick", "AutoSkip", "AutoEat", "SkillCd", "QuickTeleport"):
+        for name in ("AutoPick", "AutoSkip", "AutoEat", "AutoFish", "SkillCd", "QuickTeleport"):
             if name not in body:
                 continue
             if body[name]:
@@ -911,13 +933,15 @@ def serve(
     mcp_url: str | None = None,
     devicehub_config_path: str | Path | None = None,
     device_id: str | None = None,
+    notification_config_path: str | Path | None = None,
 ) -> None:
     import uvicorn
 
-    global _mcp_url, _devicehub_config_path, _device_id
+    global _mcp_url, _devicehub_config_path, _device_id, _notification_config_path
     _mcp_url = mcp_url
     _devicehub_config_path = devicehub_config_path
     _device_id = device_id
+    _notification_config_path = notification_config_path
     weblog(f"[web] 控制台 http://{host}:{port}")
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")

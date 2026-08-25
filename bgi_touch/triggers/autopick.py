@@ -155,7 +155,18 @@ class AutoPickTrigger:
         self._last_action_at = now
 
     def _is_gameplay_frame(self, region: ImageRegion) -> bool:
-        """Require BetterGI's Paimon HUD marker, which menus hide."""
-        from ..vision.game_ui import is_main_ui
+        """Require gameplay HUD and explicitly reject the big-map overlay.
 
-        return is_main_ui(self.ctx, region.bgr)
+        The mobile map is translucent: the Paimon HUD template can remain
+        visible behind it, while the map's OCR labels occupy the same right
+        side ROI as interaction entries.  Checking only ``is_main_ui`` can
+        therefore turn labels such as ``优兰尼娅湖`` into pickup actions during
+        ``genshin.tp``.  The map-close marker is the shared scene boundary
+        used by AutoSkip, MapMask, and QuickTeleport, so keep AutoPick on the
+        same guard before either OCR or forced interaction.
+        """
+        from ..vision.game_ui import is_big_map_ui, is_main_ui
+
+        return is_main_ui(self.ctx, region.bgr) and not is_big_map_ui(
+            self.ctx, region.bgr
+        )

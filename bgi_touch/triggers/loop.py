@@ -157,7 +157,16 @@ class TriggerLoop:
                         # flight. Do not let that already captured frame send input.
                         if self._stop.is_set():
                             break
-                        for tr in triggers:
+                        exclusive = next(
+                            (
+                                tr for tr in triggers
+                                if getattr(tr, "is_exclusive", False)
+                                and getattr(tr, "enabled", True)
+                            ),
+                            None,
+                        )
+                        active_triggers = [exclusive] if exclusive is not None else triggers
+                        for tr in active_triggers:
                             if self._stop.is_set():
                                 break
                             if getattr(tr, "enabled", True):

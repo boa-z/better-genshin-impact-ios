@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..config_values import as_bool
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RECORD_DIR = PROJECT_ROOT / "log" / "ExecutionRecords"
@@ -32,11 +34,7 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _as_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().casefold() in {"1", "true", "yes", "on"}
-    return bool(value)
+    return as_bool(value)
 
 
 def _datetime(value: Any) -> datetime | None:
@@ -191,7 +189,9 @@ class ExecutionRecord:
             start_time=start,
             server_end_time=_datetime(_value(raw, "server_end_time", "serverEndTime")),
             end_time=_datetime(_value(raw, "end_time", "endTime")),
-            successful=bool(_value(raw, "is_successful", "isSuccessful", default=False)),
+            successful=as_bool(_value(
+                raw, "is_successful", "isSuccessful", default=False,
+            )),
         )
 
     def to_mapping(self) -> dict[str, Any]:

@@ -314,7 +314,7 @@ class AutoFightTask:
         cooldowns = self._skill_cooldowns.get(character.casefold())
         if cooldowns is None:
             return
-        hold = bool(command.params and command.params[0].casefold() == "hold")
+        hold = any(str(value).strip().casefold() == "hold" for value in command.params)
         cooldown = cooldowns[1 if hold else 0]
         self._skill_deadlines[character.casefold()] = time.monotonic() + cooldown
 

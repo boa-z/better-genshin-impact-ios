@@ -18,7 +18,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+
+# The MCP Python SDK renamed this context manager in 2.0.  DeviceHub Mask
+# still speaks the same Streamable HTTP protocol, so keep the client usable
+# with both the 1.x dependency used by the original port and current 2.x
+# runtimes instead of making an otherwise unrelated SDK upgrade break import.
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:  # pragma: no cover - selected by the installed SDK version
+    from mcp.client.streamable_http import streamable_http_client as streamablehttp_client
 
 from .config import DEFAULT_MCP_URL, HeadlessConfig
 

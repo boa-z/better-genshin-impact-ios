@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from ..config_values import as_bool
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROGRESS_DIR = PROJECT_ROOT / "log" / "task_progress"
@@ -57,7 +59,7 @@ class ProjectProgress:
             start_time=_timestamp(_value(raw, "startTime")) or datetime.now().isoformat(),
             end_time=_timestamp(_value(raw, "endTime")),
             status=int(_value(raw, "status", default=1) or 1),
-            task_end=bool(_value(raw, "taskEnd", default=False)),
+            task_end=as_bool(_value(raw, "taskEnd", default=False)),
         )
 
     def to_mapping(self) -> dict[str, Any]:
@@ -110,7 +112,7 @@ class TaskProgress:
                 item for value in (history if isinstance(history, list) else [])
                 if (item := ProjectProgress.from_mapping(value)) is not None
             ],
-            loop=bool(_value(raw, "loop", default=False)),
+            loop=as_bool(_value(raw, "loop", default=False)),
             loop_count=int(_value(raw, "loopCount", default=0) or 0),
             consecutive_failure_count=int(
                 _value(raw, "consecutiveFailureCount", default=0) or 0

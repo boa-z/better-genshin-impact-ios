@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from ..config_values import as_bool
 from .execution_records import (
     CompletionSkipRule,
     ExecutionRecord,
@@ -91,7 +92,9 @@ class ScriptGroupProject:
             schedule=str(_value(raw, "schedule", default="Daily") or "Daily"),
             run_num=run_num,
             settings=settings,
-            allow_js_notification=bool(_value(raw, "allowJsNotification", default=True)),
+            allow_js_notification=as_bool(_value(
+                raw, "allowJsNotification", default=True,
+            ), True),
             allow_js_http_hash=str(_value(raw, "allowJsHTTPHash", default="") or ""),
         )
 
@@ -161,7 +164,7 @@ class ScriptGroupRunner:
         self.party_slots = party_slots or {}
         self.progress_store = progress_store or TaskProgressStore(log=log)
         self.execution_store = execution_store or ExecutionRecordStore()
-        self.continue_on_error = bool(continue_on_error)
+        self.continue_on_error = as_bool(continue_on_error, True)
         self.cancelled = cancelled or (lambda: False)
         self.log = log
 
@@ -378,7 +381,9 @@ class ScriptGroupRunner:
             result = TaskDispatcher(None, log=self.log).run_shell_task({
                 **group_config,
                 "command": project.name,
-                "disable": not bool(_value(group.config, "enableShellConfig", default=False)),
+                "disable": not as_bool(_value(
+                    group.config, "enableShellConfig", default=False,
+                )),
             })
             if result.get("status") in {"failed", "timeout"}:
                 raise RuntimeError(

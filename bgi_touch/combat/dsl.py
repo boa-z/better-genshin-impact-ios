@@ -19,14 +19,40 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-KNOWN_ACTIONS = {
-    "e", "skill", "q", "burst", "attack", "charge", "dash", "jump",
-    "w", "a", "s", "d", "walk", "wait", "aim", "fly",
-    "keydown", "keyup", "keypress", "click", "mousedown", "mouseup",
-    "moveby", "scroll", "ready", "check",
+ACTION_ALIASES = {
+    # BetterGI's Method aliases. Keep the canonical values short because
+    # community scripts and JSON strategy names use them in conditions.
+    "e": "e", "skill": "skill",
+    "q": "q", "burst": "burst",
+    "attack": "attack", "普攻": "attack", "普通攻击": "attack",
+    "charge": "charge", "重击": "charge",
+    "dash": "dash", "冲刺": "dash",
+    "jump": "jump", "j": "jump", "跳跃": "jump",
+    "w": "w", "a": "a", "s": "s", "d": "d",
+    "walk": "walk", "行走": "walk",
+    "wait": "wait", "after": "wait", "等待": "wait",
+    "ready": "ready", "完成": "ready",
+    "check": "check", "检测": "check",
+    "aim": "aim", "r": "aim", "瞄准": "aim",
+    "fly": "fly",
+    "keydown": "keydown", "keyup": "keyup", "keypress": "keypress",
+    "click": "click", "mousedown": "mousedown", "mouseup": "mouseup",
+    "moveby": "moveby",
+    "scroll": "scroll", "verticalscroll": "scroll",
+    "round": "round",
 }
+# Keep aliases public as well as canonical names; callers use this set when
+# validating converted macro files before execution.
+KNOWN_ACTIONS = frozenset(ACTION_ALIASES)
 
 _CMD_RE = re.compile(r"^([\w一-鿿]+)\s*(?:\(([^)]*)\))?$")
+
+
+def canonical_action(value: object) -> str:
+    """Normalize BetterGI Method aliases to the mobile executor spelling."""
+
+    text = str(value or "").strip()
+    return ACTION_ALIASES.get(text.casefold(), text.casefold())
 
 
 @dataclass
@@ -68,7 +94,9 @@ def parse_combat_script(text: str) -> list[CombatLine]:
         body = line
         if " " in line:
             head, rest = line.split(" ", 1)
-            head_action = re.sub(r"\(.*", "", head).rstrip(",，、;").lower()
+            head_action = canonical_action(
+                re.sub(r"\(.*", "", head).rstrip(",，、;")
+            )
             if head_action not in KNOWN_ACTIONS:
                 character, body = head.strip(), rest
         commands = []
@@ -76,7 +104,7 @@ def parse_combat_script(text: str) -> list[CombatLine]:
             m = _CMD_RE.match(part)
             if m:
                 params = [p.strip() for p in re.split(r"[,，]", m.group(2))] if m.group(2) else []
-                commands.append(CombatCommand(m.group(1).lower(), params))
+                commands.append(CombatCommand(canonical_action(m.group(1)), params))
         if commands or character:
             lines.append(CombatLine(character, commands))
     return lines
@@ -93,22 +121,30 @@ class CombatExecutor:
                  party_slots: dict[str, int] | None = None,
                  log: Callable[[str], None] = print,
                  check_combat_end: Callable[[], bool] | None = None,
-                 team_switcher=None, skill_ready: Callable[[], bool] | None = None):
+                 team_switcher=None, skill_ready: Callable[[], bool] | None = None,
+                 hud_ready: Callable[[], bool] | None = None):
         self.input = input_sim
         self.sleep = sleep or (lambda ms: time.sleep(ms / 1000))
         self.party_slots = party_slots or {}
         self.log = log
         self.check_combat_end = check_combat_end
         self.team_switcher = team_switcher  # combat.hud.TeamSwitcher：按名 OCR 切人
-        self.skill_ready = skill_ready      # ready 指令的技能就绪检测
+        self.skill_ready = skill_ready      # 旧宿主的 ready 回调兼容
+        self.hud_ready = hud_ready          # ready 指令的战斗 HUD 就绪检测
 
     @classmethod
     def for_context(cls, ctx, party_slots=None, log=print, sleep=None):
-        """带识别增强的构造：按名切人 + 技能就绪 + 战斗结束检测。"""
-        from .hud import TeamSwitcher, enemies_nearby, is_skill_ready
+        """带识别增强的构造：按名切人 + HUD/技能识别 + 战斗结束检测。"""
+        from .hud import (
+            TeamSwitcher,
+            enemies_nearby,
+            is_party_hud_ready,
+            is_skill_ready,
+        )
         return cls(ctx.input, sleep=sleep or ctx.sleep, party_slots=party_slots, log=log,
                    team_switcher=TeamSwitcher(ctx, log),
                    skill_ready=lambda: is_skill_ready(ctx),
+                   hud_ready=lambda: is_party_hud_ready(ctx),
                    check_combat_end=lambda: not enemies_nearby(ctx))
 
     def run(self, script: str | list[CombatLine], loop_until_end: bool = False) -> None:
@@ -118,10 +154,17 @@ class CombatExecutor:
                 if line.character:
                     self.switch_to(line.character)
                 for cmd in line.commands:
-                    if cmd.action == "check" and self.check_combat_end and self.check_combat_end():
+                    self.exec(cmd)
+                    # BetterGI executes ``check`` first and probes the battle
+                    # state afterwards.  This matters for scripts that finish
+                    # an attack/skill and then immediately request a probe.
+                    if (
+                        canonical_action(cmd.action) == "check"
+                        and self.check_combat_end
+                        and self.check_combat_end()
+                    ):
                         self.input.release_all()
                         return
-                    self.exec(cmd)
             if not loop_until_end:
                 break
             if self.check_combat_end and self.check_combat_end():
@@ -146,9 +189,17 @@ class CombatExecutor:
             return default
 
     def exec(self, cmd: CombatCommand) -> None:
-        a, p = cmd.action, cmd.params
+        a, p = canonical_action(cmd.action), cmd.params
         if a in ("e", "skill"):
-            hold = p and p[0].lower() == "hold"
+            options = {str(value).strip().casefold() for value in p}
+            if "fast" in options and self.skill_ready is not None:
+                if not self.skill_ready():
+                    return
+            if "wait" in options and self.skill_ready is not None:
+                deadline = time.monotonic() + 8.0
+                while time.monotonic() < deadline and not self.skill_ready():
+                    self.sleep(200)
+            hold = "hold" in options
             self.input.key_press("E", hold_ms=900 if hold else 80)
         elif a in ("q", "burst"):
             self.input.key_press("Q")
@@ -171,11 +222,11 @@ class CombatExecutor:
         elif a == "wait":
             self.sleep(self._sec(p, 0, 1.0) * 1000)
         elif a == "keydown":
-            self.input.key_down(p[0] if p else "")
+            self._key_down(p[0] if p else "")
         elif a == "keyup":
-            self.input.key_up(p[0] if p else "")
+            self._key_up(p[0] if p else "")
         elif a == "keypress":
-            self.input.key_press(p[0] if p else "")
+            self._key_press(p[0] if p else "")
         elif a == "click":
             button = p[0].casefold() if p else "left"
             if button == "left":
@@ -205,15 +256,16 @@ class CombatExecutor:
         elif a == "aim":
             self.input.key_press("R")
         elif a == "ready":
-            if self.skill_ready is None:
+            ready_check = self.hud_ready or self.skill_ready
+            if ready_check is None:
                 self.sleep(500)
             else:
                 deadline = time.monotonic() + 8
-                while time.monotonic() < deadline and not self.skill_ready():
+                while time.monotonic() < deadline and not ready_check():
                     self.sleep(300)
         elif a == "scroll":
             self.input.vertical_scroll(self._sec(p, 0, 0))
-        elif a in ("fly", "check"):
+        elif a in ("fly", "check", "round"):
             pass
         else:
             self.log(f"[combat] 未知动作 {a}，已跳过")
@@ -223,3 +275,48 @@ class CombatExecutor:
         self.input.key_down(key)
         self.sleep(ms)
         self.input.key_up(key)
+
+    @staticmethod
+    def _mouse_button(value: object) -> str | None:
+        normalized = str(value or "").strip().casefold().replace("_", "")
+        return {
+            "vklbutton": "left", "lbutton": "left", "leftbutton": "left",
+            "mouseleft": "left", "leftmouse": "left",
+            "vkrbutton": "right", "rbutton": "right", "rightbutton": "right",
+            "mouseright": "right", "rightmouse": "right",
+            "vkmbutton": "middle", "mbutton": "middle", "middlebutton": "middle",
+            "mousemiddle": "middle", "middlemouse": "middle",
+        }.get(normalized)
+
+    def _key_down(self, value: object) -> None:
+        button = self._mouse_button(value)
+        if button == "left":
+            self.input.attack_down()
+        elif button == "right":
+            self.input.button_down("sprint")
+        elif button == "middle":
+            self.input.button_down("elementalSight")
+        else:
+            self.input.key_down(str(value or ""))
+
+    def _key_up(self, value: object) -> None:
+        button = self._mouse_button(value)
+        if button == "left":
+            self.input.attack_up()
+        elif button == "right":
+            self.input.button_up("sprint")
+        elif button == "middle":
+            self.input.button_up("elementalSight")
+        else:
+            self.input.key_up(str(value or ""))
+
+    def _key_press(self, value: object) -> None:
+        button = self._mouse_button(value)
+        if button == "left":
+            self.input.attack()
+        elif button == "right":
+            self.input.key_press("LSHIFT")
+        elif button == "middle":
+            self.input.tap_button("elementalSight")
+        else:
+            self.input.key_press(str(value or ""))

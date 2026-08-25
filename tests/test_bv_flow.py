@@ -90,6 +90,15 @@ def test_bv_locator_accepts_upstream_color_recognition_types(recognition_type):
     screen.find_multi.assert_called_once_with(locator.recognition_object, limit=100)
 
 
+def test_bv_locator_treats_empty_recognition_object_as_no_match():
+    ctx, _input_simulator = _context()
+    locator = BvLocator(ctx, RecognitionObject())
+    screen = SimpleNamespace(find_multi=Mock())
+
+    assert locator._find_all_in(screen) == []
+    screen.find_multi.assert_not_called()
+
+
 def test_flow_action_until_repeats_action_after_retry_interval():
     from bgi_touch.engine.bv import BvPage
 

@@ -78,6 +78,37 @@ import icon from 'assets/icon.png';
     }
 
 
+def test_js_runtime_exposes_cancellable_native_timers(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+const events = [];
+const cancelled = setTimeout(() => events.push('cancelled'), 20);
+clearTimeout(cancelled);
+setTimeout(value => events.push(value), 1, 'once');
+await new Promise(resolve => {
+  let count = 0;
+  const interval = setInterval(() => {
+    events.push(`tick-${++count}`);
+    if (count === 3) {
+      clearInterval(interval);
+      resolve();
+    }
+  }, 2);
+});
+return JSON.stringify(events);
+""",
+        encoding="utf-8",
+    )
+
+    result = json.loads(JsScriptRuntime(_context(), tmp_path).run())
+
+    assert result[0] == "once"
+    assert result[1:] == ["tick-1", "tick-2", "tick-3"]
+
+
 def test_js_get_avatars_uses_cached_frame_before_device_capture(tmp_path):
     pytest.importorskip("pythonmonkey")
     from bgi_touch.engine.js_runtime import JsScriptRuntime

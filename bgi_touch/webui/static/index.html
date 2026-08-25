@@ -116,6 +116,7 @@
         触发器：<label><input type="checkbox" id="trigPick" onchange="setTrigger()"> 自动拾取</label>
         <label><input type="checkbox" id="trigSkip" onchange="setTrigger()"> 自动剧情</label>
         <label><input type="checkbox" id="trigEat" onchange="setTrigger()"> 自动吃药</label>
+        <label><input type="checkbox" id="trigFish" onchange="setTrigger()"> 自动钓鱼</label>
         <label><input type="checkbox" id="trigSkillCd" onchange="setSkillCd()"> 技能冷却</label>
         <label><input type="checkbox" id="trigQuickTp" onchange="setTrigger()"> 快速传送</label>
         <button onclick="post('/api/quick-teleport/tick')">单次传送</button>
@@ -338,6 +339,7 @@ async function convert() {
 async function setTrigger() {
   await post('/api/triggers', {AutoPick: $('#trigPick').checked, AutoSkip: $('#trigSkip').checked,
                                 AutoEat: $('#trigEat').checked,
+                                AutoFish: $('#trigFish').checked,
                                 QuickTeleport: $('#trigQuickTp').checked});
 }
 (async () => {
@@ -346,6 +348,7 @@ async function setTrigger() {
     $('#trigPick').checked = (d.active||[]).includes('AutoPick');
     $('#trigSkip').checked = (d.active||[]).includes('AutoSkip');
     $('#trigEat').checked = (d.active||[]).includes('AutoEat');
+    $('#trigFish').checked = (d.active||[]).includes('AutoFish');
     $('#trigSkillCd').checked = (d.active||[]).includes('SkillCd');
     $('#trigQuickTp').checked = (d.active||[]).includes('QuickTeleport');
   } catch {}

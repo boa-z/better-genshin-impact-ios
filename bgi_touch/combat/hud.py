@@ -2,13 +2,106 @@
 
 from __future__ import annotations
 
+import time
 from typing import Callable
 
 import cv2
 import numpy as np
 
 from ..engine.context import GameContext
-from ..engine.recognition import RecognitionObject
+from ..engine.recognition import ImageRegion, RecognitionObject
+
+
+def _cached_or_captured_frame(ctx: GameContext) -> np.ndarray | None:
+    """Return a current frame without creating a second capture producer.
+
+    TriggerLoop and the WebUI already publish the latest frame on
+    ``GameContext``.  Combat readiness checks should consume that frame when
+    it is fresh; a standalone combat task still needs a direct capture when
+    no shared frame exists yet.
+    """
+
+    cached = getattr(ctx, "cached_frame", None)
+    if callable(cached):
+        try:
+            frame, age = cached()
+            if isinstance(frame, np.ndarray) and frame.ndim == 3 and age <= 0.25:
+                return frame
+        except Exception:
+            # Readiness is best-effort.  Fall through to the task-owned
+            # capture path when a cache implementation is unavailable.
+            pass
+    capture = getattr(ctx, "capture_bgr", None)
+    if not callable(capture):
+        return None
+    try:
+        frame = capture()
+    except Exception:
+        return None
+    return frame if isinstance(frame, np.ndarray) and frame.ndim == 3 else None
+
+
+def is_party_hud_ready(ctx: GameContext, frame: np.ndarray | None = None) -> bool:
+    """Return whether the gameplay party HUD is ready for combat input.
+
+    BetterGI's desktop ``Avatar.Ready`` waits for a party index rectangle,
+    which does not exist on the iOS HUD.  A recognized party name is the
+    strongest mobile equivalent; the Paimon HUD template is a safe fallback
+    for OCR misses and one-character/co-op layouts.  ``frame`` is optional
+    so callers can pass a frame already captured by AutoFight/TriggerLoop.
+    """
+
+    if frame is None:
+        frame = _cached_or_captured_frame(ctx)
+    if not isinstance(frame, np.ndarray) or frame.ndim != 3:
+        return False
+
+    try:
+        from ..engine.party_hud import PARTY_NAME_ROI, canonical_avatar_name
+
+        hits = ImageRegion(ctx, frame).find_multi(
+            RecognitionObject.ocr(*PARTY_NAME_ROI), limit=8,
+        )
+        if any(canonical_avatar_name(getattr(hit, "text", "")) for hit in hits):
+            return True
+    except Exception:
+        # OCR may be unavailable during startup.  The normal HUD check below
+        # still provides a useful readiness signal without failing a task.
+        pass
+
+    try:
+        from ..vision.game_ui import is_main_ui
+
+        return bool(is_main_ui(ctx, frame))
+    except Exception:
+        return False
+
+
+def wait_for_party_hud(
+    ctx: GameContext,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+    timeout_ms: int = 3000,
+    poll_ms: int = 150,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Wait for the mobile gameplay HUD, reusing fresh shared frames."""
+
+    timeout_ms = max(0, int(timeout_ms))
+    poll_ms = max(1, int(poll_ms))
+    deadline = clock() + timeout_ms / 1000
+    sleep = getattr(ctx, "sleep", None)
+    while True:
+        if cancelled and cancelled():
+            return False
+        if is_party_hud_ready(ctx):
+            return True
+        if clock() >= deadline:
+            return False
+        if callable(sleep):
+            sleep(poll_ms)
+        else:
+            time.sleep(poll_ms / 1000)
 
 
 class TeamSwitcher:

@@ -81,6 +81,7 @@ bgi-touch calibrate -o cal.png         # 输出布局标注图，用于校准触
 bgi-touch convert <脚本路径>... -o scripts   # 转换社区脚本（js 包/pathing/键鼠宏/战斗txt/json）
 bgi-touch run scripts/js/<脚本名>       # 运行 JS 脚本包（BetterGI 兼容）
 bgi-touch notify "测试消息"             # 测试 Gotify；不会连接 iPhone
+bgi-touch travel-diary                  # 用 BGI_MIYOUSHE_COOKIE 更新旅行札记缓存（无设备）
 bgi-touch combat 万能战斗策略.txt        # 执行战斗策略 DSL
 bgi-touch combat 公式化锄地.json          # 执行 BetterGI JSON 优先级战斗策略
 bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --config 传 JSON）
@@ -88,6 +89,8 @@ bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑�
 bgi-touch task MusicPlayer --config '{"file":"score.json","customBpm":120}' # 自由演奏曲谱
 bgi-touch task QuickSereniteaPot       # 从背包部署并进入/离开尘歌壶
 bgi-touch task OneKeyExpedition         # 在探索派遣页全部领取并再次派遣
+bgi-touch task CheckRewards             # 检查每日委托奖励状态并发送 daily.reward 通知
+bgi-touch task ScanPick --config '{"seconds":15}' # 复用 AutoPick 扫描附近掉落
 bgi-touch task AutoTrack                # 自动跟随当前蓝色任务追踪标记
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 bgi-touch task AutoArtifactSalvage --config '{"star":4}' # 默认只选择并停在复查页
@@ -101,6 +104,10 @@ bgi-touch pathing 路线.json --dry-run   # 校验并解析 pathing 文件
 bgi-touch pathing 路线.json             # 启动地图追踪（需要地图资产与真机）
 bgi-touch group User/ScriptGroup/每日.json --dry-run  # 检查原版配置组项目顺序
 bgi-touch group User/ScriptGroup/每日.json            # 执行配置组并保存崩溃续跑进度
+bgi-touch log-parse log/                             # 离线分析 BetterGI 日志，不连接设备
+bgi-touch log-parse log/ --format html --diary-cache-dir log/logparse --game-uid 123456789 \
+  > report.html                                       # 加入本地旅行札记摩拉统计
+bgi-touch trigger --fish                  # 进入钓鱼界面后自动提竿/拉条
 bgi-touch trigger --map-mask --map-name Teyvat  # 长驻地图遮罩/坐标追踪
 bgi-touch trigger --skill-cd            # 四人队伍元素战技冷却提示
 bgi-touch trigger --quick-teleport      # 地图选点后自动点击候选项与传送
@@ -138,6 +145,7 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 通用热键宏（转圈 / 快捷强化 / F、Space 长按连发） | ✅ 输入时序离线验证，待真机手感校准 |
 | 键鼠宏 → 触控时间线转换与回放 | ✅ |
 | 脚本转换器 + 兼容性报告（COMPAT.md） | ✅ |
+| LogParse 日志分析（配置组/耗时/拾取/故障/多实例/自包含 HTML） | ✅ 离线 CLI |
 | WebUI 控制台（实况预览/手动控制/脚本运行/日志） | ✅ 真机验证 |
 | 多地图小地图 SIFT 定位（七张地图、多楼层、局部/全局回退） | ✅ 层岩巨渊真机验证 |
 | 大地图传送 genshin.tp（区域 OCR 切换+各地图坐标系+SIFT 拖动） | ✅ 层岩巨渊真机验证 |
@@ -148,9 +156,10 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | genshin.moveMapTo / tpToStatueOfTheSeven / 大地图缩放 | ⚠️ 已实现，缩放为触控 pinch 近似 |
 | pathing 执行（定位+走点+传送+动作+异常重试） | ⚠️ 离线全链路；已接入锄地日上限与统计，待真机路线实测 |
 | AutoTrack 当前任务追踪（距离 OCR / 蓝色标记 / 远距传送） | ⚠️ 离线全链路，待已有任务真机验证 |
-| 实时触发器（AutoPick / AutoSkip 选项、派遣、黑屏与剧情弹出页） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
+| 实时触发器（AutoPick / AutoSkip / AutoFish，含钓鱼独占） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
+| genshin 公共 Job：奖励领取、协会/合成台导航、材料合成、调时、重登 | ⚠️ 已接入 Genshin/dispatcher/JS 入口；路线与按钮 OCR 待真机回归 |
 | SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ AutoFight 已接入 TXT/JSON 策略、条件历史、技能条件、队伍页确认与快速检查；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ AutoFishing 已含找鱼、选饵、HutaoFisher 抛竿、提竿与拉条闭环；需真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |

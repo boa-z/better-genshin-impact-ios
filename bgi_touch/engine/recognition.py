@@ -1442,7 +1442,11 @@ class Point2f:
 
 class RecognitionObject:
     def __init__(self):
-        self.recognition_type = "TemplateMatch"
+        # ``RecognitionTypes.None`` is the default value of BetterGI's C#
+        # enum.  A script normally assigns the type immediately after using
+        # ``new RecognitionObject()``, but preserving the default matters for
+        # feature-detection code and for objects used only as draw settings.
+        self.recognition_type = "None"
         self.template: Mat | None = None
         self.roi: tuple[float, float, float, float] | None = None  # ref 空间 x,y,w,h
         self.reference_image_size: Size | None = None
@@ -2359,6 +2363,14 @@ class ImageRegion(Region):
         if not isinstance(ro, RecognitionObject):
             raise TypeError("find/findMulti 需要 RecognitionObject")
 
+        # Match BetterGI's empty enum value: an unconfigured recognition
+        # object is a non-match, not an accidental template lookup with no
+        # image.  This also keeps optional script probes side-effect free.
+        if ro.recognition_type == "None":
+            if callable(fail_action):
+                fail_action()
+            return Region.empty_region(self.ctx)
+
         if ro.recognition_type in ("Ocr", "OcrMatch", "ColorRangeAndOcr"):
             resolved = self._resolve_search_region(ro)
             if resolved is None:
@@ -2413,6 +2425,10 @@ class ImageRegion(Region):
         ro = getattr(ro, "__wrapped__", ro)
         if not isinstance(ro, RecognitionObject):
             raise TypeError("find/findMulti 需要 RecognitionObject")
+        if ro.recognition_type == "None":
+            if callable(fail_action):
+                fail_action()
+            return []
         resolved = self._resolve_search_region(ro)
         if resolved is None:
             if callable(fail_action):

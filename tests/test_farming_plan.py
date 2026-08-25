@@ -10,13 +10,20 @@ from bgi_touch.pathing.farming import (
     FarmingSession,
     FarmingStatsRecorder,
 )
+from bgi_touch.tasks.travel_diary import (
+    DiaryPage,
+    GameInfo,
+    TravelDiaryUpdate,
+    TravelDiaryStore,
+    ActionItem,
+)
 from bgi_touch.pathing.model import PathingTask
 
 
 TZ8 = timezone(timedelta(hours=8))
 
 
-def _config(tmp_path, *, enabled=True, elite_cap=2, mob_cap=10):
+def _config(tmp_path, *, enabled=True, elite_cap=2, mob_cap=10, miyoushe_enabled=False):
     path = tmp_path / "config" / "farming.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({
@@ -26,7 +33,7 @@ def _config(tmp_path, *, enabled=True, elite_cap=2, mob_cap=10):
         "serverTimezone": 8,
         "logDirectory": "../records",
         "miyousheDataConfig": {
-            "enabled": False,
+            "enabled": miyoushe_enabled,
             "dailyEliteCap": 400,
             "dailyMobCap": 2000,
         },
@@ -147,3 +154,57 @@ def test_pathing_executor_records_successful_farming_route(tmp_path):
     assert data.records[0].project_name == "锄地一号.json"
     assert data.records[0].folder_name == "敌人与魔物"
     ctx.input.release_all.assert_called_once()
+
+
+class _FakeTravelDiaryUpdater:
+    def __init__(self, store):
+        self.store = store
+        self.calls = []
+
+    def update(self, cookie, *, role_index=0):
+        self.calls.append((cookie, role_index))
+        return TravelDiaryUpdate(
+            GameInfo("hk4e_cn", "cn_gf01", "100000001"), (), ()
+        )
+
+
+def test_miyoushe_update_requires_explicit_cookie_and_projects_diary(tmp_path):
+    config = _config(tmp_path, enabled=True, miyoushe_enabled=True)
+    store = TravelDiaryStore(tmp_path / "diary")
+    store.write("100000001", 2026, 8, DiaryPage(items=[
+        ActionItem(37, "", "2026-08-23 10:00:00", 100),
+        ActionItem(37, "", "2026-08-23 11:00:00", 1200),
+        ActionItem(28, "", "2026-08-23 12:00:00", 10),
+    ]))
+    updater = _FakeTravelDiaryUpdater(store)
+    recorder = FarmingStatsRecorder(
+        config,
+        now=lambda: datetime(2026, 8, 23, 12, tzinfo=TZ8),
+        log=lambda _message: None,
+        travel_diary_updater=updater,
+        cookie_provider=lambda: "ltoken=secret",
+    )
+    assert recorder.update_miyoushe_data() is True
+    assert updater.calls == [("ltoken=secret", 0)]
+    data = recorder.read_daily_data()
+    assert data.miyoushe_total_elite_mob_count == 2
+    assert data.miyoushe_total_normal_mob_count == 1
+    assert data.travels_diary_detail_manager_update_time == datetime(
+        2026, 8, 23, 12, tzinfo=TZ8
+    )
+    assert "secret" not in recorder.data_path().read_text(encoding="utf-8")
+
+
+def test_miyoushe_update_does_not_call_updater_without_cookie(tmp_path):
+    config = _config(tmp_path, enabled=True, miyoushe_enabled=True)
+    updater = _FakeTravelDiaryUpdater(TravelDiaryStore(tmp_path / "diary"))
+    recorder = FarmingStatsRecorder(
+        config,
+        now=lambda: datetime(2026, 8, 23, 12, tzinfo=TZ8),
+        log=lambda _message: None,
+        travel_diary_updater=updater,
+        cookie_provider=lambda: "",
+    )
+    assert recorder.update_miyoushe_data() is False
+    assert recorder.maybe_update_miyoushe() is False
+    assert updater.calls == []

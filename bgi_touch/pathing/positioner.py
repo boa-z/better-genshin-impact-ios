@@ -176,3 +176,20 @@ class MinimapPositioner:
         self.locator.prev = self.locator.config.world_to_image(wx, wy)
         self._last_position = (float(wx), float(wy))
         self._last_fix_at = 0.0
+
+    def set_prior_pixel(self, ix: float, iy: float) -> None:
+        """Set the local-match prior using native map-pixel coordinates.
+
+        ``NavigationInstance.SetPrevPosition`` receives the pixel-space value
+        used internally by BetterGI's ``NavigationInstance`` rather than a
+        world coordinate.  Keep this conversion beside ``set_prior`` so both
+        the public Genshin API and the compatibility facade share one state
+        update path.
+        """
+        if self.locator.config is None:
+            self.reset()
+            return
+        ix, iy = float(ix), float(iy)
+        self.locator.prev = (ix, iy)
+        self._last_position = self.locator.config.image_to_world(ix, iy)
+        self._last_fix_at = 0.0

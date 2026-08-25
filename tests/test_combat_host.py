@@ -110,3 +110,66 @@ return JSON.stringify({
     input_simulator.button_down.assert_called_once_with("sprint")
     input_simulator.button_up.assert_called_once_with("sprint")
     input_simulator.release_all.assert_called_once_with()
+
+
+def test_avatar_ready_waits_for_mobile_hud_instead_of_skill_cooldown(monkeypatch):
+    import bgi_touch.engine.combat_host as module
+
+    ctx = SimpleNamespace()
+    scenes = SimpleNamespace(ctx=ctx)
+    avatar = module.Avatar(scenes, "钟离", 1)
+    wait_for_hud = Mock(return_value=True)
+    monkeypatch.setattr(module, "wait_for_party_hud", wait_for_hud)
+
+    avatar.ready()
+
+    wait_for_hud.assert_called_once()
+    assert wait_for_hud.call_args.args == (ctx,)
+    assert callable(wait_for_hud.call_args.kwargs["cancelled"])
+
+
+def test_combat_ready_uses_hud_callback_without_polling_skill_cd():
+    from bgi_touch.combat.dsl import CombatCommand, CombatExecutor
+
+    hud_ready = Mock(side_effect=[False, True])
+    skill_ready = Mock(side_effect=AssertionError("ready must not mean skill CD"))
+    executor = CombatExecutor(
+        SimpleNamespace(),
+        sleep=lambda _milliseconds: None,
+        hud_ready=hud_ready,
+        skill_ready=skill_ready,
+    )
+
+    executor.exec(CombatCommand("ready"))
+
+    assert hud_ready.call_count == 2
+    skill_ready.assert_not_called()
+
+
+def test_party_hud_readiness_prefers_fresh_shared_frame(monkeypatch):
+    import bgi_touch.combat.hud as module
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    ctx = SimpleNamespace(
+        cached_frame=Mock(return_value=(frame, 0.05)),
+        capture_bgr=Mock(side_effect=AssertionError("must use shared frame")),
+    )
+
+    assert module._cached_or_captured_frame(ctx) is frame
+    ctx.capture_bgr.assert_not_called()
+
+
+def test_party_hud_readiness_accepts_recognized_mobile_name(monkeypatch):
+    import bgi_touch.combat.hud as module
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    class Region:
+        def find_multi(self, _recognition, *, limit):
+            assert limit == 8
+            return [SimpleNamespace(text="夜兰")]
+
+    monkeypatch.setattr(module, "ImageRegion", lambda _ctx, _frame: Region())
+    ctx = SimpleNamespace()
+
+    assert module.is_party_hud_ready(ctx, frame)

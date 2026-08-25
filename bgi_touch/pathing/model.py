@@ -10,6 +10,8 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..config_values import as_bool
+
 
 def _field(raw: dict, *names: str, default=None):
     """Read snake_case and BetterGI's camelCase spellings interchangeably."""
@@ -83,7 +85,7 @@ class Waypoint:
                 _field(ext, "misidentification", default={})
             ),
             monster_tag=str(_field(ext, "monster_tag", "monsterTag", default="") or ""),
-            enable_monster_loot_split=bool(_field(
+            enable_monster_loot_split=as_bool(_field(
                 ext, "enable_monster_loot_split", "enableMonsterLootSplit", default=False
             )),
             description=str(_field(ext, "description", default="") or ""),
@@ -142,7 +144,7 @@ class PathingTask:
             info=info,
             config=config,
             map_match_method=str(match_method or "SIFT"),
-            realtime_triggers={str(k): bool(v) for k, v in triggers.items()},
+            realtime_triggers={str(k): as_bool(v) for k, v in triggers.items()},
             farming_info=farming_info,
         )
 

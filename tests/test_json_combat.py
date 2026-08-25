@@ -71,6 +71,72 @@ def test_community_decimal_action_name_is_an_exact_identifier():
     )
 
 
+def test_formulaic_community_strategy_conditions_remain_compatible():
+    """Exercise the bare-function syntax used by current community JSON files."""
+    from bgi_touch.combat.json_strategy import ConditionEvaluator, parse_json_strategy
+
+    value = {
+        "info": {"name": "公式化锄地语料", "preActions": []},
+        "actions": [
+            {
+                "name": "检查战斗结束",
+                "character": "",
+                "action": "check,w(0.05),click(middle),scroll(10)",
+                "condition": {"expression": "t>1.5 && since>0.7"},
+                "index": 1,
+            },
+            {
+                "name": "芙芙-e",
+                "character": "芙宁娜",
+                "action": "e,wait(0.3)",
+                "condition": {"expression": "since>28 && e-ready"},
+                "index": 21,
+                "morePriorities": [
+                    {"expression": "since>20 && e-ready", "priority": 30},
+                ],
+            },
+            {
+                "name": "满芙普攻",
+                "character": "芙宁娜",
+                "action": "click",
+                "condition": {
+                    "expression": "(since(21)<10) && (count(27, t-10, t)<2)",
+                },
+                "index": 27,
+            },
+            {
+                "name": "木偶-喷冰4.15",
+                "character": "桑多涅",
+                "action": "charge(4.15)",
+                "condition": {"expression": "count=0 || since(38)>since(44)"},
+                "index": 38,
+            },
+        ],
+    }
+
+    parsed = parse_json_strategy(value)
+    messages = []
+    evaluator = ConditionEvaluator(
+        action_names=[action.name for action in parsed.actions],
+        party_names=["芙宁娜", "桑多涅"],
+        q_ready=lambda *_: True,
+        e_cd=lambda *_: 0.0,
+        clock=_Clock(),
+        log=messages.append,
+    )
+
+    for action in parsed.actions:
+        expressions = [action.condition.expression]
+        expressions.extend(item.expression for item in action.more_priorities)
+        for expression in expressions:
+            evaluator.evaluate(expression, action.index, action.character, action.name)
+
+    assert not messages
+    assert evaluator.evaluate(
+        "since(木偶-喷冰4.15)>3", 27, "芙宁娜", "满芙普攻"
+    )
+
+
 @pytest.mark.parametrize(
     "name",
     ["true", "FALSE", "12", "动作 名", "动作,名", "动作+名", "since", "动作_1"],

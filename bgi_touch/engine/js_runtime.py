@@ -138,7 +138,11 @@ class JsScriptRuntime:
         self.cancelled = False
         self.manifest = self._load_manifest()
         self.settings = self._load_settings(settings or {})
-        self.party_slots = party_slots or {}
+        if party_slots is not None:
+            self.party_slots = party_slots
+        else:
+            cached_party = getattr(ctx, "party_slots", None)
+            self.party_slots = cached_party if isinstance(cached_party, dict) else {}
         default_strategy_root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
         self.strategy_roots = [
             Path(value).expanduser().resolve()
@@ -256,10 +260,37 @@ class JsScriptRuntime:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return {"status_code": resp.status, "headers": dict(resp.headers), "body": resp.read().decode("utf-8", "replace")}
 
+    def _ensure_js_timers(self, global_object: Any) -> None:
+        """Keep BetterGI's timer globals available in every JS runtime.
+
+        PythonMonkey ships the timer implementation as a built-in module and
+        normally installs it while importing ``pythonmonkey``.  Do the
+        installation explicitly here as well: some supported PythonMonkey
+        builds expose ``timers`` without eagerly copying its exports onto
+        ``globalThis``.  Using the built-in implementation is important—the
+        callbacks are scheduled by SpiderMonkey's own event loop and therefore
+        never invoke a JS function from a Python worker thread.
+        """
+        names = (
+            "setTimeout", "clearTimeout", "setImmediate", "clearImmediate",
+            "setInterval", "clearInterval",
+        )
+        try:
+            timers = self.pm.require("timers")
+            for name in names:
+                if self.pm.eval(
+                    f"typeof globalThis[{json.dumps(name)}]"
+                ) == "function":
+                    continue
+                global_object[name] = timers[name]
+        except Exception as error:  # pragma: no cover - depends on the JS build
+            self.log(f"[runtime] 无法安装 JS 计时器兼容：{error}")
+
     def _install_globals(self) -> None:
         pm = self.pm
         self._case_proxy = pm.eval(CASE_PROXY)
         g = pm.eval("globalThis")
+        self._ensure_js_timers(g)
         ctx, log, wrap = self.ctx, self.log, self._wrap
 
         from ..input.layout import normalize_key
@@ -322,9 +353,13 @@ class JsScriptRuntime:
                 result = existing
 
             if result:
-                self.party_slots = dict(result)
+                # Keep the dictionary shared with GenshinApi so
+                # clearPartyCache() and a later HUD refresh affect combat
+                # hosts created by this same script runtime.
+                self.party_slots.clear()
+                self.party_slots.update(result)
                 try:
-                    setattr(ctx, "party_slots", dict(result))
+                    setattr(ctx, "party_slots", self.party_slots)
                 except Exception:
                     pass
             ordered = sorted(
@@ -962,9 +997,41 @@ class JsScriptRuntime:
             "}"
         )(_create_scalar)
 
-        # genshin 助手
+        # genshin 助手。不要把整个 Python 宿主对象直接交给 SpiderMonkey：
+        # PythonMonkey 在 ``await genshin.tp(...)`` 失败时会继续探测宿主对象
+        # 的 then/属性，某些异常路径会在 Python↔JS 自动包装层之间递归，最终
+        # 只留下 ``InternalError: too much recursion``。逐个绑定公开成员到
+        # 一个普通 JS 对象，既保留 Python 方法的同步/异常语义，也让大小写
+        # 不敏感 Proxy 只处理纯 JS 对象。
         from .genshin_api import GenshinApi
-        expose("genshin", wrap(GenshinApi(ctx, log)), proxy=False)
+
+        genshin_api = GenshinApi(ctx, log, party_slots=self.party_slots)
+        genshin_facade = pm.eval("({})")
+
+        def _navigation_facade(navigation):
+            # Do not expose the Python object itself.  PythonMonkey may probe
+            # arbitrary host attributes while awaiting a failed call, which
+            # is the source of the historical ``too much recursion`` error.
+            # A plain JS object with individually bound methods has the same
+            # ClearScript surface without crossing that proxy boundary.
+            facade = pm.eval("({})")
+            for name in sorted(
+                value for value in dir(navigation) if not value.startswith("_")
+            ):
+                member = getattr(navigation, name)
+                if callable(member):
+                    facade[name] = member
+            return self._case_proxy(facade)
+
+        for member_name in sorted(name for name in dir(genshin_api) if not name.startswith("_")):
+            member = getattr(genshin_api, member_name)
+            if member_name == "lazyNavigationInstance":
+                genshin_facade[member_name] = _navigation_facade(member)
+            elif callable(member) or member is None or isinstance(
+                member, (bool, int, float, str)
+            ):
+                genshin_facade[member_name] = member
+        g["genshin"] = self._case_proxy(genshin_facade)
 
         from .combat_host import Avatar, CombatScenes
 
@@ -998,7 +1065,7 @@ class JsScriptRuntime:
         """)(
             _create_avatar,
             Avatar.parse_action_scheduler_by_cd,
-            lambda token=None, error=None: GenshinApi(ctx, log).teleportToStatue(),
+            lambda token=None, error=None: genshin_api.teleportToStatue(),
         )
         g["Avatar"] = avatar_type
 
@@ -1141,6 +1208,7 @@ class JsScriptRuntime:
             ctx,
             party_slots=self.party_slots,
             log=log,
+            notification_service=self._notification_service,
             cancelled=lambda: rt.cancelled,
             strategy_roots=[rt.script_dir, *rt.strategy_roots],
             restrict_strategy_roots=True,
@@ -1204,8 +1272,45 @@ class JsScriptRuntime:
             def runOneDragonTask(self, param=None, ct=None):
                 return task_dispatcher.run_one_dragon_task(param, ct)
 
+            def runCheckRewardsTask(self, param=None, ct=None):
+                return task_dispatcher.run_check_rewards_task(param, ct)
+            def runWalkToFTask(self, param=None, ct=None):
+                return task_dispatcher.run_walk_to_f_task(param, ct)
+            def runScanPickTask(self, param=None, ct=None):
+                return task_dispatcher.run_scan_pick_task(param, ct)
+            def runLowerHeadThenWalkToTask(self, param=None, ct=None):
+                return task_dispatcher.run_lower_head_then_walk_to_task(param, ct)
+            def runBlessingOfTheWelkinMoonTask(self, param=None, ct=None):
+                return task_dispatcher.run_blessing_of_the_welkin_moon_task(param, ct)
+            def runClaimBattlePassRewardsTask(self, param=None, ct=None):
+                return task_dispatcher.run_claim_battle_pass_rewards_task(param, ct)
+            def runClaimEncounterPointsRewardsTask(self, param=None, ct=None):
+                return task_dispatcher.run_claim_encounter_points_rewards_task(param, ct)
+            def runClaimMailRewardsTask(self, param=None, ct=None):
+                return task_dispatcher.run_claim_mail_rewards_task(param, ct)
+            def runGoToAdventurersGuildTask(self, param=None, ct=None):
+                return task_dispatcher.run_go_to_adventurers_guild_task(param, ct)
+            def runGoToCraftingBenchTask(self, param=None, ct=None):
+                return task_dispatcher.run_go_to_crafting_bench_task(param, ct)
+            def runGoCraftResinTask(self, param=None, ct=None):
+                return task_dispatcher.run_go_craft_resin_task(param, ct)
+            def runCraftMaterialTask(self, param=None, ct=None):
+                return task_dispatcher.run_craft_material_task(param, ct)
+            def runSetTimeTask(self, param=None, ct=None):
+                return task_dispatcher.run_set_time_task(param, ct)
+            def runWonderlandCycleTask(self, param=None, ct=None):
+                return task_dispatcher.run_wonderland_cycle_task(param, ct)
+            def runReloginTask(self, param=None, ct=None):
+                return task_dispatcher.run_relogin_task(param, ct)
+            def runChooseTalkOptionTask(self, param=None, ct=None):
+                return task_dispatcher.run_choose_talk_option_task(param, ct)
+            def runLinneaMiningTask(self, param=None, ct=None):
+                return task_dispatcher.run_linnea_mining_task(param, ct)
+
             def runAutoFightTask(self, param, ct=None):
                 return task_dispatcher.run_auto_fight_task(param, ct)
+            def runAutoWoodTask(self, param=None, ct=None):
+                return task_dispatcher.run_auto_wood_task(param, ct)
             def runAutoCookTask(self, param=None, ct=None):
                 return task_dispatcher.run_auto_cook_task(param, ct)
             def runAutoFishingTask(self, param=None, ct=None):
@@ -1246,6 +1351,18 @@ class JsScriptRuntime:
                 return task_dispatcher.run_auto_artifact_salvage_task(param, ct)
             def runCountInventoryItemTask(self, param=None, ct=None):
                 return task_dispatcher.run_count_inventory_item_task(param, ct)
+            def runGetGridIconsTask(self, param=None, ct=None):
+                return task_dispatcher.run_get_grid_icons_task(param, ct)
+            def runInventoryCountComparisonTask(self, param=None, ct=None):
+                return task_dispatcher.run_inventory_count_comparison_task(param, ct)
+            def runCharacterDevelopmentTask(self, param=None, ct=None):
+                return task_dispatcher.run_character_development_task(param, ct)
+            def runScriptGroupTask(self, param=None, ct=None):
+                return task_dispatcher.run_script_group_task(param, ct)
+            def runMusicPlayerTask(self, param=None, ct=None):
+                return task_dispatcher.run_music_player_task(param, ct)
+            def runShellTask(self, param=None, ct=None):
+                return task_dispatcher.run_shell_task(param, ct)
             def runCombatScript(self, script, avatar=None):
                 return task_dispatcher.run_combat_script(str(script), avatar)
             def addTimer(self, timer):
@@ -1262,6 +1379,67 @@ class JsScriptRuntime:
                 task_dispatcher.clear_all_triggers()
             def getLinkedCancellationTokenSource(self): return wrap(_CTS())
             def getLinkedCancellationToken(self): return wrap(_CTS())
+
+            # ClearScript exposes the dispatcher with case-insensitive member
+            # lookup.  PythonMonkey can proxy most host objects, but the
+            # dispatcher is intentionally exposed as a callable host object
+            # and PascalCase members used by community scripts are not always
+            # resolved through that proxy. Keep both spellings explicit so
+            # scripts copied from bettergi-scripts-list run unchanged.
+            RunTask = runTask
+            RunAutoDomainTask = runAutoDomainTask
+            RunOneDragonTask = runOneDragonTask
+            RunCheckRewardsTask = runCheckRewardsTask
+            RunWalkToFTask = runWalkToFTask
+            RunScanPickTask = runScanPickTask
+            RunLowerHeadThenWalkToTask = runLowerHeadThenWalkToTask
+            RunBlessingOfTheWelkinMoonTask = runBlessingOfTheWelkinMoonTask
+            RunClaimBattlePassRewardsTask = runClaimBattlePassRewardsTask
+            RunClaimEncounterPointsRewardsTask = runClaimEncounterPointsRewardsTask
+            RunClaimMailRewardsTask = runClaimMailRewardsTask
+            RunGoToAdventurersGuildTask = runGoToAdventurersGuildTask
+            RunGoToCraftingBenchTask = runGoToCraftingBenchTask
+            RunGoCraftResinTask = runGoCraftResinTask
+            RunCraftMaterialTask = runCraftMaterialTask
+            RunSetTimeTask = runSetTimeTask
+            RunWonderlandCycleTask = runWonderlandCycleTask
+            RunReloginTask = runReloginTask
+            RunChooseTalkOptionTask = runChooseTalkOptionTask
+            RunLinneaMiningTask = runLinneaMiningTask
+            RunAutoFightTask = runAutoFightTask
+            RunAutoWoodTask = runAutoWoodTask
+            RunAutoCookTask = runAutoCookTask
+            RunAutoFishingTask = runAutoFishingTask
+            RunAutoOpenChestTask = runAutoOpenChestTask
+            RunAutoEatTask = runAutoEatTask
+            RunAutoMusicGameTask = runAutoMusicGameTask
+            RunAutoAlbumTask = runAutoAlbumTask
+            RunAutoAlbum = runAutoAlbum
+            RunAutoGeniusInvokationTask = runAutoGeniusInvokationTask
+            RunAutoStygianOnslaughtTask = runAutoStygianOnslaughtTask
+            RunAutoBossTask = runAutoBossTask
+            RunAutoLeyLineTask = runAutoLeyLineTask
+            RunAutoLeyLineOutcropTask = runAutoLeyLineOutcropTask
+            RunQuickSereniteaPotTask = runQuickSereniteaPotTask
+            RunQuickClaimRewardTask = runQuickClaimRewardTask
+            RunOneKeyExpeditionTask = runOneKeyExpeditionTask
+            RunAutoTrackTask = runAutoTrackTask
+            RunQuickBuyTask = runQuickBuyTask
+            RunUseRedemptionCodeTask = runUseRedemptionCodeTask
+            RunAutoArtifactSalvageTask = runAutoArtifactSalvageTask
+            RunCountInventoryItemTask = runCountInventoryItemTask
+            RunGetGridIconsTask = runGetGridIconsTask
+            RunInventoryCountComparisonTask = runInventoryCountComparisonTask
+            RunCharacterDevelopmentTask = runCharacterDevelopmentTask
+            RunScriptGroupTask = runScriptGroupTask
+            RunMusicPlayerTask = runMusicPlayerTask
+            RunShellTask = runShellTask
+            RunCombatScript = runCombatScript
+            AddTimer = addTimer
+            AddTrigger = addTrigger
+            ClearAllTriggers = clearAllTriggers
+            GetLinkedCancellationTokenSource = getLinkedCancellationTokenSource
+            GetLinkedCancellationToken = getLinkedCancellationToken
         expose("dispatcher", wrap(_Dispatcher()), proxy=False)
 
         # 构造器类：脚本里 new RealtimeTimer("AutoPick") / new SoloTask("AutoFight")。

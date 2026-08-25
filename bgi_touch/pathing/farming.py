@@ -17,6 +17,14 @@ from pathlib import Path
 from typing import Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from ..tasks.travel_diary import (
+    MoraStatistics,
+    TravelDiaryStore,
+    TravelDiaryUpdater,
+    cookie_from_environment,
+    load_today_action_items,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = PROJECT_ROOT / "config" / "farming.json"
@@ -317,11 +325,22 @@ class FarmingStatsRecorder:
         *,
         now: Callable[[], datetime] | None = None,
         log: Callable[[str], None] = print,
+        travel_diary_updater: TravelDiaryUpdater | None = None,
+        travel_diary_store: TravelDiaryStore | None = None,
+        cookie_provider: Callable[[], str] | None = None,
     ):
         self.config = FarmingConfig.load(config_path)
         self.tz = self.config.tzinfo()
         self._now = now or (lambda: datetime.now(self.tz))
         self.log = log
+        self._cookie_provider = cookie_provider or cookie_from_environment
+        self.travel_diary = travel_diary_updater or TravelDiaryUpdater(
+            store=travel_diary_store,
+            now=self.current_time,
+            tz=self.tz,
+            log=log,
+        )
+        self._miyoushe_update_lock = threading.Lock()
 
     def current_time(self) -> datetime:
         value = self._now()
@@ -357,6 +376,131 @@ class FarmingStatsRecorder:
             )
         return self.config.daily_elite_cap, self.config.daily_mob_cap
 
+    def _miyoushe_update_due(self, data: DailyFarmingData, current: datetime) -> bool:
+        def normalize(value: datetime | None) -> datetime:
+            if value is None:
+                return datetime.min.replace(tzinfo=self.tz)
+            if value.tzinfo is None:
+                return value.replace(tzinfo=self.tz)
+            return value.astimezone(self.tz)
+
+        return (
+            current > normalize(data.travels_diary_detail_manager_update_time)
+            + timedelta(hours=2)
+            and current > normalize(data.last_miyoushe_update_time)
+            + timedelta(minutes=20)
+        )
+
+    def _cookie(self) -> str:
+        try:
+            return str(self._cookie_provider() or "").strip()
+        except Exception:
+            # A provider may be backed by a shell/keychain integration. A
+            # missing cookie is a normal opt-in state, not a route failure.
+            return ""
+
+    def maybe_update_miyoushe(self, data: DailyFarmingData | None = None) -> bool:
+        """Schedule a throttled diary refresh without touching DeviceHub.
+
+        The cookie is intentionally read only from the explicitly supplied
+        provider (the default is ``BGI_MIYOUSHE_COOKIE``). It is never copied
+        into farming JSON or included in log messages.
+        """
+
+        if not self.config.miyoushe_enabled:
+            return False
+        current = self.current_time()
+        data = data or self.read_daily_data(current)
+        cookie = self._cookie()
+        if not cookie or not self._miyoushe_update_due(data, current):
+            return False
+        if not self._miyoushe_update_lock.acquire(blocking=False):
+            return False
+        try:
+            worker = threading.Thread(
+                target=self._run_miyoushe_update,
+                args=(cookie,),
+                name="bgi-touch-travel-diary",
+                daemon=True,
+            )
+            worker.start()
+        except Exception as error:
+            self._miyoushe_update_lock.release()
+            self.log(f"[farming] 米游社统计更新未启动：{error}")
+            return False
+        return True
+
+    def _run_miyoushe_update(self, cookie: str, role_index: int = 0) -> None:
+        try:
+            self._update_miyoushe_data(cookie, role_index=role_index)
+        finally:
+            self._miyoushe_update_lock.release()
+
+    def update_miyoushe_data(self, cookie: str | None = None, *, role_index: int = 0) -> bool:
+        """Synchronously refresh and project today's diary data.
+
+        This method is used by the offline CLI and is also convenient for
+        callers that want deterministic completion. Automatic farming checks
+        use :meth:`maybe_update_miyoushe`, which runs the same operation in a
+        daemon thread so the pathing loop is not blocked by HTTP latency.
+        """
+
+        if not self.config.miyoushe_enabled:
+            return False
+        value = str(cookie or "").strip() if cookie is not None else self._cookie()
+        if not value:
+            return False
+        with self._miyoushe_update_lock:
+            return self._update_miyoushe_data(value, role_index=role_index)
+
+    def _update_miyoushe_data(self, cookie: str, *, role_index: int = 0) -> bool:
+        try:
+            update = self.travel_diary.update(cookie, role_index=role_index)
+            current = self.current_time()
+            items = load_today_action_items(
+                self.travel_diary.store,
+                update.game_info.game_uid,
+                now=current,
+                tz=self.tz,
+            )
+            data_path = self.data_path(current)
+            with self._write_lock:
+                data = self.read_daily_data(current)
+                data.last_miyoushe_update_time = current
+                if items:
+                    statistics = MoraStatistics(tuple(items))
+                    data.miyoushe_total_elite_mob_count = statistics.elite_game_statistics
+                    data.miyoushe_total_normal_mob_count = statistics.small_monster_statistics
+                    timestamps = [
+                        stamp for item in items
+                        if (stamp := item.parsed_time) is not None
+                    ]
+                    if timestamps:
+                        data.travels_diary_detail_manager_update_time = max(timestamps)
+                    self.log(
+                        "[farming] 札记当天数据："
+                        f"[精英：{data.miyoushe_total_elite_mob_count},"
+                        f"小怪：{data.miyoushe_total_normal_mob_count}]"
+                    )
+                else:
+                    self.log("[farming] 米游社旅行札记当天无数据")
+                self._save(data_path, data)
+            return True
+        except Exception as error:
+            # Match BetterGI's retry throttle even when the request or cache
+            # fails. Otherwise every pathing check would start another daemon
+            # request with an expired cookie.
+            try:
+                current = self.current_time()
+                with self._write_lock:
+                    data = self.read_daily_data(current)
+                    data.last_miyoushe_update_time = current
+                    self._save(self.data_path(current), data)
+            except Exception:
+                pass
+            self.log(f"[farming] 米游社数据更新失败，请检查 Cookie 是否过期：{error}")
+            return False
+
     def check_limit(self, session: FarmingSession) -> FarmingLimitDecision:
         if (
             not self.config.enabled
@@ -365,6 +509,7 @@ class FarmingStatsRecorder:
         ):
             return FarmingLimitDecision(False)
         data = self.read_daily_data()
+        self.maybe_update_miyoushe(data)
         total_elite, total_normal = data.final_totals(self.tz)
         elite_cap, normal_cap = self.final_caps(data)
         elite_over = total_elite >= elite_cap

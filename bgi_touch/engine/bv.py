@@ -124,6 +124,8 @@ class BvLocator:
         """
         self.check_cancel()
         ro = self.recognition_object
+        if ro.recognition_type == "None":
+            return []
         if ro.recognition_type == "TemplateMatch":
             found = screen.find(ro)
             return [found] if found.is_exist() else []

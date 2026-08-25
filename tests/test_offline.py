@@ -51,6 +51,72 @@ def test_combat_parser():
     assert lines[1].commands[1].params == ["VK_SPACE"]
 
 
+def test_combat_parser_normalizes_upstream_method_aliases():
+    from bgi_touch.combat.dsl import parse_combat_script
+
+    lines = parse_combat_script(
+        "普攻(0.1), 重击(0.2), 等待(0.1), 完成, 检测, r, j, verticalscroll(1)"
+    )
+
+    assert [command.action for command in lines[0].commands] == [
+        "attack", "charge", "wait", "ready", "check", "aim", "jump", "scroll",
+    ]
+
+
+def test_combat_executor_supports_skill_flags_and_virtual_mouse_keys():
+    from unittest.mock import Mock
+
+    from bgi_touch.combat.dsl import CombatCommand, CombatExecutor
+
+    input_sim = type("Input", (), {
+        "key_press": Mock(), "key_down": Mock(), "key_up": Mock(),
+        "attack": Mock(), "attack_down": Mock(), "attack_up": Mock(),
+        "button_down": Mock(), "button_up": Mock(), "tap_button": Mock(),
+    })()
+    skill_ready = Mock(side_effect=[False, True])
+    executor = CombatExecutor(
+        input_sim, sleep=lambda _milliseconds: None, skill_ready=skill_ready,
+    )
+
+    executor.exec(CombatCommand("e", ["fast"]))
+    executor.exec(CombatCommand("skill", ["wait"]))
+    executor.exec(CombatCommand("keypress", ["VK_LBUTTON"]))
+    executor.exec(CombatCommand("keypress", ["VK_RBUTTON"]))
+    executor.exec(CombatCommand("keydown", ["VK_RBUTTON"]))
+    executor.exec(CombatCommand("keyup", ["VK_RBUTTON"]))
+    executor.exec(CombatCommand("keypress", ["VK_MBUTTON"]))
+
+    assert skill_ready.call_count == 2
+    assert input_sim.key_press.call_args_list == [
+        (("E",), {"hold_ms": 80}),
+        (("LSHIFT",), {}),
+    ]
+    input_sim.attack.assert_called_once_with()
+    input_sim.button_down.assert_called_once_with("sprint")
+    input_sim.button_up.assert_called_once_with("sprint")
+    input_sim.tap_button.assert_called_once_with("elementalSight")
+
+
+def test_combat_executor_checks_after_the_command():
+    from bgi_touch.combat.dsl import CombatExecutor
+
+    events = []
+    input_sim = type("Input", (), {
+        "key_press": lambda _self, key, **_kwargs: events.append(f"input:{key}"),
+        "release_all": lambda _self: events.append("release"),
+    })()
+
+    def check():
+        events.append("check")
+        return True
+
+    executor = CombatExecutor(input_sim, sleep=lambda _milliseconds: None,
+                              check_combat_end=check)
+    executor.run("keypress(E), check")
+
+    assert events == ["input:E", "check", "release"]
+
+
 def test_combat_executor_maps_keys():
     from unittest.mock import MagicMock
     from bgi_touch.combat.dsl import CombatExecutor
@@ -1287,6 +1353,56 @@ def test_one_dragon_parser_supports_legacy_name_keys():
     assert [item.name for item in items] == ["领取邮件", "自动秘境"]
 
 
+def test_one_dragon_parser_coerces_string_boolean_values():
+    from bgi_touch.tasks.one_dragon import parse_one_dragon_items
+
+    items = parse_one_dragon_items({
+        "taskEnabledList": {"enabled": "true", "disabled": "false", "zero": 0},
+        "taskOrder": ["enabled", "disabled", "zero"],
+        "taskDefinitions": {
+            "enabled": "自动秘境",
+            "disabled": "领取邮件",
+            "zero": "自动地脉花",
+        },
+    })
+    assert [item.enabled for item in items] == [True, False, False]
+
+
+def test_one_dragon_builtin_parameters_coerce_string_booleans():
+    from types import SimpleNamespace
+
+    from bgi_touch.tasks.one_dragon import OneDragonFlowTask, OneDragonItem
+
+    class Dispatcher:
+        def run_auto_boss_task(self, config):
+            self.config = config
+            return True
+
+    dispatcher = Dispatcher()
+    task = OneDragonFlowTask(
+        SimpleNamespace(),
+        {
+            "autoBossSpecifyRunCount": "false",
+            "autoBossUseTransientResin": "true",
+            "autoBossUseFragileResin": "0",
+            "autoBossReturnToStatueAfterEachRound": "yes",
+            "autoBossRewardRecognitionEnabled": "false",
+        },
+        dispatcher,
+        continue_on_error="false",
+        close_game_on_completion="0",
+        log=lambda _message: None,
+    )
+    assert task.continue_on_error is False
+    assert task.close_game_on_completion is False
+    task._run_builtin(OneDragonItem("boss", "自动首领讨伐", True))
+    assert dispatcher.config["specifyRunCount"] is False
+    assert dispatcher.config["useTransientResin"] is True
+    assert dispatcher.config["useFragileResin"] is False
+    assert dispatcher.config["returnToStatueAfterEachRound"] is True
+    assert dispatcher.config["rewardRecognitionEnabled"] is False
+
+
 def test_one_dragon_runner_dispatches_custom_task_configs_and_continues():
     from types import SimpleNamespace
 
@@ -1580,7 +1696,7 @@ def test_task_dispatcher_declares_migrated_core_tasks():
         "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest",
         "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop",
         "AutoEat", "AutoMusicGame", "AutoGeniusInvokation", "AutoStygianOnslaught",
-        "AutoAlbum",
+        "AutoAlbum", "CheckRewards",
     }
     with pytest.raises(NotImplementedError, match="尚未移植"):
         TaskDispatcher(object()).run_task({"name": "UnknownSoloTask", "config": {}})
@@ -1747,6 +1863,51 @@ def test_pathing_executor_handles_four_leaf_before_movement():
     executor._face_to.assert_called_once_with(task.positions[0])
     executor._do_action.assert_called_once_with(task.positions[0])
     executor._move_to.assert_not_called()
+
+
+def test_pathing_executor_enables_all_migrated_realtime_triggers():
+    from unittest.mock import MagicMock
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import PathingTask
+
+    ctx = MagicMock()
+    ctx.input = MagicMock()
+    ctx.sleep = lambda _ms: None
+    ctx._trigger_loop = None
+    task = PathingTask.parse({
+        "info": {"name": "triggers", "map_name": "Teyvat"},
+        "config": {"realtimeTriggers": {
+            "AutoPick": True,
+            "AutoSkip": True,
+            "AutoEat": True,
+            "MapMask": True,
+            "SkillCd": True,
+            "GameLoading": True,
+            "QuickTeleport": True,
+            "AutoFishing": True,
+        }},
+        "positions": [],
+    })
+
+    executor = PathingExecutor(
+        ctx,
+        party_slots={"钟离": 1},
+        log=lambda _message: None,
+    )
+    enabled, previous = executor._enable_realtime_triggers(task)
+
+    assert previous is None
+    assert enabled == [
+        "AutoPick", "AutoSkip", "AutoEat", "MapMask", "SkillCd",
+        "GameLoading", "QuickTeleport", "AutoFish",
+    ]
+    assert ctx.enable_trigger.call_args_list[3].kwargs == {
+        "map_name": "Teyvat", "mini_map_enabled": True,
+    }
+    assert ctx.enable_trigger.call_args_list[4].kwargs == {
+        "party_slots": {"钟离": 1},
+    }
 
 
 # ---- 地图定位（需要资产与夹具，缺则跳过）----

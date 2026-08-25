@@ -20,6 +20,22 @@ def _get(obj: Mapping[str, Any], key: str, default: Any = None) -> Any:
     return default
 
 
+def _bool(value: Any, default: bool = False) -> bool:
+    """Coerce JSON/config variants without treating ``"false"`` as true."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "yes", "on", "是"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "否", ""}:
+            return False
+    return default
+
+
 @dataclass(frozen=True)
 class OneDragonItem:
     id: str
@@ -44,7 +60,7 @@ def parse_one_dragon_items(config: Mapping[str, Any]) -> list[OneDragonItem]:
         name = task_id if legacy else definitions.get(task_id)
         if name is None:
             continue
-        items.append(OneDragonItem(task_id, str(name), bool(enabled[task_id])))
+        items.append(OneDragonItem(task_id, str(name), _bool(enabled[task_id])))
     next_task_id = str(_get(config, "nextTaskId", "") or "")
     if next_task_id:
         start = next((index for index, item in enumerate(items) if item.id == next_task_id), None)
@@ -72,8 +88,8 @@ class OneDragonFlowTask:
         self.ctx = ctx
         self.config = dict(config)
         self.dispatcher = dispatcher
-        self.continue_on_error = bool(continue_on_error)
-        self.close_game_on_completion = bool(close_game_on_completion)
+        self.continue_on_error = _bool(continue_on_error, True)
+        self.close_game_on_completion = _bool(close_game_on_completion, True)
         self.log = log
         self.genshin = GenshinApi(ctx, log=log)
 
@@ -117,25 +133,25 @@ class OneDragonFlowTask:
             )
             task_config.setdefault("teamName", _get(self.config, "autoBossTeamName", ""))
             task_config.setdefault(
-                "specifyRunCount", _get(self.config, "autoBossSpecifyRunCount", False)
+                "specifyRunCount", _bool(_get(self.config, "autoBossSpecifyRunCount", False))
             )
             task_config.setdefault("runCount", _get(self.config, "autoBossRunCount", 1))
             task_config.setdefault(
-                "useTransientResin", _get(self.config, "autoBossUseTransientResin", False)
+                "useTransientResin", _bool(_get(self.config, "autoBossUseTransientResin", False))
             )
             task_config.setdefault(
-                "useFragileResin", _get(self.config, "autoBossUseFragileResin", False)
+                "useFragileResin", _bool(_get(self.config, "autoBossUseFragileResin", False))
             )
             task_config.setdefault(
                 "reviveRetryCount", _get(self.config, "autoBossReviveRetryCount", 3)
             )
             task_config.setdefault(
                 "returnToStatueAfterEachRound",
-                _get(self.config, "autoBossReturnToStatueAfterEachRound", False),
+                _bool(_get(self.config, "autoBossReturnToStatueAfterEachRound", False)),
             )
             task_config.setdefault(
                 "rewardRecognitionEnabled",
-                _get(self.config, "autoBossRewardRecognitionEnabled", False),
+                _bool(_get(self.config, "autoBossRewardRecognitionEnabled", False)),
             )
             task_config.setdefault("timeout", _get(self.config, "autoBossTimeout", 240))
             return self.dispatcher.run_auto_boss_task(task_config)
@@ -155,7 +171,7 @@ class OneDragonFlowTask:
             day_name = (
                 datetime.now().astimezone() - timedelta(hours=4)
             ).strftime("%A")
-            if not bool(_get(self.config, f"leyLineRun{day_name}", True)):
+            if not _bool(_get(self.config, f"leyLineRun{day_name}", True), True):
                 self.log(f"[OneDragon] {day_name} 未启用自动地脉花，跳过")
                 return True
             configured_count = int(_get(self.config, "leyLineRunCount", 0) or 0)
@@ -171,13 +187,13 @@ class OneDragonFlowTask:
                 task_config.setdefault("country", daily_country)
             task_config.setdefault(
                 "isResinExhaustionMode",
-                _get(self.config, "leyLineResinExhaustionMode", False),
+                _bool(_get(self.config, "leyLineResinExhaustionMode", False)),
             )
             task_config.setdefault(
-                "openModeCountMin", _get(self.config, "leyLineOpenModeCountMin", False)
+                "openModeCountMin", _bool(_get(self.config, "leyLineOpenModeCountMin", False))
             )
             task_config.setdefault(
-                "oneDragonMode", _get(self.config, "leyLineOneDragonMode", False)
+                "oneDragonMode", _bool(_get(self.config, "leyLineOneDragonMode", False))
             )
             return self.dispatcher.run_auto_leyline_task(task_config)
         raise KeyError(item.name)
@@ -237,6 +253,25 @@ class OneDragonFlowTask:
                 if not self.continue_on_error:
                     break
             self.ctx.sleep(1000)
+
+        # BetterGI performs this notification-only check after the configured
+        # one-dragon items. Keep it optional for lightweight custom
+        # dispatchers that predate this task.
+        raw_check_enabled = _get(self.config, "checkDailyRewardsEnabled", True)
+        check_enabled = _bool(raw_check_enabled, True)
+        check_rewards = getattr(self.dispatcher, "run_check_rewards_task", None)
+        if (
+            check_enabled
+            and callable(check_rewards)
+            and not (cancelled and cancelled())
+        ):
+            try:
+                result["results"]["dailyRewardCheck"] = check_rewards(
+                    _get(self.config, "checkDailyRewardsConfig", {}) or {},
+                    cancelled,
+                )
+            except Exception as error:
+                self.log(f"[OneDragon] 检查每日奖励失败：{error}")
         self._finish()
         self.log(
             f"[OneDragon] 完成 {len(result['completed'])}/{len(enabled)}，"

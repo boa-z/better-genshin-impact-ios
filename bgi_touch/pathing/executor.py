@@ -29,6 +29,7 @@ from .farming import (
 )
 from .model import PathingTask, Waypoint
 from .camera import crop_minimap_for_orientation, orientation_with_confidence
+from .trap_escaper import StuckDetector, TrapEscaper
 
 
 class Positioner(Protocol):
@@ -65,6 +66,9 @@ class PathingExecutor:
         self._cam_gain = 5.5
         self._cam_sign = 1.0
         self._last_mode_action_at = 0.0
+        # BetterGI keeps this counter on PathExecutor, so repeated traps in
+        # different waypoints still cause a route retry after the third one.
+        self._stuck_detector = StuckDetector()
         self.actions = PathingActionRunner(ctx, party_slots=party_slots, log=log)
         self.farming = farming_recorder or FarmingStatsRecorder(
             farming_config_path, log=log
@@ -113,20 +117,52 @@ class PathingExecutor:
         except FileNotFoundError as e:
             self.log(f"[pathing] 无地图定位：{e}")
 
+    @staticmethod
+    def _realtime_trigger_name(name: object) -> str:
+        """Normalize route trigger aliases to GameContext names."""
+
+        value = str(name or "").strip()
+        aliases = {
+            "AutoFishing": "AutoFish",
+            "自动钓鱼": "AutoFish",
+            "自动吃药": "AutoEat",
+            "地图遮罩": "MapMask",
+            "技能冷却": "SkillCd",
+            "自动开门": "GameLoading",
+            "快速传送": "QuickTeleport",
+        }
+        return aliases.get(value, value)
+
     def _enable_realtime_triggers(self, task: PathingTask) -> tuple[list[str], list[object] | None]:
         enabled: list[str] = []
         if not hasattr(self.ctx, "enable_trigger"):
             return enabled, None
         loop = getattr(self.ctx, "_trigger_loop", None)
         previous = list(loop.triggers) if loop is not None else None
-        for name, active in task.realtime_triggers.items():
+        supported = {
+            "AutoPick", "AutoSkip", "AutoEat", "MapMask", "SkillCd",
+            "GameLoading", "QuickTeleport", "AutoFish",
+        }
+        for raw_name, active in task.realtime_triggers.items():
             if not active:
                 continue
-            if name not in {"AutoPick", "AutoSkip"}:
-                self.log(f"[pathing] 实时触发器 {name} 暂不支持")
+            name = self._realtime_trigger_name(raw_name)
+            if name not in supported:
+                self.log(f"[pathing] 实时触发器 {raw_name} 暂不支持")
                 continue
-            self.ctx.enable_trigger(name)
-            enabled.append(name)
+            kwargs = {}
+            if name == "MapMask":
+                kwargs = {"map_name": task.map_name, "mini_map_enabled": True}
+            elif name == "SkillCd":
+                kwargs = {"party_slots": self.actions.party_slots or None}
+            try:
+                self.ctx.enable_trigger(name, **kwargs)
+                enabled.append(name)
+            except Exception as error:
+                # Realtime triggers are optional route helpers.  Missing map
+                # assets or an older host must not prevent the route itself
+                # from running; keep the failure visible in the task log.
+                self.log(f"[pathing] 启用实时触发器 {raw_name} 失败：{error}")
         return enabled, previous
 
     def _clear_realtime_triggers(
@@ -281,6 +317,109 @@ class PathingExecutor:
             self.ctx.input.move_camera_by(self._cam_sign * delta * self._cam_gain, 0)
             self.ctx.sleep(500)
 
+    @staticmethod
+    def _misidentification_type_names(wp: Waypoint) -> set[str]:
+        return {
+            str(value).strip().replace("_", "").casefold()
+            for value in wp.misidentification.types
+            if str(value).strip()
+        }
+
+    def _position_from_big_map(self) -> tuple[float, float] | None:
+        """Read the current player position from the full-screen map.
+
+        BetterGI opens the map for ``handlingMode=mapRecognition`` and closes
+        it again before returning to movement.  Reuse ``TpTask``'s map
+        locator and trigger exclusion so this fallback does not click through
+        the map or start a competing AutoPick/AutoSkip input path.
+        """
+
+        from .tp import TpTask
+
+        task = self._tp_task
+        opened = False
+        try:
+            if task is None:
+                task = TpTask(self.ctx, log=self.log, map_name=self._map_name)
+                self._tp_task = task
+            with task.exclusive_triggers():
+                opened = task.open_map()
+                try:
+                    if not opened:
+                        return None
+                    view = task.big.locate_view(self.ctx.capture_bgr())
+                    if view is None:
+                        return None
+                    return task.big.feature_to_world(view[0], view[1])
+                finally:
+                    # Keep the map close inside exclusive_triggers so an
+                    # AutoPick/AutoSkip tick cannot consume the ESC transition
+                    # or press an interaction key on the closing frame.
+                    if opened:
+                        try:
+                            self.ctx.input.key_press("ESCAPE")
+                            self.ctx.sleep(500)
+                        except Exception as error:
+                            self.log(f"[pathing] 关闭异常识别地图失败：{error}")
+        except Exception as error:
+            self.log(f"[pathing] 大地图异常识别失败：{error}")
+            return None
+
+    def _resolve_misidentified_position(
+        self,
+        wp: Waypoint,
+        raw_position: tuple[float, float] | None,
+        last_good_position: tuple[float, float] | None,
+        raw_distance: float | None,
+        *,
+        last_map_recognition_at: float,
+        now: float,
+    ) -> tuple[tuple[float, float] | None, float]:
+        """Apply BetterGI's configured fallback for one bad position fix."""
+
+        types = self._misidentification_type_names(wp)
+        trigger = (
+            "unrecognized"
+            if raw_position is None
+            else "pathtoofar"
+            if raw_distance is not None and raw_distance > 500
+            else None
+        )
+        if trigger is None or trigger not in types:
+            return raw_position, last_map_recognition_at
+
+        mode = str(wp.misidentification.handling_mode or "").strip().casefold()
+        if mode == "previousdetectedpoint":
+            if last_good_position is not None:
+                self.log("[pathing] 未识别到具体路径，取上次点位")
+                return last_good_position, last_map_recognition_at
+            # No previous fix exists yet.  Treating a missing minimap as
+            # (0,0) would steer the character toward the map origin, so let
+            # the normal lost-fix retry path handle it.
+            return None, last_map_recognition_at
+
+        if mode == "maprecognition":
+            # Opening/closing the full map is expensive on the iPhone.  A
+            # short cooldown is enough to avoid repeating it for every stale
+            # screenshot while still matching the upstream fallback intent.
+            if now - last_map_recognition_at < 2.0:
+                return last_good_position, last_map_recognition_at
+            position = self._position_from_big_map()
+            if position is not None:
+                self.log(
+                    f"[pathing] 未识别到具体路径，使用大地图中心 ({position[0]:.0f},{position[1]:.0f})"
+                )
+                return position, now
+            return last_good_position, now
+
+        # ScheduledArrival is present in upstream route JSON but currently has
+        # no executable behavior there either.  Preserve the last known point
+        # for all unknown modes instead of steering from a zero coordinate.
+        if last_good_position is not None:
+            self.log(f"[pathing] 未识别处理模式 {wp.misidentification.handling_mode}，取上次点位")
+            return last_good_position, last_map_recognition_at
+        return None, last_map_recognition_at
+
     def _move_to(self, wp: Waypoint, timeout_s: float = 120, arrive_dist: float = 3.0) -> None:
         if self.positioner is None:
             raise NotImplementedError(
@@ -291,7 +430,9 @@ class PathingExecutor:
         moving = False
         last_fix: tuple[float, float, float] | None = None  # (x, y, t)
         prev_err: float | None = None
-        recent_positions: list[tuple[float, float]] = []
+        last_stuck_sample_at = 0.0
+        last_map_recognition_at = float("-inf")
+        last_good_position: tuple[float, float] | None = None
         lost_fixes = 0
         reached = False
         try:
@@ -302,8 +443,20 @@ class PathingExecutor:
                     self.log(f"[pathing] 截图失败重试: {e}")
                     self.ctx.sleep(1000)
                     continue
-                pos = self._get_position(frame)
                 now = time.monotonic()
+                raw_pos = self._get_position(frame)
+                raw_distance = (
+                    math.hypot(wp.x - raw_pos[0], wp.y - raw_pos[1])
+                    if raw_pos is not None else None
+                )
+                pos, last_map_recognition_at = self._resolve_misidentified_position(
+                    wp,
+                    raw_pos,
+                    last_good_position,
+                    raw_distance,
+                    last_map_recognition_at=last_map_recognition_at,
+                    now=now,
+                )
                 if pos is None:
                     lost_fixes += 1
                     if moving:
@@ -320,28 +473,46 @@ class PathingExecutor:
                 lost_fixes = 0
                 dx, dy = wp.x - pos[0], wp.y - pos[1]
                 dist = math.hypot(dx, dy)
+                if raw_pos is not None and (raw_distance is None or raw_distance <= 500):
+                    last_good_position = raw_pos
                 if dist <= arrive_dist:
                     self.log(f"[pathing] 到达路点 ({wp.x:.0f},{wp.y:.0f})")
                     reached = True
                     break
 
-                recent_positions.append(pos)
-                if len(recent_positions) > 8:
-                    recent_positions.pop(0)
-                if moving and len(recent_positions) == 8:
-                    moved = math.hypot(
-                        recent_positions[-1][0] - recent_positions[0][0],
-                        recent_positions[-1][1] - recent_positions[0][1],
-                    )
-                    if moved < 3.0:
-                        self.log("[pathing] 疑似卡死，停止移动并尝试脱困")
+                # BetterGI samples once per second, compares an eight-point
+                # window, and allows only two recoveries before retrying the
+                # whole route.  The old mobile shortcut checked every frame
+                # and could repeatedly jump/turn without ever leaving a trap.
+                if (
+                    moving
+                    and wp.move_mode != "climb"
+                    and now - last_stuck_sample_at >= 1.0
+                ):
+                    last_stuck_sample_at = now
+                    if self._stuck_detector.add(pos):
+                        in_trap = self._stuck_detector.trap_count
                         self.ctx.input.key_up("W")
                         moving = False
-                        self.ctx.input.move_camera_by(self._cam_sign * 220, 0)
-                        if wp.move_mode != "climb":
-                            self.ctx.input.key_press("SPACE")
-                        self.ctx.sleep(700)
-                        recent_positions.clear()
+                        if in_trap > 2:
+                            raise TimeoutError("此路线出现3次卡死，重试一次路线或放弃此路线")
+                        self.log(f"[pathing] 疑似卡死，尝试脱离（第 {in_trap} 次）")
+                        escaper = TrapEscaper(
+                            self.ctx,
+                            self.positioner,
+                            log=self.log,
+                            cam_sign=self._cam_sign,
+                            cam_gain=self._cam_gain,
+                        )
+                        escaper.rotate_and_move()
+                        escaper.move_to((wp.x, wp.y), wp.move_mode)
+                        self.ctx.input.key_down("W")
+                        moving = True
+                        last_fix = None
+                        prev_err = None
+                        last_stuck_sample_at = now
+                        self.log("[pathing] 卡死脱离结束")
+                        continue
 
                 desired = self._bearing(dx, dy)
 

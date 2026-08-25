@@ -55,3 +55,149 @@ return JSON.stringify({
         "swimming": True,
         "finish": True,
     }
+
+
+def test_dispatcher_exposes_all_migrated_specialized_task_entrypoints(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+return JSON.stringify({
+  wood: typeof dispatcher.runAutoWoodTask,
+  grid: typeof dispatcher.runGetGridIconsTask,
+  compare: typeof dispatcher.runInventoryCountComparisonTask,
+  character: typeof dispatcher.runCharacterDevelopmentTask,
+  daily: typeof dispatcher.runCheckRewardsTask,
+  group: typeof dispatcher.runScriptGroupTask,
+  music: typeof dispatcher.runMusicPlayerTask,
+  shell: typeof dispatcher.runShellTask
+});
+""",
+        encoding="utf-8",
+    )
+
+    result = json.loads(JsScriptRuntime(_context(), tmp_path).run())
+
+    assert result == {
+        "wood": "function",
+        "grid": "function",
+        "compare": "function",
+        "character": "function",
+        "daily": "function",
+        "group": "function",
+        "music": "function",
+        "shell": "function",
+    }
+
+
+def test_dispatcher_supports_bettergi_pascal_case_entrypoints(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+return JSON.stringify({
+  runTask: typeof dispatcher.runTask,
+  RunTask: typeof dispatcher.RunTask,
+  domain: typeof dispatcher.RunAutoDomainTask,
+  fight: typeof dispatcher.RunAutoFightTask,
+  leyLine: typeof dispatcher.RunAutoLeyLineOutcropTask,
+  expedition: typeof dispatcher.RunOneKeyExpeditionTask,
+  daily: typeof dispatcher.RunCheckRewardsTask,
+  shell: typeof dispatcher.RunShellTask,
+  combat: typeof dispatcher.RunCombatScript,
+  addTimer: typeof dispatcher.AddTimer,
+  addTrigger: typeof dispatcher.AddTrigger,
+  clear: typeof dispatcher.ClearAllTriggers,
+  tokenSource: typeof dispatcher.GetLinkedCancellationTokenSource,
+  token: typeof dispatcher.GetLinkedCancellationToken
+});
+""",
+        encoding="utf-8",
+    )
+
+    result = json.loads(JsScriptRuntime(_context(), tmp_path).run())
+
+    assert result == {
+        "runTask": "function",
+        "RunTask": "function",
+        "domain": "function",
+        "fight": "function",
+        "leyLine": "function",
+        "expedition": "function",
+        "daily": "function",
+        "shell": "function",
+        "combat": "function",
+        "addTimer": "function",
+        "addTrigger": "function",
+        "clear": "function",
+        "tokenSource": "function",
+        "token": "function",
+    }
+
+
+def test_dispatcher_exposes_common_job_entrypoints(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+return JSON.stringify({
+  walk: typeof dispatcher.runWalkToFTask,
+  scan: typeof dispatcher.runScanPickTask,
+  lower: typeof dispatcher.runLowerHeadThenWalkToTask,
+  walkPascal: typeof dispatcher.RunWalkToFTask,
+  scanPascal: typeof dispatcher.RunScanPickTask,
+  lowerPascal: typeof dispatcher.RunLowerHeadThenWalkToTask
+});
+""",
+        encoding="utf-8",
+    )
+
+    result = json.loads(JsScriptRuntime(_context(), tmp_path).run())
+    assert result == {
+        "walk": "function",
+        "scan": "function",
+        "lower": "function",
+        "walkPascal": "function",
+        "scanPascal": "function",
+        "lowerPascal": "function",
+    }
+
+
+def test_dispatcher_exposes_genshin_common_job_entrypoints(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+return JSON.stringify({
+  welkin: typeof dispatcher.runBlessingOfTheWelkinMoonTask,
+  battlePass: typeof dispatcher.runClaimBattlePassRewardsTask,
+  mail: typeof dispatcher.runClaimMailRewardsTask,
+  crafting: typeof dispatcher.runCraftMaterialTask,
+  time: typeof dispatcher.runSetTimeTask,
+  relogin: typeof dispatcher.runReloginTask,
+  linnea: typeof dispatcher.runLinneaMiningTask,
+  welkinPascal: typeof dispatcher.RunBlessingOfTheWelkinMoonTask,
+  timePascal: typeof dispatcher.RunSetTimeTask,
+  linneaPascal: typeof dispatcher.RunLinneaMiningTask
+});
+""",
+        encoding="utf-8",
+    )
+
+    result = json.loads(JsScriptRuntime(_context(), tmp_path).run())
+    assert result == {
+        "welkin": "function",
+        "battlePass": "function",
+        "mail": "function",
+        "crafting": "function",
+        "time": "function",
+        "relogin": "function",
+        "linnea": "function",
+        "welkinPascal": "function",
+        "timePascal": "function",
+        "linneaPascal": "function",
+    }

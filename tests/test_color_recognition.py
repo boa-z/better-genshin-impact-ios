@@ -24,6 +24,20 @@ def _context(frame):
     )
 
 
+def test_empty_recognition_object_matches_nothing():
+    from bgi_touch.engine.recognition import ImageRegion, RecognitionObject
+
+    frame = np.zeros((40, 60, 3), dtype=np.uint8)
+    image = ImageRegion(_context(frame), frame)
+    ro = RecognitionObject()
+    failed = []
+
+    assert ro.RecognitionType == "None"
+    assert image.Find(ro, fail_action=lambda: failed.append(True)).IsEmpty()
+    assert image.FindMulti(ro, fail_action=lambda: failed.append(True)) == []
+    assert failed == [True, True]
+
+
 def test_color_match_uses_conversion_bounds_and_match_count():
     from bgi_touch.engine.recognition import ImageRegion, RecognitionObject
 

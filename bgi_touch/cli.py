@@ -116,6 +116,117 @@ def cmd_convert(args) -> int:
     return 1 if fail and not ok else 0
 
 
+def cmd_log_parse(args) -> int:
+    """Analyze BetterGI log files without creating a DeviceHub context."""
+    from .tasks.log_parse import (
+        discover_log_files,
+        load_diary_action_items,
+        parse_log_files,
+        render_text,
+    )
+
+    sources = []
+    for raw in args.sources:
+        path = Path(raw).expanduser()
+        if path.is_dir():
+            discovered = discover_log_files(path)
+            if args.date:
+                sources.extend((item[0], args.date) for item in discovered)
+            else:
+                sources.extend(discovered)
+        else:
+            sources.append((path, args.date) if args.date else path)
+    if not sources:
+        print("未找到可分析的 BetterGI 日志文件", file=sys.stderr)
+        return 2
+
+    diary_sources = [Path(item).expanduser() for item in getattr(args, "diary_file", []) or []]
+    diary_cache_dir = getattr(args, "diary_cache_dir", None)
+    if diary_cache_dir:
+        cache_root = Path(diary_cache_dir).expanduser()
+        game_uid = str(getattr(args, "game_uid", "") or "").strip()
+        if game_uid:
+            cache_root = cache_root / game_uid / "travelsdiarydetail"
+        elif (cache_root / "travelsdiarydetail").is_dir():
+            cache_root = cache_root / "travelsdiarydetail"
+        diary_sources.extend(sorted(cache_root.rglob("*.json")))
+    try:
+        mora_items = load_diary_action_items(diary_sources) if diary_sources else []
+    except (FileNotFoundError, OSError, ValueError) as error:
+        print(f"旅行札记缓存读取失败：{error}", file=sys.stderr)
+        return 2
+
+    report = parse_log_files(sources, mora_items=mora_items)
+    if args.format == "text":
+        print(render_text(report))
+    elif args.format == "html":
+        print(report.to_html(
+            title=getattr(args, "title", "日志分析"),
+            include_faults=not getattr(args, "no_faults", False),
+        ), end="")
+    else:
+        print(report.to_json())
+    return 0
+
+
+def cmd_travel_diary(args) -> int:
+    """Refresh HoYoverse travel-diary cache without connecting to a device."""
+
+    from .tasks.travel_diary import (
+        MoraStatistics,
+        TravelDiaryError,
+        TravelDiaryStore,
+        TravelDiaryUpdater,
+        cookie_from_environment,
+        load_today_action_items,
+    )
+
+    cookie = cookie_from_environment()
+    if not cookie:
+        print(
+            "未设置 BGI_MIYOUSHE_COOKIE；为避免 Cookie 进入命令历史，"
+            "旅行札记命令不接受 --cookie 参数",
+            file=sys.stderr,
+        )
+        return 2
+    store = TravelDiaryStore(args.cache_dir)
+    updater = TravelDiaryUpdater(
+        store=store,
+        tz=args.server_timezone,
+        log=lambda message: print(message, file=sys.stderr),
+    )
+    try:
+        update = updater.update(cookie, role_index=args.role_index)
+        items = load_today_action_items(
+            store,
+            update.game_info.game_uid,
+            tz=args.server_timezone,
+        )
+    except (TravelDiaryError, IndexError, OSError, ValueError) as error:
+        print(f"旅行札记更新失败：{error}", file=sys.stderr)
+        return 1
+
+    statistics = MoraStatistics(tuple(items))
+    print(json.dumps({
+        "gameInfo": update.game_info.to_dict(),
+        "updatedMonths": [list(item) for item in update.updated_months],
+        "reusedMonths": [list(item) for item in update.reused_months],
+        "cacheRoot": str(store.root),
+        "today": {
+            "items": [item.to_dict() for item in items],
+            "eliteStatistics": statistics.elite_statistics,
+            "eliteGameStatistics": statistics.elite_game_statistics,
+            "eliteMora": statistics.elite_mora,
+            "smallMonsterStatistics": statistics.small_monster_statistics,
+            "smallMonsterMora": statistics.small_monster_mora,
+            "totalMoraKillingMonsters": statistics.total_mora_killing_monsters,
+            "otherMora": statistics.other_mora,
+            "allMora": statistics.all_mora,
+        },
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_combat(args) -> int:
     ctx = _context(args)
     try:
@@ -139,6 +250,7 @@ def cmd_combat(args) -> int:
 
 def cmd_task(args) -> int:
     from .tasks.dispatcher import TaskDispatcher
+    from .notification import NotificationService
 
     if args.config_file:
         config = json.loads(Path(args.config_file).read_text(encoding="utf-8"))
@@ -149,13 +261,19 @@ def cmd_task(args) -> int:
         print(json.dumps({"task": args.name, "result": result}, ensure_ascii=False))
         return 0 if result.get("status") not in {"failed", "timeout"} else 1
     ctx = _context(args)
+    notifications = NotificationService.load(args.notification_config)
     try:
-        result = TaskDispatcher(ctx, party_slots=_load_party()).run_task(
+        result = TaskDispatcher(
+            ctx,
+            party_slots=_load_party(),
+            notification_service=notifications,
+        ).run_task(
             {"name": args.name, "config": config}
         )
         print(json.dumps({"task": args.name, "result": result}, ensure_ascii=False))
         return 0 if result is not False else 1
     finally:
+        notifications.close()
         ctx.close()
 
 
@@ -269,9 +387,9 @@ def cmd_group(args) -> int:
 def cmd_trigger(args) -> int:
     """长驻运行实时触发器（Ctrl-C 停止）。"""
     ctx = _context(args)
-    if not (args.pick or args.skip or args.eat or args.map_mask or args.skill_cd
-            or args.quick_teleport):
-        print("未指定触发器（--pick / --skip / --eat / --map-mask / --skill-cd / --quick-teleport）")
+    if not (args.pick or args.skip or args.eat or args.fish or args.map_mask
+            or args.skill_cd or args.quick_teleport):
+        print("未指定触发器（--pick / --skip / --eat / --fish / --map-mask / --skill-cd / --quick-teleport）")
         ctx.close()
         return 2
     try:
@@ -281,6 +399,8 @@ def cmd_trigger(args) -> int:
             ctx.enable_trigger("AutoSkip")
         if args.eat:
             ctx.enable_trigger("AutoEat")
+        if args.fish:
+            ctx.enable_trigger("AutoFish")
         if args.map_mask:
             ctx.enable_trigger("MapMask", map_name=args.map_name)
         if args.skill_cd:
@@ -308,7 +428,8 @@ def cmd_reconnect(args) -> int:
 def cmd_web(args) -> int:
     from .webui.server import serve
     serve(host=args.host, port=args.port, mcp_url=args.url,
-          devicehub_config_path=args.devicehub_config, device_id=args.device_id)
+          devicehub_config_path=args.devicehub_config, device_id=args.device_id,
+          notification_config_path=args.notification_config)
     return 0
 
 
@@ -343,6 +464,32 @@ def main() -> int:
     p = sub.add_parser("convert", help="转换 bettergi-scripts-list 脚本")
     p.add_argument("sources", nargs="+")
     p.add_argument("-o", "--output", default="scripts")
+    p = sub.add_parser("log-parse", help="离线分析 BetterGI 日志（不连接设备）")
+    p.add_argument("sources", nargs="+", help="日志文件或包含标准日志文件名的目录")
+    p.add_argument("--date", help="手工导出的日志日期，格式 YYYY-MM-DD")
+    p.add_argument("--format", choices=("json", "text", "html"), default="json")
+    p.add_argument("--title", default="日志分析", help="HTML 报告标题")
+    p.add_argument("--no-faults", action="store_true", help="HTML 报告隐藏故障列")
+    p.add_argument(
+        "--diary-file", action="append", default=[],
+        help="本地旅行札记缓存 JSON，可重复指定；不发起网络请求",
+    )
+    p.add_argument(
+        "--diary-cache-dir",
+        help="旅行札记缓存根目录（配合 --game-uid 读取月度缓存）",
+    )
+    p.add_argument("--game-uid", help="旅行札记缓存中的原神 UID")
+    p = sub.add_parser("travel-diary", help="更新米游社旅行札记缓存（不连接设备）")
+    p.add_argument(
+        "--cache-dir",
+        help="旅行札记缓存根目录（默认 log/logparse）",
+    )
+    p.add_argument("--role-index", type=int, default=0, help="原神账号角色索引（默认 0）")
+    p.add_argument(
+        "--server-timezone",
+        default="Asia/Shanghai",
+        help="旅行札记统计时区名称或小时偏移（默认 Asia/Shanghai）",
+    )
     p = sub.add_parser("combat", help="执行战斗策略 .txt/.json")
     p.add_argument("file")
     p.add_argument("--timeout", type=float, default=120, help="JSON 策略超时秒数")
@@ -381,6 +528,7 @@ def main() -> int:
     p.add_argument("--pick", action="store_true", help="自动拾取")
     p.add_argument("--skip", action="store_true", help="自动剧情推进")
     p.add_argument("--eat", action="store_true", help="自动吃药")
+    p.add_argument("--fish", action="store_true", help="自动钓鱼（进入钓鱼界面后接管提竿与拉条）")
     p.add_argument("--map-mask", action="store_true", help="地图遮罩与位置追踪")
     p.add_argument("--map-name", default="Teyvat", help="追踪地图名称（默认 Teyvat）")
     p.add_argument("--skill-cd", action="store_true", help="显示四人队伍元素战技冷却")
@@ -389,7 +537,9 @@ def main() -> int:
     args = parser.parse_args()
     handlers = {"status": cmd_status, "screenshot": cmd_screenshot, "launch": cmd_launch,
                 "close-game": cmd_close_game,
-                "calibrate": cmd_calibrate, "convert": cmd_convert, "combat": cmd_combat,
+                "calibrate": cmd_calibrate, "convert": cmd_convert,
+                "log-parse": cmd_log_parse, "travel-diary": cmd_travel_diary,
+                "combat": cmd_combat,
                 "task": cmd_task,
                 "macro": cmd_macro, "run": cmd_run, "pathing": cmd_pathing,
                 "group": cmd_group, "notify": cmd_notify, "web": cmd_web,
