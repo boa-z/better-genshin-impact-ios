@@ -158,6 +158,41 @@ class TeleportPointStore:
     def nearest_point(self, map_name: str, x: float, y: float) -> TeleportPoint | None:
         return next(iter(self.nearest(map_name, x, y, 1)), None)
 
+    def nearest_of_type(
+        self,
+        map_name: str,
+        x: float,
+        y: float,
+        point_types: set[str] | tuple[str, ...] | list[str],
+        count: int = 1,
+    ) -> tuple[TeleportPoint, ...]:
+        """Return nearby points restricted to one or more map point types.
+
+        ``TpTask.tp`` resolves arbitrary coordinates to the nearest point, but
+        recovery/party setup needs a nearby *Statue of the Seven* specifically.
+        Keeping the filter in the asset index avoids making that decision from
+        a possibly incomplete on-screen icon set.
+        """
+        if count < 1:
+            raise ValueError("count 必须大于等于 1")
+        allowed = {str(value) for value in point_types}
+        if not allowed:
+            return ()
+        points = tuple(
+            point for point in self.scenes.get(str(map_name), ())
+            if point.point_type in allowed
+        )
+        try:
+            target_x, target_y = float(x), float(y)
+        except (TypeError, ValueError) as error:
+            raise ValueError("传送点坐标必须是数字") from error
+        if not math.isfinite(target_x) or not math.isfinite(target_y):
+            raise ValueError("传送点坐标必须是有限数字")
+        return tuple(sorted(
+            points,
+            key=lambda point: math.hypot(point.x - target_x, point.y - target_y),
+        )[:count])
+
 
 @lru_cache(maxsize=1)
 def default_teleport_point_store() -> TeleportPointStore:

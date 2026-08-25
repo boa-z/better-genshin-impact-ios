@@ -833,14 +833,41 @@ class TpTask:
             return self._tp_to_statue(timeout_s)
 
     def _tp_to_statue(self, timeout_s: float = 30) -> bool:
-        """Teleport through a visible Statue of the Seven icon."""
+        """Teleport through a Statue of the Seven, including off-screen fallback.
+
+        The fast path uses a visible icon from the current map frame.  When
+        the current map center is far from every statue, use the shared
+        ``tp.json`` index and move the map to the nearest known statue instead
+        of assuming that an off-screen icon exists.
+        """
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
         tpl = Mat.from_file(str(TEMPLATES / "StatueOfTheSeven.png"))
-        region = self.ctx.capture_region()
+        frame = self.ctx.capture_bgr()
+        region = ImageRegion(self.ctx, frame)
         hits = region.find_multi(RecognitionObject.template_match(tpl), limit=20)
         if not hits:
-            raise RuntimeError("当前大地图视野未找到七天神像图标")
+            view = self.big.locate_view(frame)
+            if view is not None:
+                center_x, center_y = self.big.feature_to_world(view[0], view[1])
+                statue = next(iter(self._teleport_points.nearest_of_type(
+                    self.map_name,
+                    center_x,
+                    center_y,
+                    {"Goddess", "StatueOfTheSeven"},
+                )), None)
+                if statue is not None:
+                    self.log(
+                        "[tp] 当前视野无神像图标，按地图中心选择最近神像："
+                        f"{statue.name or statue.country or '七天神像'}"
+                    )
+                    return self._tp(
+                        statue.x,
+                        statue.y,
+                        timeout_s=timeout_s,
+                        force=False,
+                    )
+            raise RuntimeError("当前大地图视野未找到七天神像图标，且传送点索引无可用回退")
         cx, cy = self.ctx.transform.device_width / 2, self.ctx.transform.device_height / 2
         target = min(hits, key=lambda h: math.hypot(h.dx + h.dw / 2 - cx, h.dy + h.dh / 2 - cy))
         target.click()

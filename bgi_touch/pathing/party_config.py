@@ -177,6 +177,7 @@ class PathingPartyConfig:
     enabled: bool = True
     auto_pick_enabled: bool = True
     party_name: str = ""
+    is_visit_statue_before_switch_party: bool = False
     main_avatar_index: str = ""
     guardian_avatar_index: str = ""
     guardian_elemental_skill_second_interval: str = ""
@@ -201,6 +202,10 @@ class PathingPartyConfig:
     mwk_jump_fly_distance: int = 75
     mwk_jump_fly_interval_seconds: float = 1.0
     mwk_disable_sprint_enabled: bool = False
+    # Number of jump-fly actions after mounting that should receive a short
+    # sprint input first.  BetterGI uses this for C6 Mavuika routes; zero
+    # preserves the ordinary jump-fly cadence.
+    mwk_jump_fly_sprint_count: int = 0
 
     @classmethod
     def from_mapping(
@@ -246,6 +251,10 @@ class PathingPartyConfig:
             0.1,
             _float(_value(raw, "mwkJumpFlyIntervalSeconds", default=1), 1),
         )
+        jump_sprint_count = max(
+            0,
+            _int(_value(raw, "mwkJumpFlySprintCount", default=0), 0),
+        )
         hurry = str(_value(raw, "hurryOnAvatar", default="") or "").strip()
         # Unknown picker values should not silently select a character.  Keep
         # an empty value for execution, while preserving valid new characters
@@ -262,6 +271,14 @@ class PathingPartyConfig:
                 _value(raw, "autoPickEnabled", default=True), True
             ),
             party_name=str(_value(raw, "partyName", default="") or "").strip(),
+            is_visit_statue_before_switch_party=as_bool(
+                _value(
+                    raw,
+                    "isVisitStatueBeforeSwitchParty",
+                    default=False,
+                ),
+                False,
+            ),
             main_avatar_index=str(
                 _value(raw, "mainAvatarIndex", default="") or ""
             ).strip(),
@@ -326,6 +343,7 @@ class PathingPartyConfig:
             mwk_disable_sprint_enabled=as_bool(
                 _value(raw, "mwkDisableSprintEnabled", default=False), False
             ),
+            mwk_jump_fly_sprint_count=jump_sprint_count,
         )
 
     @property

@@ -67,6 +67,7 @@ class PathingExecutor:
         self.log = log
         self.party_config = PathingPartyConfig.from_mapping(pathing_config)
         self._tp_task = None
+        self._party_switcher = None
         self._cam_gain = 5.5
         self._cam_sign = 1.0
         self._last_mode_action_at = 0.0
@@ -192,6 +193,112 @@ class PathingExecutor:
             if previous:
                 loop.start()
 
+    def _refresh_party_slots_after_switch(self) -> None:
+        """Refresh the mobile HUD party mapping after a named-party switch.
+
+        BetterGI invalidates its combat scene cache after ``SwitchPartyTask``.
+        The touch runner keeps a small name→slot mapping for combat/pathing;
+        refresh it from the caller-owned frame when possible so a route does
+        not continue trying to use the characters from the previous party.
+        This is best effort because OCR assets may be unavailable in offline
+        hosts and must not turn a successful party switch into a route error.
+        """
+        existing = dict(self.actions.party_slots or {})
+        frame = None
+        cached = getattr(self.ctx, "cached_frame", None)
+        if callable(cached):
+            try:
+                value = cached()
+                frame = value[0] if isinstance(value, (tuple, list)) else value
+            except Exception as error:
+                self.log(f"[pathing] 队伍切换后读取缓存帧失败：{error}")
+        if not isinstance(frame, np.ndarray):
+            capture = getattr(self.ctx, "capture_bgr", None)
+            if callable(capture):
+                try:
+                    frame = capture()
+                except Exception as error:
+                    self.log(f"[pathing] 队伍切换后截图失败，保留旧队伍：{error}")
+        if not isinstance(frame, np.ndarray):
+            return
+        try:
+            from ..engine.party_hud import recognize_party_slots
+            from ..engine.recognition import ImageRegion
+
+            slots = recognize_party_slots(
+                self.ctx,
+                ImageRegion(self.ctx, frame),
+                existing=existing,
+                log=self.log,
+            )
+        except Exception as error:
+            self.log(f"[pathing] 队伍切换后 HUD 识别失败，保留旧队伍：{error}")
+            return
+        if not slots:
+            return
+        self.actions.party_slots.clear()
+        self.actions.party_slots.update(slots)
+        combat = getattr(self.actions, "combat", None)
+        combat_slots = getattr(combat, "party_slots", None)
+        if isinstance(combat_slots, dict):
+            combat_slots.clear()
+            combat_slots.update(slots)
+        try:
+            setattr(self.ctx, "party_slots", dict(slots))
+        except Exception:
+            pass
+
+    def _switch_party_for_route(self) -> bool:
+        """Apply ``PathingConfig.PartyName`` before the first route waypoint.
+
+        The desktop runner first attempts an in-place switch.  If the game is
+        in a state where party editing is unavailable, it teleports to a
+        Statue of the Seven and retries.  The explicit upstream option skips
+        the first attempt and always uses the safe statue location.  All menu
+        and map input is serialized through the same exclusive trigger scope
+        used by teleport, keeping AutoPick/AutoSkip out of the transition.
+        """
+        target = str(self.party_config.party_name or "").strip()
+        if not target:
+            return True
+
+        from ..engine.genshin_api import GenshinApi
+        from ..engine.party import PartySwitcher
+        from .tp import TpTask
+
+        teleport = TpTask(self.ctx, log=self.log, map_name="Teyvat")
+        switcher = PartySwitcher(
+            self.ctx,
+            log=self.log,
+            return_main_ui=GenshinApi(self.ctx, log=self.log).returnMainUi,
+        )
+
+        try:
+            with teleport.exclusive_triggers():
+                if self.party_config.is_visit_statue_before_switch_party:
+                    self.log(f"[pathing] 切换队伍前前往七天神像：{target}")
+                    teleport.tp_to_statue()
+                    success = switcher.switch(target)
+                else:
+                    success = switcher.switch(target)
+                    if not success:
+                        self.log(
+                            f"[pathing] 原地切换队伍失败，前往七天神像重试：{target}"
+                        )
+                        teleport.tp_to_statue()
+                        success = switcher.switch(target)
+        except Exception as error:
+            self.log(f"[pathing] 队伍切换失败：{error}")
+            return False
+
+        if not success:
+            self.log(f"[pathing] 未能切换到队伍：{target}")
+            return False
+        self._party_switcher = switcher
+        self._refresh_party_slots_after_switch()
+        self.log(f"[pathing] 已切换到队伍：{target}")
+        return True
+
     def run(self, task: PathingTask) -> bool:
         task.validate()
         self.log(f"[pathing] {task.name}: {len(task.positions)} 个路点 @ {task.map_name}")
@@ -204,6 +311,9 @@ class PathingExecutor:
         if task.map_match_method.lower() not in {"sift"}:
             self.log(f"[pathing] {task.map_match_method} 暂未移植，回退 SIFT")
         self._ensure_positioner(task.map_name)
+        if not self._switch_party_for_route():
+            self.ctx.input.release_all()
+            return False
         trigger_state = self._enable_realtime_triggers(task)
         retry_count = self._retry_count(task)
         success = False
@@ -625,6 +735,12 @@ class PathingExecutor:
                         hold_ms=hurry.profile.skill_hold_ms,
                     )
                 if hurry_action.press_jump:
+                    if hurry_action.sprint_jump:
+                        # The mobile keymap maps LSHIFT to the game's sprint
+                        # action. Keep the pulse in the same frame decision as
+                        # the jump so no second screenshot/input loop is
+                        # introduced for the C6 Mavuika compatibility option.
+                        self.ctx.input.key_press("LSHIFT", hold_ms=100)
                     self.ctx.input.key_press("SPACE")
                     self.ctx.sleep(100)
 

@@ -29,6 +29,17 @@ def test_tp_asset_contains_independent_map_scenes():
     assert store.nearest_point("TheChasm", 0, 0) is not None
 
 
+def test_tp_asset_can_select_nearest_statue_without_visible_icon():
+    from bgi_touch.pathing.teleport_points import TeleportPointStore
+
+    path = Path(__file__).resolve().parents[1] / "assets" / "data" / "tp.json"
+    store = TeleportPointStore(path)
+    statues = store.nearest_of_type("Teyvat", -874.22, 1993.73, {"Goddess"})
+
+    assert statues
+    assert statues[0].point_type == "Goddess"
+
+
 def test_tp_target_resolution_matches_force_contract():
     from types import SimpleNamespace
 

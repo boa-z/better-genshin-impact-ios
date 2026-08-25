@@ -49,12 +49,18 @@ class HurryAction:
 
     press_skill: bool = False
     press_jump: bool = False
+    sprint_jump: bool = False
     switch_to_walk: bool = False
     suppress_sprint: bool = False
 
     @property
     def handled(self) -> bool:
-        return self.press_skill or self.press_jump or self.switch_to_walk
+        return (
+            self.press_skill
+            or self.press_jump
+            or self.sprint_jump
+            or self.switch_to_walk
+        )
 
 
 class HurryOnController:
@@ -77,6 +83,7 @@ class HurryOnController:
         self._last_skill_at = float("-inf")
         self._last_jump_at = float("-inf")
         self._last_tick_at = float("-inf")
+        self._mavika_sprint_jump_count = 0
         self._walk_switched = False
         self._started = False
 
@@ -152,6 +159,7 @@ class HurryOnController:
 
         press_skill = now - self._last_skill_at >= self.profile.skill_interval_s
         press_jump = False
+        sprint_jump = False
         if press_skill:
             self._last_skill_at = now
             self.log(f"[pathing] {self.avatar} 赶路技能")
@@ -162,10 +170,25 @@ class HurryOnController:
                 if press_jump:
                     self._last_jump_at = now
                     self.log(f"[pathing] {self.avatar} 跳跃赶路")
+                    if (
+                        self.avatar == "玛薇卡"
+                        and not self.config.mwk_disable_sprint_enabled
+                        and self._mavika_sprint_jump_count
+                        < self.config.mwk_jump_fly_sprint_count
+                        and distance > self.config.mwk_jump_fly_distance * 1.3
+                    ):
+                        self._mavika_sprint_jump_count += 1
+                        sprint_jump = True
+                        self.log(
+                            "[pathing] 玛薇卡跳飞前冲刺 "
+                            f"{self._mavika_sprint_jump_count}/"
+                            f"{self.config.mwk_jump_fly_sprint_count}"
+                        )
 
         return HurryAction(
             press_skill=press_skill,
             press_jump=press_jump,
+            sprint_jump=sprint_jump,
             suppress_sprint=(
                 self.avatar == "玛薇卡"
                 and self.config.mwk_disable_sprint_enabled

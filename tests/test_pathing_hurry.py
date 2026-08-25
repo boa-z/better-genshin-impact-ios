@@ -47,6 +47,41 @@ def test_mavuika_jump_and_safe_dismount_decisions_are_deterministic():
     assert controller.walk_avatar == "钟离"
 
 
+def test_mavuika_sprint_jump_count_is_limited_per_hurry_segment():
+    config = PathingPartyConfig.from_mapping({
+        "HurryOnAvatar": "玛薇卡",
+        "Distance": 45,
+        "MwkJumpFlyDistance": 70,
+        "MwkJumpFlyIntervalSeconds": 1,
+        "MwkJumpFlySprintCount": 2,
+    })
+    controller = HurryOnController(config, {"玛薇卡": 1})
+    controller.start()
+
+    first = controller.tick(distance=100, move_mode="run", now=0.0)
+    second = controller.tick(distance=100, move_mode="run", now=1.1)
+    third = controller.tick(distance=100, move_mode="run", now=2.2)
+
+    assert first.sprint_jump is True
+    assert second.sprint_jump is True
+    assert third.press_jump is True
+    assert third.sprint_jump is False
+
+
+def test_mavuika_sprint_jump_is_disabled_with_sprint_suppression():
+    config = PathingPartyConfig.from_mapping({
+        "HurryOnAvatar": "玛薇卡",
+        "MwkJumpFlyDistance": 70,
+        "MwkJumpFlySprintCount": 2,
+        "MwkDisableSprintEnabled": True,
+    })
+    controller = HurryOnController(config, {"玛薇卡": 1})
+    action = controller.tick(distance=100, move_mode="run", now=0.0)
+
+    assert action.press_jump is True
+    assert action.sprint_jump is False
+
+
 def test_hurry_never_applies_to_walk_segments():
     config = PathingPartyConfig.from_mapping({"HurryOnAvatar": "法尔伽"})
     controller = HurryOnController(config, {"法尔伽": 1})

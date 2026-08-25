@@ -12,6 +12,7 @@ def test_pathing_party_config_accepts_bettergi_camel_case_and_clamps_related_val
             "MwkJumpFlyDistance": 20,
             "MwkJumpFlyIntervalSeconds": 0,
             "MwkDisableSprintEnabled": "true",
+            "MwkJumpFlySprintCount": -4,
         }
     })
 
@@ -23,6 +24,21 @@ def test_pathing_party_config_accepts_bettergi_camel_case_and_clamps_related_val
     assert config.mwk_jump_fly_distance == 41
     assert config.mwk_jump_fly_interval_seconds == 0.1
     assert config.mwk_disable_sprint_enabled is True
+    assert config.mwk_jump_fly_sprint_count == 0
+
+
+def test_pathing_party_config_parses_statue_switch_and_mavuika_sprint_options():
+    config = PathingPartyConfig.from_mapping({
+        "PathingConfig": {
+            "PartyName": "采集队",
+            "IsVisitStatueBeforeSwitchParty": "yes",
+            "MwkJumpFlySprintCount": "3",
+        },
+    })
+
+    assert config.party_name == "采集队"
+    assert config.is_visit_statue_before_switch_party is True
+    assert config.mwk_jump_fly_sprint_count == 3
 
 
 def test_pathing_party_config_keeps_unknown_hurry_selection_disabled():
