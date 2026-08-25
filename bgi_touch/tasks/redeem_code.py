@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
@@ -17,12 +18,27 @@ class RedeemCode:
     items: str | None = None
 
 
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+
+def strip_redeem_code_urls(value: Any) -> str:
+    """Remove shared-page URLs before parsing pasted redemption codes.
+
+    BetterGI's clipboard importer strips URLs first because announcement text
+    commonly contains a gift-page link next to the actual code. Keep this
+    normalization separate so explicit JS ``code`` values and pasted text use
+    the same safe behavior without trying to treat a URL query parameter as a
+    redeem code.
+    """
+    return _URL_RE.sub("", str(value or ""))
+
+
 def normalize_redeem_codes(value: Any) -> tuple[RedeemCode, ...]:
     """Accept BetterGI string/object lists and newline/comma-separated text."""
     if value is None:
         return ()
     if isinstance(value, str):
-        raw_items: Iterable[Any] = value.replace(",", "\n").splitlines()
+        raw_items: Iterable[Any] = strip_redeem_code_urls(value).replace(",", "\n").splitlines()
     elif isinstance(value, Mapping):
         raw_items = (value,)
     else:
@@ -38,7 +54,7 @@ def normalize_redeem_codes(value: Any) -> tuple[RedeemCode, ...]:
             items = raw.get("items", raw.get("Items"))
         else:
             code, items = raw, None
-        normalized = str(code or "").strip()
+        normalized = strip_redeem_code_urls(code).strip()
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
@@ -160,4 +176,3 @@ class UseRedemptionCodeTask:
             return results
         finally:
             api.returnMainUi()
-

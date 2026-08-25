@@ -117,10 +117,27 @@ class OneDragonFlowTask:
         if item.name == "领取邮件":
             return self.genshin.claimMailRewards()
         if item.name == "合成树脂":
-            country = task_config.get(
-                "country", _get(self.config, "craftingBenchCountry", "枫丹")
+            country = _get(
+                task_config,
+                "country",
+                default=_get(self.config, "craftingBenchCountry", "枫丹"),
             )
-            return self.genshin.goCraftResin(country)
+            options: dict[str, Any] = {}
+            min_keep = _get(
+                task_config,
+                "minResinToKeep",
+                default=_get(self.config, "minResinToKeep", None),
+            )
+            if min_keep is not None:
+                options["min_resin_to_keep"] = int(min_keep)
+            timeout = _get(
+                task_config,
+                "timeoutSeconds",
+                default=_get(self.config, "craftingBenchTimeoutSeconds", None),
+            )
+            if timeout is not None:
+                options["timeout_s"] = float(timeout)
+            return self.genshin.goCraftResin(country, **options)
         if item.name == "自动秘境":
             task_config.setdefault("domainRoundNum", 1)
             task_config.setdefault("partyName", _get(self.config, "partyName", ""))
@@ -158,15 +175,42 @@ class OneDragonFlowTask:
         if item.name == "自动幽境危战":
             return self.dispatcher.run_auto_stygian_onslaught_task(task_config)
         if item.name == "领取每日奖励":
-            country = task_config.get(
-                "country", _get(self.config, "adventurersGuildCountry", "枫丹")
+            country = _get(
+                task_config,
+                "country",
+                _get(self.config, "adventurersGuildCountry", "枫丹"),
             )
-            guild = self.genshin.goToAdventurersGuild(country)
-            encounter = self.genshin.claimEncounterPointsRewards()
+            guild_options: dict[str, Any] = {}
+            party_name = str(_get(
+                task_config,
+                "dailyRewardPartyName",
+                _get(self.config, "dailyRewardPartyName", ""),
+            ) or "").strip()
+            if party_name:
+                guild_options["daily_reward_party_name"] = party_name
+            only_do_once = _get(
+                task_config,
+                "onlyDoOnce",
+                _get(task_config, "only_do_once", None),
+            )
+            if only_do_once is not None:
+                guild_options["only_do_once"] = _bool(
+                    only_do_once,
+                    False,
+                )
+            guild = self.genshin.goToAdventurersGuild(country, **guild_options)
             battle_pass = self.genshin.claimBattlePassRewards()
-            return guild and encounter and battle_pass
+            return guild and battle_pass
         if item.name == "领取尘歌壶奖励":
-            return self.dispatcher.run_quick_serenitea_pot_task(task_config)
+            # QuickSereniteaPot only deploys the gadget and enters/leaves the
+            # realm.  The OneDragon item is the upstream reward job and must
+            # use the full NPC/shop flow instead.
+            reward_task = getattr(
+                self.dispatcher, "run_serenitea_pot_rewards_task", None
+            )
+            if not callable(reward_task):
+                raise RuntimeError("dispatcher 未提供尘歌壶奖励任务")
+            return reward_task(task_config)
         if item.name == "自动地脉花":
             day_name = (
                 datetime.now().astimezone() - timedelta(hours=4)

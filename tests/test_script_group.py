@@ -137,7 +137,15 @@ def test_script_group_dispatches_javascript_keymouse_pathing_and_shell(tmp_path:
             ScriptGroupProject("route.json", "folder", "Pathing"),
             ScriptGroupProject("echo ok", "", "Shell"),
         ],
-        config={"enableShellConfig": True, "shellConfig": {"timeoutSeconds": 3}},
+        config={
+            "enableShellConfig": True,
+            "shellConfig": {"timeoutSeconds": 3},
+            "PathingConfig": {
+                "Enabled": True,
+                "HurryOnAvatar": "夜兰",
+                "HurryOnFrameInterval": 80,
+            },
+        },
     )
     ctx = SimpleNamespace(
         input=SimpleNamespace(release_all=Mock()),
@@ -164,6 +172,8 @@ def test_script_group_dispatches_javascript_keymouse_pathing_and_shell(tmp_path:
     assert runtime.call_args.kwargs["settings"] == {"n": 2}
     player.return_value.play.assert_called_once_with({"macroEvents": []})
     assert executor.call_args.kwargs["farming_route_info"]["group_name"] == "测试组"
+    assert executor.call_args.kwargs["pathing_config"].hurry_on_avatar == "夜兰"
+    assert runtime.call_args.kwargs["pathing_config"]["PathingConfig"]["HurryOnAvatar"] == "夜兰"
     shell = dispatcher.return_value.run_shell_task.call_args.args[0]
     assert shell["command"] == "echo ok"
     assert shell["timeoutSeconds"] == 3

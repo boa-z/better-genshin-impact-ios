@@ -132,6 +132,27 @@ def test_choose_talk_option_decodes_string_is_orange_flag():
     api._talk_option_region.assert_not_called()
 
 
+def test_choose_talk_option_does_not_advance_non_orange_matching_option():
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    non_orange = SimpleNamespace(text="每日", click=Mock())
+    region = SimpleNamespace(find_multi=Mock(return_value=[non_orange]))
+    api = GenshinApi.__new__(GenshinApi)
+    api.ctx = SimpleNamespace(
+        capture_region=Mock(return_value=region),
+        input=SimpleNamespace(click_ref=Mock()),
+        sleep=Mock(),
+    )
+    api._talk_option_region = Mock(return_value=object())
+
+    with patch.object(GenshinApi, "_is_orange_option", return_value=False):
+        assert not api.chooseTalkOption("每日", skip_times=5, is_orange=True)
+
+    non_orange.click.assert_not_called()
+    api.ctx.input.click_ref.assert_not_called()
+    api.ctx.sleep.assert_not_called()
+
+
 def test_genshin_menu_ocr_reuses_active_trigger_frame():
     from bgi_touch.engine.genshin_api import GenshinApi
 

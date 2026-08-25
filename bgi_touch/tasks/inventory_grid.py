@@ -24,6 +24,7 @@ from ..engine.context import GameContext
 from ..engine.genshin_api import GenshinApi
 from ..engine.recognition import Mat, RecognitionObject
 from ..vision.ocr import get_ocr
+from .common_jobs import exclusive_realtime_triggers
 
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets" / "templates" / "inventory"
@@ -538,6 +539,10 @@ class GetGridIconsTask:
         return saved
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> list[str]:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> list[str]:
         if self.artifact_set_filter:
             self.log("[GetGridIcons] 圣遗物套装筛选需提前手动打开对应双列界面")
             return self._run_artifact_set_filter(cancelled)
@@ -603,6 +608,10 @@ class CountInventoryItemTask:
         self.log = log
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> int | dict[str, int]:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> int | dict[str, int]:
         if not self.scanner.open():
             raise RuntimeError(f"无法打开背包分类 {self.scanner.category.name}")
         wanted = {self.item_name} if self.item_name else set(self.item_names)
@@ -667,6 +676,10 @@ class InventoryCountComparisonTask:
         return raw, parsed if parsed is not None else -2
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> str:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> str:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         normalized_dir = self.output_dir / "normalized"
         normalized_dir.mkdir(exist_ok=True)

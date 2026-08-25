@@ -74,6 +74,31 @@ def test_html_mask_request_response_matching(tmp_path):
     host.closeAll()
 
 
+def test_html_mask_same_custom_id_isolated_between_script_roots(tmp_path):
+    from bgi_touch.engine.html_mask import HtmlMaskManager
+
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    (first_root / "mask.html").write_text("<html></html>", encoding="utf-8")
+    (second_root / "mask.html").write_text("<html></html>", encoding="utf-8")
+
+    manager = HtmlMaskManager()
+    first = manager.show(first_root, "mask.html", "shared-id")
+    second = manager.show(second_root, "mask.html", "shared-id")
+
+    assert first == "shared-id"
+    assert second != first
+    assert manager.exists(first)
+    assert manager.exists(second)
+    assert manager.storage_namespace(first) != manager.storage_namespace(second)
+    assert manager.resolve_asset(first, "mask.html") == (first_root / "mask.html").resolve()
+    assert manager.resolve_asset(second, "mask.html") == (second_root / "mask.html").resolve()
+
+    manager.close_many([first, second])
+
+
 def test_webui_injects_html_mask_bridge_and_serves_assets(tmp_path):
     from bgi_touch.engine.html_mask import html_mask_manager
     from bgi_touch.webui.server import api_html_mask_file
@@ -89,6 +114,8 @@ def test_webui_injects_html_mask_bridge_and_serves_assets(tmp_path):
         body = response.body.decode("utf-8")
         assert "window.htmlMask" in body
         assert "bgi-html-mask" in body
+        assert "scopedStorage" in body
+        assert "storageNamespace" in body
         assert body.lower().index("window.htmlmask") < body.lower().index("<body")
         assert f'/api/html-masks/{window_id}/files/' in body
 

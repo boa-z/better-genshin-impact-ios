@@ -128,6 +128,7 @@ class JsScriptRuntime:
                  party_slots: dict[str, int] | None = None,
                  strategy_roots: list[str | Path] | None = None,
                  pathing_root: str | Path | None = None,
+                 pathing_config: dict | None = None,
                  notification_config_path: str | Path | None = None):
         import pythonmonkey as pm
 
@@ -152,6 +153,7 @@ class JsScriptRuntime:
         self.pathing_root = Path(
             pathing_root or default_pathing_root
         ).expanduser().resolve()
+        self.pathing_config = pathing_config
         from ..notification import NotificationService
 
         self._notification_service = NotificationService.load(
@@ -1159,7 +1161,12 @@ class JsScriptRuntime:
             def runFile(self, p): player.play(load_keymouse(rt._resolve(p)))
         expose("keyMouseScript", wrap(_KeyMouse()), proxy=False)
 
-        pathing_exec = PathingExecutor(ctx, party_slots=self.party_slots, log=log)
+        pathing_exec = PathingExecutor(
+            ctx,
+            party_slots=self.party_slots,
+            pathing_config=self.pathing_config,
+            log=log,
+        )
 
         class _Pathing:
             def run(self, j): pathing_exec.run(PathingTask.parse(json.loads(str(j))))
@@ -1337,6 +1344,10 @@ class JsScriptRuntime:
                 return task_dispatcher.run_auto_leyline_task(param, ct)
             def runQuickSereniteaPotTask(self, param=None, ct=None):
                 return task_dispatcher.run_quick_serenitea_pot_task(param, ct)
+            def runSereniteaPotRewardsTask(self, param=None, ct=None):
+                return task_dispatcher.run_serenitea_pot_rewards_task(param, ct)
+            def runGoToSereniteaPotTask(self, param=None, ct=None):
+                return task_dispatcher.run_serenitea_pot_rewards_task(param, ct)
             def runQuickClaimRewardTask(self, param=None, ct=None):
                 return task_dispatcher.run_quick_claim_reward_task(param, ct)
             def runOneKeyExpeditionTask(self, param=None, ct=None):
@@ -1421,6 +1432,8 @@ class JsScriptRuntime:
             RunAutoLeyLineTask = runAutoLeyLineTask
             RunAutoLeyLineOutcropTask = runAutoLeyLineOutcropTask
             RunQuickSereniteaPotTask = runQuickSereniteaPotTask
+            RunSereniteaPotRewardsTask = runSereniteaPotRewardsTask
+            RunGoToSereniteaPotTask = runGoToSereniteaPotTask
             RunQuickClaimRewardTask = runQuickClaimRewardTask
             RunOneKeyExpeditionTask = runOneKeyExpeditionTask
             RunAutoTrackTask = runAutoTrackTask
@@ -1616,10 +1629,16 @@ class JsScriptRuntime:
                   clickChatOption: '优先选择第一个选项',
                   customPriorityOptionsEnabled: false,
                   customPriorityOptions: '',
+                  defaultPauseOptions: [],
+                  pauseOptions: [],
+                  selectOptions: [],
                   autoHangoutEventEnabled: false,
                   autoHangoutEndChoose: '',
                   autoHangoutChooseOptionSleepDelay: 0,
                   autoHangoutPressSkipEnabled: true,
+                  useInteractionKey: false,
+                  interactionKey: 'F',
+                  hangoutConfigPath: '',
                   runBackgroundEnabled: false,
                   bringGameToFrontAfterBackgroundDialogEnabled: false,
                   submitGoodsEnabled: true,

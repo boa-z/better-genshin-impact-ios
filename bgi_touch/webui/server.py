@@ -513,6 +513,7 @@ def api_scripts():
         "AutoOpenChest", "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat",
         "AutoMusicGame", "AutoAlbum",
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
+        "SereniteaPotRewards",
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode",
         "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
@@ -815,14 +816,66 @@ def api_logs(after: int = 0):
 
 # ---- BetterGI HTML 遮罩 ----
 
-def _mask_bridge(window_id: str) -> str:
+def _mask_bridge(window_id: str, storage_namespace: str | None = None) -> str:
     identifier = json.dumps(str(window_id), ensure_ascii=False)
+    namespace = json.dumps(
+        str(storage_namespace or f"bgi-html-mask-{window_id}"),
+        ensure_ascii=False,
+    )
     return f"""
 <script>
 (() => {{
   const windowId = {identifier};
+  const storageNamespace = {namespace};
   const callbacks = new Map();
   let sequence = 0;
+  // The desktop host gives each script directory its own WebView virtual
+  // host.  The mobile console serves masks from one origin, so namespace the
+  // browser stores to retain the same isolation without another screenshot or
+  // backend storage round-trip.
+  function scopedStorage(nativeStorage, namespace) {{
+    const prefix = namespace + ':';
+    const ownKey = key => prefix + String(key);
+    const visibleKeys = () => {{
+      const keys = [];
+      for (let i = 0; i < nativeStorage.length; i++) {{
+        const key = nativeStorage.key(i);
+        if (key && key.startsWith(prefix)) keys.push(key.slice(prefix.length));
+      }}
+      return keys;
+    }};
+    const api = {{
+      get length() {{ return visibleKeys().length; }},
+      key(index) {{ return visibleKeys()[Number(index)] ?? null; }},
+      getItem(key) {{ return nativeStorage.getItem(ownKey(key)); }},
+      setItem(key, value) {{ nativeStorage.setItem(ownKey(key), String(value)); }},
+      removeItem(key) {{ nativeStorage.removeItem(ownKey(key)); }},
+      clear() {{ visibleKeys().forEach(key => nativeStorage.removeItem(ownKey(key))); }}
+    }};
+    return new Proxy(api, {{
+      get(target, property, receiver) {{
+        if (typeof property === 'string' && !(property in target)) return target.getItem(property);
+        return Reflect.get(target, property, receiver);
+      }},
+      set(target, property, value) {{
+        if (typeof property === 'string' && !(property in target)) {{ target.setItem(property, value); return true; }}
+        return Reflect.set(target, property, value);
+      }},
+      deleteProperty(target, property) {{
+        if (typeof property === 'string' && !(property in target)) {{ target.removeItem(property); return true; }}
+        return false;
+      }}
+    }});
+  }}
+  try {{
+    const local = scopedStorage(window.localStorage, storageNamespace);
+    const session = scopedStorage(window.sessionStorage, storageNamespace + ':session');
+    Object.defineProperty(window, 'localStorage', {{configurable:true, get:() => local}});
+    Object.defineProperty(window, 'sessionStorage', {{configurable:true, get:() => session}});
+  }} catch (_) {{
+    // Private browsing policies may deny storage access; the mask bridge still
+    // works without the optional storage shim.
+  }}
   function post(url, data, requestId) {{
     parent.postMessage({{type:'bgi-html-mask', windowId, url, data, requestId}}, location.origin);
   }}
@@ -908,7 +961,9 @@ def api_html_mask_file(window_id: str, asset_path: str):
         base_url = f"/api/html-masks/{quote(window_id, safe='')}/files/"
         if encoded_parent and encoded_parent != ".":
             base_url += encoded_parent.rstrip("/") + "/"
-        injection = f'<base href="{base_url}">' + _mask_bridge(window_id)
+        injection = f'<base href="{base_url}">' + _mask_bridge(
+            window_id, html_mask_manager.storage_namespace(window_id)
+        )
         lowered = content.lower()
         head_at = lowered.find("<head")
         head_end = content.find(">", head_at) + 1 if head_at >= 0 else 0

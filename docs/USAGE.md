@@ -267,11 +267,13 @@ manifest `http_allowed_urls` 声明过的地址。文件宿主兼容 BetterGI �
 `CreateDirectory`、`RenamePathSync` 和大小写不敏感调用，也为使用特性检测的社区
 脚本提供 `file.mkdir` 别名；所有创建、写入和重命名仍限制在当前脚本目录内。
 脚本也可按上游方式直接 `new ImageRegion(mat, x, y)` 对本地图片做识别，或通过
-`new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先文本、点击延迟、
-`autoReExploreEnabled` 和 `closePopupPagedEnabled`。开启自动重新派遣后，AutoSkip 只对
-实际选中的选项做一次本地 OCR；命中“探索/派遣”后在派遣页领取并再次派遣，不会增加
-触发器的 DeviceHub 截图请求。弹出页关闭仅在刚识别过对话后的有限窗口内生效，并要求
-关闭按钮连续两帧稳定命中；主界面、大地图、引导札记、聊天记录和且试身手不会被关闭。
+`new AutoSkipConfig()` 配置实时剧情触发器的选项顺序、自定义优先/暂停文本、点击延迟、
+`autoGetDailyRewardsEnabled`、`autoReExploreEnabled`、`autoHangoutEventEnabled`、
+`submitGoodsEnabled`、`useInteractionKey` 和 `closePopupPagedEnabled`。开启自动重新派遣后，
+AutoSkip 只对实际选中的选项做一次本地 OCR；命中“探索/派遣”后在派遣页领取并再次派遣，
+不会增加触发器的 DeviceHub 截图请求。每日委托确认、邀约选项和提交物品均由后续共享帧推进，
+不在点击后自行启动截图循环。弹出页关闭仅在刚识别过对话后的有限窗口内生效，并要求关闭按钮
+连续两帧稳定命中；主界面、大地图、引导札记、聊天记录和且试身手不会被关闭。
 `BvPage/BvLocator` 的 OCR、模板定位、等待重试、点击和“点击直到消失”链式 API 也已
 接入同一截图上下文；`OpenCvSharp.OpenCvSharp.Rect` 会映射为 1080p 参考坐标 ROI。
 新版 `BvPage.Flow()` / `BvFlow` / `BvFlowAction` 也已兼容：支持
@@ -334,10 +336,22 @@ bgi-touch task AutoAlbum --config '{"musicLevel":"传说","songCount":13}'
 # 自由演奏曲谱；与活动六轨 AutoMusicGame 是两个独立功能
 bgi-touch task MusicPlayer --config \
   '{"file":"score.json","playbackMode":"Sequential","useCustomBpm":true,"customBpm":120}'
-# 快捷尘歌壶、一键领取当前页面、探索派遣、兑换码
+# 快捷尘歌壶进出、尘歌壶奖励、一键领取当前页面、探索派遣、兑换码
 bgi-touch task QuickSereniteaPot
+bgi-touch task SereniteaPotRewards --config \
+  '{"claimTrust":true,"shopItems":["布匹","须臾树脂"]}'
 bgi-touch task QuickClaimReward --config '{"scrollDown":true,"maxScrolls":3}'
 bgi-touch task OneKeyExpedition
+bgi-touch task ClaimBattlePassRewards
+bgi-touch task ClaimMailRewards
+bgi-touch task CraftMaterial --config \
+  '{"materialName":"浓缩树脂","quantity":1,"materialType":"消耗品"}'
+bgi-touch task GoToCraftingBench --config '{"country":"枫丹"}'
+bgi-touch task GoCraftResin --config \
+  '{"country":"枫丹","minResinToKeep":60,"timeoutSeconds":180}'
+bgi-touch task GoToAdventurersGuild --config \
+  '{"country":"枫丹","dailyRewardPartyName":"好感队"}'
+bgi-touch task ClaimEncounterPointsRewards --config '{"timeoutSeconds":12}'
 bgi-touch task AutoTrack --config '{"timeoutSeconds":120,"teleportWhenFar":true}'
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
 # 安全预览：选择 1~4 星后停在复查页，不会执行最终分解
@@ -380,6 +394,14 @@ SIFT 特征库；跨地图路线不需要手工重启任务。
 `genshin.tp(x, y)` 会读取项目内置的上游 `assets/data/tp.json`，按 `force=false`
 语义吸附到最近传送点并自动选择其国家；传入 `force=true` 时保留原始坐标，适合
 必须点击非传送点地图位置的脚本。缺少该索引时会记录日志并回退到原始坐标。
+
+配置组的 `Config.PathingConfig` 也会传递给移动端路线执行器。`HurryOnAvatar` 支持
+原版的“自动”、玛薇卡、闲云、桑多涅、恰斯卡、流浪者、伊法、希诺宁、法尔伽和夜兰；
+`Distance`、`ApproachStopDistance`、`HurryOnFrameInterval`、`TravelMode`、
+`SwitchToWalkEnabled`、`MwkJumpFlyEnabled`、`MwkJumpFlyDistance`、
+`MwkJumpFlyIntervalSeconds` 与 `MwkDisableSprintEnabled` 会按原版范围校正。
+移动端赶路调度复用路线当前帧，不会因为降低帧间隔而增加 DeviceHub 截图请求；无法稳定
+确认桌面专用载具图标时会保守继续普通跑图。
 
 DeviceHub Wi-Fi HID 偶发失效时，大地图按键或连续拖动会自动重建设备通道一次；
 建议长路线仍使用 USB。若游戏版本新增区域早于 `BetterGI.Assets.Map` 更新，该区域会
@@ -428,8 +450,20 @@ Windows 专属的队伍自动识别和低血量回血不会在 iOS 侧自动模�
 
 `QuickClaimReward` 复用 BetterGI 的“领取/礼物领取/点击空白继续”模板；开启
 `scrollDown` 后会把原版滚轮下滑语义转换为奖励列表内的触控上滑。
+`ClaimBattlePassRewards` 会先回到主界面，打开纪行并依次领取纪行点数与奖励页；
+领取后的原石弹窗会自动关闭，检测到需要手动选择的奖励时会记录提醒并停止后续页签点击。
+`ClaimMailRewards` 从派蒙菜单进入邮件页，优先使用 `esc_mail_reward` 模板、再回退到
+ OCR，领取全部附件后关闭弹窗并确认回到主界面。两项任务运行期间都会暂停 AutoPick/
+ AutoSkip 的共享截图循环，避免过渡帧竞争输入。
+`CraftMaterial` 要求已经打开合成界面；`materialType` 省略时从 `assets/models/item.csv`
+ 解析，使用 ItemV2 图标模型在五列合成网格中选材，并通过滑块和当前数量 OCR 双重校验。
+若材料不足、详情名不一致或确认弹窗缺失，任务返回 `success=false`，不会继续盲点后续按钮。
 `OneKeyExpedition` 应在已有派遣完成的探索派遣页运行：识别“全部领取”，等待奖励弹窗
 结束后识别“再次派遣”，成功后按 `ESCAPE` 退出；没有完成项时保持当前页面不变。
+`GoToAdventurersGuild` 对齐 BetterGI 的 `GoToAdventurersGuildTask`：按国家路线前往凯瑟琳，
+可选切换好感队伍，领取冒险之证长效历练点和每日委托奖励，确认弹窗后重新进入对话，
+领取并重新派遣探索任务，最后退出回到主界面。`onlyDoOnce=true` 会跳过历练点领取，
+适合 pathing 内部触发的“只执行一次”调用；协会任务运行期间会暂停 AutoPick/AutoSkip。
 `AutoTrack` 从主界面读取小地图下方的任务距离，按 `V` 显示蓝色追踪标记并持续修正
 视角与前进方向；距离超过 `farDistance`（默认 150m）时会尝试从任务页打开目标地图，
 选择中心附近已解锁的传送点。测试小号未解锁该锚点时会退出地图并回退到直接追踪。
@@ -566,7 +600,8 @@ bgi-touch group '/path/to/User/ScriptGroup/每日.json' \
 `log/ExecutionRecords/YYYYMMDD.json`，支持 `GroupPhysicalPathSkipPolicy`、
 `PhysicalPathSkipPolicy`、`SameNameSkipPolicy`、凌晨分界、服务器时间分界和
 `LastRunGapSeconds/ReferencePoint`。测试或多实例运行时可用 `--records-dir` 隔离目录；
-SoloTask 参数对应 `executionRecordDirectory`。
+SoloTask 参数对应 `executionRecordDirectory`。其中 `AutoPickEnabled` 和
+`AutoSkipEnabled` 为 false 时，路线不会在自身运行期间启用对应实时触发器。
 
 ### 5.6 离线分析 BetterGI 日志
 

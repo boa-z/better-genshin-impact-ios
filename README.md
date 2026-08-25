@@ -88,8 +88,11 @@ bgi-touch task AutoCook                 # 执行 BetterGI SoloTask（可用 --co
 bgi-touch task AutoAlbum --config '{"musicLevel":"传说"}'  # 在主题专辑页完成未演奏曲目
 bgi-touch task MusicPlayer --config '{"file":"score.json","customBpm":120}' # 自由演奏曲谱
 bgi-touch task QuickSereniteaPot       # 从背包部署并进入/离开尘歌壶
+bgi-touch task SereniteaPotRewards --config '{"shopItems":[]}' # 进壶领取阿圆奖励；商店购买需显式列出物品
 bgi-touch task OneKeyExpedition         # 在探索派遣页全部领取并再次派遣
+bgi-touch task GoToAdventurersGuild --config '{"country":"枫丹"}' # 领取历练点/每日委托并重派探索
 bgi-touch task CheckRewards             # 检查每日委托奖励状态并发送 daily.reward 通知
+bgi-touch task ClaimEncounterPointsRewards # 打开冒险之证并领取长效历练点奖励
 bgi-touch task ScanPick --config '{"seconds":15}' # 复用 AutoPick 扫描附近掉落
 bgi-touch task AutoTrack                # 自动跟随当前蓝色任务追踪标记
 bgi-touch task UseRedemptionCode --config '{"codes":["CODE1","CODE2"]}'
@@ -159,13 +162,13 @@ bgi-touch web                          # WebUI 控制台（实况画面/点按/�
 | 实时触发器（AutoPick / AutoSkip / AutoFish，含钓鱼独占） | ⚠️ 已实现并含误关闭保护，待真机调阈值 |
 | 战斗增强（OCR按名切人/技能就绪/敌血条结束检测） | ⚠️ 已实现，待真机调阈值 |
 | genshin.returnMainUi / chooseTalkOption / relogin / uid / getPositionFromMap | ✅（部分启发式） |
-| genshin 公共 Job：奖励领取、协会/合成台导航、材料合成、调时、重登 | ⚠️ 已接入 Genshin/dispatcher/JS 入口；路线与按钮 OCR 待真机回归 |
+| genshin 公共 Job：奖励领取、协会/合成台导航、材料合成、调时、重登 | ⚠️ 合成台已迁移两次路线重试、F/后退交互回退、最后对话选项、浓缩树脂保留量计算与双确认；协会/合成按钮仍待真机回归 |
 | SoloTask：AutoFight / AutoWood / AutoDomain | ⚠️ AutoFight 已接入 TXT/JSON 策略、条件历史、技能条件、队伍页确认与快速检查；AutoDomain 支持 ItemV2 多页奖励识别，待真机验证 |
 | SoloTask：AutoCook / AutoFishing / AutoOpenChest | ⚠️ AutoFishing 已含找鱼、选饵、HutaoFisher 抛竿、提竿与拉条闭环；需真机回归 |
 | SoloTask：AutoAlbum / AutoEat / AutoMusicGame | ⚠️ 已迁移，需在对应游戏界面真机回归 |
 | 自由演奏 MusicPlayer | ⚠️ 原琴/MIDI JSON/网络键谱、播放模式、自定义 BPM、自动换乐器已迁移；21 键布局待真机校准 |
 | SoloTask：AutoBoss / AutoLeyLine / AutoStygian / AutoGeniusInvokation | ⚠️ Boss/地脉内置官方路线与树脂策略；幽境已迁移活动导航与领奖状态机；七圣召唤需策略 |
-| 快捷任务：尘歌壶 / 一键领取 / 探索派遣 / 快速购买 / 兑换码 / 邮件奖励 | ⚠️ 已迁移，待对应界面真机回归 |
+| 快捷任务：尘歌壶进出/奖励 / 一键领取 / 纪行/邮件 / 探索派遣 / 快速购买 / 兑换码 | ⚠️ 已迁移；纪行/邮件状态机含离线回归，待对应界面真机回归 |
 | SoloTask：AutoArtifactSalvage | ⚠️ 低星快速选择与五星规则筛选已迁移；最终分解有显式安全开关 |
 | 背包网格：CountInventoryItem / GetGridIcons / 数量 OCR 对比 | ⚠️ 已迁移，详情 OCR 模式待真机回归 |
 | characterDevelopmentTask / CharacterDevelopment | ⚠️ 角色卡、等级、武器、三战斗天赋流程已迁移，待真机回归 |

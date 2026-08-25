@@ -161,6 +161,60 @@ def test_trigger_loop_pause_waits_for_frame_and_resume_restores_trigger():
     assert not loop.active
 
 
+def test_trigger_loop_pause_resume_preserves_configured_but_inactive_triggers():
+    from bgi_touch.triggers.loop import TriggerLoop
+
+    class Context:
+        def capture_region(self):
+            return object()
+
+    class Trigger:
+        name = "AutoPick"
+        enabled = True
+
+    loop = TriggerLoop(Context(), log=lambda _: None)
+    trigger = Trigger()
+    loop.add(trigger)
+
+    state = loop.pause()
+    assert state[0] == [trigger]
+    assert state[1] is False
+    assert loop.triggers == []
+
+    loop.resume(state)
+    assert loop.triggers == [trigger]
+    assert not loop.active
+
+
+def test_teleport_exclusive_scope_pauses_configured_inactive_trigger_loop():
+    from bgi_touch.pathing.tp import TpTask
+    from bgi_touch.triggers.loop import TriggerLoop
+
+    class Context:
+        def capture_region(self):
+            return object()
+
+    class Trigger:
+        name = "AutoPick"
+        enabled = True
+
+    ctx = Context()
+    loop = TriggerLoop(ctx, log=lambda _: None)
+    trigger = Trigger()
+    loop.add(trigger)
+    ctx._trigger_loop = loop
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+
+    assert not loop.active
+    with task.exclusive_triggers():
+        assert loop.triggers == []
+        assert not loop.active
+
+    assert loop.triggers == [trigger]
+    assert not loop.active
+
+
 def test_trigger_loop_runs_only_the_exclusive_trigger():
     from bgi_touch.triggers.loop import TriggerLoop
 
@@ -398,6 +452,44 @@ def test_teleport_ambiguous_icons_use_only_one_precomputed_fallback():
     assert fallback.clicks == 1
 
 
+def test_teleport_selection_reuses_the_map_frame_for_icon_fallback():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    map_region = object()
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=1000, device_height=500),
+        device=SimpleNamespace(tap=Mock()),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = Mock()
+    task._anchor_icons_near = Mock(return_value=[])
+    task._find_and_tap_confirm = Mock(return_value=True)
+
+    assert task._select_target_and_confirm(
+        400,
+        250,
+        50,
+        map_region=map_region,
+    )
+
+    task._anchor_icons_near.assert_called_once_with(
+        400,
+        250,
+        100,
+        region=map_region,
+    )
+    ctx.device.tap.assert_called_once_with(
+        400,
+        250,
+        image_width=1000,
+        image_height=500,
+    )
+
+
 def test_map_drag_returns_the_frame_after_its_own_gesture():
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -449,6 +541,7 @@ def test_move_map_consumes_drag_feedback_without_requesting_an_extra_frame():
 
     ctx.capture_bgr.assert_called_once_with()
     task._drag_map.assert_called_once_with(-10.0, -0.0)
+    assert task._last_located_frame is feedback
 
 
 def test_map_move_refreshes_a_duplicate_post_gesture_frame_once():

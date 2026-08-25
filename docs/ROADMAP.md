@@ -12,12 +12,15 @@
   AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
 - AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught 和 AutoGeniusInvokation 的
   专用流程迁移，以及 `dispatcher.runTask` / `runAuto*Task` 入口兼容。
-- QuickSereniteaPot、QuickClaimReward、UseRedemptionCode 和邮件奖励领取的触控流程；
+- QuickSereniteaPot、尘歌壶奖励（进壶寻找阿圆、领取好感/宝钱、按配置购买）、
+  QuickClaimReward、UseRedemptionCode，以及纪行/邮件奖励领取的触控状态机；
   奖励列表滚动使用触控上滑，文本输入使用 DeviceHub 原生输入。
 - AutoArtifactSalvage 的 1~4 星快速选择、4x9 五星网格扫描、详情 OCR 和限时
   JavaScript `Output` 规则；最终分解默认关闭，选择完成后保留人工复查界面。
 - 通用背包网格轮廓检测、翻页、详情名称 OCR 和数量区域预处理，以及脚本所需的
   CountInventoryItem、常规分类 GetGridIcons、InventoryCountComparison。
+- 背包、圣遗物分解和自动装备乐器等界面型任务会独占共享实时触发器截图/输入通道，
+  页面切换期间不会让 AutoPick/AutoSkip 抢先消费过渡帧；暂停前尚未启动的触发器列表也会恢复。
 - characterDevelopmentTask 的单/多角色接口、固定尺寸角色卡选择，以及属性、武器、
   普攻/战技/爆发天赋等级读取；角色别名和元素/武器元数据已随项目固定版本保存。
 - AutoDomain 奖励页稳定等待、卡片检测、ItemV2 图标匹配、数量 OCR、多页去重与
@@ -39,14 +42,28 @@
   顺序/单曲循环/随机、自定义 BPM，以及按背包详情 OCR 自动装备乐器。
 - BetterGI `notification.send/error` 已接入 Gotify，兼容 JS 通知授权、事件订阅、优先级
   和环境变量 Token；有界后台队列不触碰 DeviceHub 截图器。
+- HTML 遮罩已按脚本目录生成稳定存储命名空间，并保护不同脚本使用同名窗口时的消息/资源隔离；
+  WebUI 仍通过单一长轮询桥接，不增加截图请求。
 - `CheckRewardsTask` 已迁移：打开冒险之证委托页，识别每日奖励领取状态，并通过
   `daily.reward` 事件发送成功/未领取通知；一条龙完成阶段会自动执行该检查。
+- `ClaimEncounterPointsRewardsTask` 已迁移：按上游流程回主界面、打开冒险之证、
+  定位委托页，支持领取/已领取结果，并在任务结束后安全返回主界面；API 与
+  dispatcher 入口共用同一套触控/OCR 流程。
+- `GoToAdventurersGuildTask` 已迁移：支持国家路线、好感队伍、`onlyDoOnce`、
+  每日委托奖励确认、重新进入凯瑟琳对话和探索任务一键重派；OneDragon 不再重复
+  调用历练点领取。真机仍需在已解锁的协会路线和对应语言界面回归按钮阈值。
 - BetterGI Common Job 的 `WalkToFTask`、`ScanPickTask` 和
   `LowerHeadThenWalkToTask` 已迁移到共享 iOS 任务层；扫描默认复用 AutoPick 的
   共享截图循环，并通过 dispatcher/JS 入口提供脚本兼容。
 - BetterGI `genshin` 公共 Job 的奖励领取、协会/合成台路线、材料合成、调时、重登和
   对话选项已接入统一 dispatcher/JS 入口；菜单 OCR 在实时触发器运行时优先消费缓存帧，
-  不再为每次轮询启动第二个 DeviceHub 截图生产者。
+  不再为每次轮询启动第二个 DeviceHub 截图生产者。纪行任务已对齐“纪行点数→奖励页”
+  两阶段领取、原石弹窗关闭和手动选择奖励保护；邮件任务支持模板/OCR 双路径、无奖励
+ 结果和统一返回主界面清理。合成台任务已对齐两次路线尝试、`AutoRunEnabled` 国家差异、
+ 交互失败后的二次 F/后退一步/F 责任链、最后对话选项和合成页进入确认；浓缩树脂会
+ 读取原粹/浓缩数量，按 `minResinToKeep` 与 5 个库存上限计算次数，并执行数量按钮、
+  白色确认、黑色确认和安全返回主界面。材料合成已接入 ItemV2 网格选材、材料类型
+  CSV 回退、数量滑块校准/校验、二次确认和产物结果识别。
 - QuickBuy 的普通商店与尘歌壶商店数量滑块、购买确认分支；货币模板由资产下载器
   固定版本获取，缺少模板时要求显式指定商店类型以避免误购。
 - AutoBoss 的 41 个官方首领路线分型、树脂耗尽/指定次数策略、须臾与脆弱树脂补充、
@@ -101,9 +118,11 @@
 
 ## P1 — 实时触发器与任务视觉回归
 
-AutoPick、AutoSkip 已有后台截图循环；AutoSkip 已对齐自定义选项优先级、探索派遣领奖、黑屏推进、
-普通剧情页关闭、底部三角道具页与初见角色横幅，并保护主界面、大地图、引导札记、
-聊天记录和且试身手。需要在更多 iOS HUD 缩放下校准模板与颜色阈值。
+AutoPick、AutoSkip 已有后台截图循环；AutoSkip 已对齐自定义/内置暂停与优先选项、每日委托奖励确认、
+探索派遣领奖、邀约分支、交互键选择、提交物品状态机、黑屏推进、普通剧情页关闭、底部三角道具页
+与初见角色横幅，并保护主界面、大地图、引导札记、聊天记录和且试身手。iOS 没有桌面进程音频回环，
+语音等待配置保留兼容入口，宿主提供 `voice_waiter` 时才执行音频结束等待；仍需在更多 iOS HUD 缩放下
+校准模板与颜色阈值。
 AutoCook 的稳定峰值/下降检测、AutoFishing 的鱼类 YOLO、鱼饵 ItemV2 识别、
 HutaoFisher 抛竿距离模型、提竿和鱼条控制，以及 AutoOpenChest 的模板导航已经迁移；
 真机需要分别从烹饪点、钓鱼点和宝箱附近启动回归。

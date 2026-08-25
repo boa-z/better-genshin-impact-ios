@@ -29,6 +29,8 @@ from .farming import (
 )
 from .model import PathingTask, Waypoint
 from .camera import crop_minimap_for_orientation, orientation_with_confidence
+from .hurry_on import HurryOnController
+from .party_config import PathingPartyConfig
 from .trap_escaper import StuckDetector, TrapEscaper
 
 
@@ -57,11 +59,13 @@ class PathingExecutor:
                  log: Callable[[str], None] = print, map_name: str = "Teyvat",
                  farming_config_path: str | Path | None = None,
                  farming_route_info: dict | FarmingRouteInfo | None = None,
-                 farming_recorder: FarmingStatsRecorder | None = None):
+                 farming_recorder: FarmingStatsRecorder | None = None,
+                 pathing_config: PathingPartyConfig | dict | None = None):
         self.ctx = ctx
         self.positioner = positioner
         self._map_name = map_name
         self.log = log
+        self.party_config = PathingPartyConfig.from_mapping(pathing_config)
         self._tp_task = None
         self._cam_gain = 5.5
         self._cam_sign = 1.0
@@ -147,6 +151,12 @@ class PathingExecutor:
             if not active:
                 continue
             name = self._realtime_trigger_name(raw_name)
+            if name == "AutoPick" and not self.party_config.auto_pick_enabled:
+                self.log("[pathing] Config.PathingConfig.AutoPickEnabled=false，跳过自动拾取")
+                continue
+            if name == "AutoSkip" and not self.party_config.auto_skip_enabled:
+                self.log("[pathing] Config.PathingConfig.AutoSkipEnabled=false，跳过自动跳过")
+                continue
             if name not in supported:
                 self.log(f"[pathing] 实时触发器 {raw_name} 暂不支持")
                 continue
@@ -435,6 +445,12 @@ class PathingExecutor:
         last_good_position: tuple[float, float] | None = None
         lost_fixes = 0
         reached = False
+        hurry = HurryOnController(
+            self.party_config,
+            self.actions.party_slots,
+            log=self.log,
+        )
+        hurry_started = False
         try:
             while time.monotonic() < deadline:
                 try:
@@ -479,6 +495,47 @@ class PathingExecutor:
                     self.log(f"[pathing] 到达路点 ({wp.x:.0f},{wp.y:.0f})")
                     reached = True
                     break
+
+                # The desktop runner obtains several vehicle/flight icons here.
+                # On iOS those checks are not stable across all HUD scales, so
+                # use only deterministic route/party evidence and let the
+                # normal movement loop remain the source of screenshots.
+                if (
+                    not hurry_started
+                    and hurry.enabled
+                    and dist > self.party_config.distance
+                    and wp.move_mode in {"run", "dash"}
+                ):
+                    hurry_avatar = hurry.start()
+                    if hurry_avatar:
+                        self.actions.combat.switch_to(hurry_avatar)
+                        self.ctx.sleep(600)
+                        hurry_started = True
+
+                hurry_action = hurry.tick(
+                    distance=dist,
+                    move_mode=wp.move_mode,
+                )
+
+                if hurry_action.switch_to_walk:
+                    self.ctx.input.release_all()
+                    walk_avatar = hurry.walk_avatar
+                    if walk_avatar:
+                        self.log(f"[pathing] 切换步行角色：{walk_avatar}")
+                        self.actions.combat.switch_to(walk_avatar)
+                        self.ctx.sleep(600)
+                    else:
+                        self.log("[pathing] 未找到安全步行角色，继续当前角色")
+                    moving = False
+
+                if hurry_action.press_skill and hurry.profile is not None:
+                    self.ctx.input.key_press(
+                        "E",
+                        hold_ms=hurry.profile.skill_hold_ms,
+                    )
+                if hurry_action.press_jump:
+                    self.ctx.input.key_press("SPACE")
+                    self.ctx.sleep(100)
 
                 # BetterGI samples once per second, compares an eight-point
                 # window, and allows only two recoveries before retrying the
@@ -556,7 +613,11 @@ class PathingExecutor:
                     self.ctx.input.key_down("W")
                     moving = True
                 if now - self._last_mode_action_at >= 1.0:
-                    if wp.move_mode in ("run", "dash"):
+                    if (
+                        wp.move_mode in ("run", "dash")
+                        and self.party_config.auto_run_enabled
+                        and not hurry_action.suppress_sprint
+                    ):
                         self.ctx.input.key_press("LSHIFT")
                     elif wp.move_mode in ("fly", "jump"):
                         self.ctx.input.key_press("SPACE")

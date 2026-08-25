@@ -123,6 +123,35 @@ def test_panel_candidate_keeps_top_row_when_tp_name_is_generic():
     assert TpTask._choose_panel_candidate([lower, top], target) is top
 
 
+def test_named_panel_candidate_rejects_combined_long_ocr_label():
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.teleport_points import TeleportPoint
+    from bgi_touch.pathing.tp import TpTask
+
+    target = TeleportPoint(
+        map_name="Teyvat",
+        point_id="1",
+        point_type="TeleportWaypoint",
+        name="优兰尼娅湖",
+        country="枫丹",
+        areas=(),
+        x=0,
+        y=0,
+        transfer_x=0,
+        transfer_y=0,
+    )
+    combined = SimpleNamespace(text="传送锚点·优兰尼娅湖", y=100)
+    exact = SimpleNamespace(text="优兰尼娅湖", y=140)
+    region = SimpleNamespace(find_multi=lambda *_args, **_kwargs: [combined, exact])
+    task = TpTask.__new__(TpTask)
+
+    candidate = task._find_target_text_candidate(region, target)
+
+    assert candidate is not None
+    assert candidate.text == "优兰尼娅湖"
+
+
 def test_absolute_map_icon_alignment_recovers_small_layer_translation():
     from pytest import approx
 

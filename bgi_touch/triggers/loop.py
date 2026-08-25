@@ -132,16 +132,23 @@ class TriggerLoop:
         return previous, was_active, generation
 
     def resume(self, state: TriggerState) -> None:
-        """恢复 pause 前仍在运行的触发器，除非外部已安装了新列表。"""
+        """恢复 pause 前的触发器，除非外部已安装了新列表。
+
+        ``pause`` 也可能用于一个尚未启动帧线程、但已经配置好触发器的
+        ``TriggerLoop``。这种情况常见于任务刚切换页面时：输入生产者还没
+        start，任务仍然需要暂时独占输入。恢复时应保留原列表，但不要凭空
+        启动此前未运行的线程。
+        """
         previous, was_active, generation = state
-        if not previous or not was_active:
+        if not previous:
             return
         with self._state_lock:
             if self.triggers or self._generation != generation:
                 return
             self.triggers = list(previous)
             self._generation += 1
-        self.start()
+        if was_active:
+            self.start()
 
     def _run(self) -> None:
         self.log(f"[trigger] 帧循环启动（{1/self.interval:.1f} fps）")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import contextmanager
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +60,22 @@ def _resume_realtime_triggers(loop, state) -> None:
         loop.resume(state)
     except Exception:
         pass
+
+
+@contextmanager
+def exclusive_realtime_triggers(ctx: GameContext):
+    """让界面型任务独占共享截图/输入通道。
+
+    实时触发器和任务都可能在同一张过渡帧上看到交互按钮。菜单、背包和
+    传送页由任务主动消费帧时，暂停调用方拥有的 TriggerLoop 可以避免
+    AutoPick/AutoSkip 在页面切换期间抢先发送输入，也不会创建第二个截图
+    生产者。没有触发器循环的轻量测试宿主则直接执行任务。
+    """
+    loop, state = _pause_realtime_triggers(ctx)
+    try:
+        yield
+    finally:
+        _resume_realtime_triggers(loop, state)
 
 
 class InteractionPromptDetector:

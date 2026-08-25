@@ -226,7 +226,18 @@ class TpTask:
     def exclusive_triggers(self):
         """让地图手势独占设备输入，结束后恢复之前的实时触发器。"""
         loop = getattr(self.ctx, "_trigger_loop", None)
-        if loop is None or not loop.active:
+        if loop is None:
+            yield
+            return
+        # ``active`` only describes a currently running producer. A trigger
+        # list can still be configured while its thread is between stop/start
+        # (or before its first start). In that window another caller may start
+        # the producer while a map gesture is in progress, allowing AutoPick
+        # or AutoSkip to consume a map frame and inject competing input.
+        # Pause any configured loop; TriggerLoop preserves its previous
+        # inactive state when it is resumed.
+        configured_triggers = getattr(loop, "triggers", None)
+        if not loop.active and not configured_triggers:
             yield
             return
         state = loop.pause()
@@ -464,6 +475,7 @@ class TpTask:
         is only made for a duplicate result, so normal map movement keeps the
         one-frame-per-gesture behavior used by the screenshot consumers.
         """
+        self._last_located_frame = frame
         view = self.big.locate_view(frame)
         if view is None or previous is None:
             return view
@@ -475,6 +487,7 @@ class TpTask:
         except Exception:
             return view
         if refreshed_view is not None:
+            self._last_located_frame = refreshed
             return refreshed_view
         return view
 
@@ -499,6 +512,10 @@ class TpTask:
         """
         if not self.open_map(wx=wx, wy=wy, area_name=area_name):
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
+        # The successful locator frame is also the safest frame for the final
+        # map click. Clear it before the loop so a failed/recovered attempt
+        # cannot leak an observation from a previous teleport.
+        self._last_located_frame = None
         tx, ty = self.big.world_to_feature(wx, wy)
         deadline = time.monotonic() + timeout_s
         t = self.ctx.transform
@@ -699,16 +716,22 @@ class TpTask:
             if not self.open_map(wx=wx, wy=wy, area_name=force_country):
                 raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
             self._move_map_to(wx, wy, timeout_s, force_country=force_country)
-            frame = self.ctx.capture_bgr()
+            frame = getattr(self, "_last_located_frame", None)
+            if frame is None:
+                frame = self.ctx.capture_bgr()
             view = self.big.locate_view(frame)
             if view is None:
                 raise RuntimeError("点击地图点前视野匹配失败")
+            map_region = ImageRegion(self.ctx, frame)
             t = self.ctx.transform
             tx, ty = self.big.world_to_feature(wx, wy)
             tap_x = t.device_width / 2 + (tx - view[0]) * view[2]
             tap_y = t.device_height / 2 + (ty - view[1]) * view[2]
             selected = self._tap_anchor_icon_near(
-                tap_x, tap_y, max(0.10 * t.device_width, 0.12 * t.device_width)
+                tap_x,
+                tap_y,
+                max(0.10 * t.device_width, 0.12 * t.device_width),
+                region=map_region,
             )
             if not selected:
                 self.ctx.device.tap(
@@ -929,7 +952,11 @@ class TpTask:
                         continue
                     text = str(getattr(text_hit, "text", "")).strip()
                     normalized = self._normalize_candidate_text(text)
-                    if len(normalized) <= 1 or len(normalized) >= 20:
+                    # BetterGI rejects OCR rows whose raw text is ten or more
+                    # characters. Long matches are commonly a map label or a
+                    # combined ``传送锚点·地点`` string rather than one row in
+                    # the overlap list.
+                    if len(text) > self._ANCHOR_ENTRY_MAX_TEXT_LENGTH or len(normalized) <= 1:
                         continue
                     row_y = float(getattr(icon_hit, "y", 0.0))
                     existing = next(
@@ -971,7 +998,9 @@ class TpTask:
         hits = region.find_multi(RecognitionObject.ocr(*self._PANEL_TEXT_ROI), limit=30)
         matched = [
             hit for hit in hits
-            if any(
+            if len(str(getattr(hit, "text", "") or "").strip())
+            <= self._ANCHOR_ENTRY_MAX_TEXT_LENGTH
+            and any(
                 self._candidate_name_overlap_score(getattr(hit, "text", ""), label)
                 >= 5_000
                 for label in labels
@@ -1412,9 +1441,20 @@ class TpTask:
         center_y = y + h / 2
         return center_x >= width * 0.58 and center_y >= height * 0.55
 
-    def _anchor_icons_near(self, x: float, y: float, max_distance: float):
+    def _anchor_icons_near(
+        self,
+        x: float,
+        y: float,
+        max_distance: float,
+        *,
+        region: ImageRegion | None = None,
+    ):
         """Return nearby teleport icons ordered by distance from the raw point."""
-        region = self.ctx.capture_region()
+        # The caller normally already owns the post-map frame used to compute
+        # ``x/y``. Reusing it avoids a second DeviceHub screenshot request,
+        # which is important on the slow iPhone stream: a new request can
+        # describe the map before the preceding gesture has been rendered.
+        region = region if region is not None else self.ctx.capture_region()
         width = float(self.ctx.transform.device_width)
         height = float(self.ctx.transform.device_height)
         candidates = []
@@ -1436,9 +1476,21 @@ class TpTask:
         candidates.sort(key=lambda item: item[0])
         return candidates
 
-    def _tap_anchor_icon_near(self, x: float, y: float, max_distance: float) -> bool:
+    def _tap_anchor_icon_near(
+        self,
+        x: float,
+        y: float,
+        max_distance: float,
+        *,
+        region: ImageRegion | None = None,
+    ) -> bool:
         """模板匹配目标附近的传送锚点/神像图标并点击最近者。"""
-        candidates = self._anchor_icons_near(x, y, max_distance)
+        if region is None:
+            candidates = self._anchor_icons_near(x, y, max_distance)
+        else:
+            candidates = self._anchor_icons_near(
+                x, y, max_distance, region=region,
+            )
         if candidates:
             candidates[0][1].click()
             return True
@@ -1512,7 +1564,11 @@ class TpTask:
         tap_y = t.device_height / 2 + dy_screen
         if not self._is_clickable_map_point(tap_x, tap_y):
             raise RuntimeError("传送失败：目标点仍位于大地图不可点击区域")
-        frame = self.ctx.capture_bgr()
+        frame = getattr(self, "_last_located_frame", None)
+        if frame is None:
+            # Compatibility fallback for callers that provide a custom map
+            # mover without going through _move_map_view_to.
+            frame = self.ctx.capture_bgr()
         map_region = ImageRegion(self.ctx, frame)
         corrected_point = self._absolute_map_click_point(
             map_region, view, tap_x, tap_y,
@@ -1523,6 +1579,7 @@ class TpTask:
             tol,
             target_point=target_point,
             corrected_point=corrected_point,
+            map_region=map_region,
         ):
             raise TeleportPanelNotOpenedError(
                 "传送失败：点击传送点后未出现交互面板，可能是传送点未激活"
@@ -1590,6 +1647,7 @@ class TpTask:
         *,
         target_point: TeleportPoint | None = None,
         corrected_point: tuple[float, float] | None = None,
+        map_region: ImageRegion | None = None,
     ) -> bool:
         """Click one resolved point and allow one precomputed fallback only."""
         width = self.ctx.transform.device_width
@@ -1606,11 +1664,19 @@ class TpTask:
                 return True
             self.log("[tp] 绝对校正坐标未弹出面板，回退原始目标点")
 
-        candidates = self._anchor_icons_near(
-            tap_x,
-            tap_y,
-            max(0.10 * width, 1.8 * tol),
-        )
+        if map_region is None:
+            candidates = self._anchor_icons_near(
+                tap_x,
+                tap_y,
+                max(0.10 * width, 1.8 * tol),
+            )
+        else:
+            candidates = self._anchor_icons_near(
+                tap_x,
+                tap_y,
+                max(0.10 * width, 1.8 * tol),
+                region=map_region,
+            )
         fallback = None
         if candidates:
             nearest_distance, nearest = candidates[0]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -41,6 +42,7 @@ class HtmlMaskWindow:
     id: str
     root: Path
     entry: str
+    storage_namespace: str
     click_through: bool = False
     outgoing: deque[dict] = field(default_factory=deque)
     incoming: deque[dict] = field(default_factory=deque)
@@ -66,14 +68,28 @@ class HtmlMaskManager:
             raise PermissionError(f"HTML 遮罩路径越出脚本目录: {url}")
         if not target.is_file():
             raise FileNotFoundError(f"HTML 遮罩文件不存在: {url}")
+        storage_namespace = self._storage_namespace(root)
         identifier = str(window_id or f"html-mask-{uuid.uuid4().hex}")
         with self._condition:
+            existing = self._windows.get(identifier)
+            if existing is not None and existing.root != root:
+                # BetterGI's WebView uses a per-script virtual host.  The
+                # WebUI bridge has one HTTP origin, so preserve the same
+                # isolation at the window/message identity layer when two
+                # scripts choose the same custom window id.
+                base_identifier = identifier
+                identifier = f"{base_identifier}-{storage_namespace[-8:]}"
+                suffix = 2
+                while identifier in self._windows:
+                    identifier = f"{base_identifier}-{storage_namespace[-8:]}-{suffix}"
+                    suffix += 1
             if identifier in self._windows:
                 self.close(identifier)
             self._windows[identifier] = HtmlMaskWindow(
                 id=identifier,
                 root=root,
                 entry=str(target.relative_to(root)),
+                storage_namespace=storage_namespace,
             )
             self._changed()
         return identifier
@@ -99,6 +115,11 @@ class HtmlMaskManager:
     def window_ids(self) -> list[str]:
         with self._condition:
             return list(self._windows)
+
+    def storage_namespace(self, window_id: str) -> str:
+        """Return the stable browser-storage namespace for one mask script."""
+        with self._condition:
+            return self._require(window_id).storage_namespace
 
     def set_click_through(self, window_id: str, enabled: bool) -> None:
         with self._condition:
@@ -242,6 +263,15 @@ class HtmlMaskManager:
         if window is None:
             raise RuntimeError(f"HTML 遮罩窗口不存在或已关闭: {window_id}")
         return window
+
+    @staticmethod
+    def _storage_namespace(root: Path) -> str:
+        # Do not expose a local filesystem path to the browser.  The digest is
+        # stable for a script directory and sufficiently opaque for storage
+        # keys, while allowing two scripts with the same HTML filename to keep
+        # independent localStorage/sessionStorage data.
+        digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
+        return f"bgi-html-mask-{digest}"
 
 
 html_mask_manager = HtmlMaskManager()

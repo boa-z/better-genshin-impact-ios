@@ -577,6 +577,17 @@ def test_redeem_code_normalizer_accepts_bettergi_objects_and_text():
     ]
 
 
+def test_redeem_code_normalizer_strips_announcement_urls():
+    from bgi_touch.tasks.redeem_code import normalize_redeem_codes
+
+    codes = normalize_redeem_codes(
+        "AAA https://genshin.hoyoverse.com/gift?code=SHOULD_NOT_BE_PARSED\n"
+        "BBB,https://example.com/redeem\nCCC"
+    )
+
+    assert [item.code for item in codes] == ["AAA", "BBB", "CCC"]
+
+
 def test_quick_claim_candidates_keep_upstream_top_left_order():
     from types import SimpleNamespace
 
@@ -894,6 +905,20 @@ def test_dispatcher_maps_bettergi_auto_skip_config():
         before_confirm_delay_ms=80,
         close_popup_pages=True,
         auto_re_explore_enabled=True,
+        auto_get_daily_rewards_enabled=True,
+        auto_wait_dialogue_option_voice_enabled=False,
+        dialogue_option_voice_max_wait_seconds=30,
+        default_pause_texts=None,
+        pause_texts=None,
+        select_texts=None,
+        auto_hangout_event_enabled=False,
+        auto_hangout_end_choose="",
+        auto_hangout_choose_option_sleep_delay=0,
+        auto_hangout_press_skip_enabled=True,
+        hangout_config_path=None,
+        submit_goods_enabled=True,
+        use_interaction_key=False,
+        interaction_key="F",
     )
 
 
@@ -953,6 +978,42 @@ def test_artifact_dispatcher_maps_upstream_and_safety_parameters():
     assert kwargs["recognition_failure_policy"] == "Abort"
     assert kwargs["confirm_quick_salvage"] is True
     assert kwargs["confirm_salvage"] is False
+
+
+def test_inventory_and_artifact_tasks_use_exclusive_realtime_trigger_scope(tmp_path):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+
+    from bgi_touch.tasks.artifact_salvage import AutoArtifactSalvageTask
+    from bgi_touch.tasks.inventory_grid import GetGridIconsTask
+
+    ctx = SimpleNamespace()
+    scanner = Mock()
+    scanner.category = SimpleNamespace(name="Materials")
+
+    with patch(
+        "bgi_touch.tasks.inventory_grid.InventoryGridScanner",
+        return_value=scanner,
+    ), patch(
+        "bgi_touch.tasks.inventory_grid.exclusive_realtime_triggers",
+        return_value=nullcontext(),
+    ) as inventory_scope:
+        task = GetGridIconsTask(ctx, "Materials", output_dir=tmp_path / "grid-icons")
+        with patch.object(task, "_run_impl", return_value=[]) as run_impl:
+            assert task.run() == []
+        inventory_scope.assert_called_once_with(ctx)
+        run_impl.assert_called_once_with(None)
+
+    with patch(
+        "bgi_touch.tasks.artifact_salvage.exclusive_realtime_triggers",
+        return_value=nullcontext(),
+    ) as salvage_scope:
+        task = AutoArtifactSalvageTask(ctx)
+        with patch.object(task, "_run_impl", return_value={"ok": True}) as run_impl:
+            assert task.run() == {"ok": True}
+        salvage_scope.assert_called_once_with(ctx)
+        run_impl.assert_called_once_with(None)
 
 
 def test_inventory_category_aliases_and_grid_detector():

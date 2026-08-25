@@ -24,6 +24,7 @@ from ..engine.context import GameContext
 from ..engine.genshin_api import GenshinApi
 from ..engine.recognition import Mat, RecognitionObject
 from ..vision.ocr import OcrItem, get_ocr
+from .common_jobs import exclusive_realtime_triggers
 
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets" / "templates" / "artifact_salvage"
@@ -598,6 +599,10 @@ class AutoArtifactSalvageTask:
         return checked, selected
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> dict[str, int | bool]:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_impl(cancelled)
+
+    def _run_impl(self, cancelled: Callable[[], bool] | None = None) -> dict[str, int | bool]:
         deadline = time.monotonic() + self.timeout_s
         if not self._open_salvage(deadline):
             return {"ok": False, "quickSelected": False, "checked": 0, "selected": 0}

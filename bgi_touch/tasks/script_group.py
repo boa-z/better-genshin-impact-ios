@@ -336,6 +336,7 @@ class ScriptGroupRunner:
                 settings=project.settings,
                 party_slots=self.party_slots,
                 pathing_root=self.roots.pathing,
+                pathing_config=group.config,
                 log=self.log,
             ).run()
             return
@@ -354,6 +355,7 @@ class ScriptGroupRunner:
         if project.type == "Pathing":
             from ..pathing.executor import PathingExecutor
             from ..pathing.model import PathingTask
+            from ..pathing.party_config import PathingPartyConfig
 
             path = self._candidate(
                 group, self.roots.pathing, project.folder_name, project.name
@@ -361,9 +363,11 @@ class ScriptGroupRunner:
             if not path.is_file():
                 raise FileNotFoundError(f"地图追踪脚本不存在：{path}")
             task = PathingTask.load(path)
+            pathing_config = PathingPartyConfig.from_mapping(group.config)
             ok = PathingExecutor(
                 self.ctx,
                 party_slots=self.party_slots,
+                pathing_config=pathing_config,
                 farming_route_info={
                     "group_name": group.name,
                     "project_name": project.name,

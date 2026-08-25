@@ -462,7 +462,10 @@ class GenshinApi:
 
         ``is_orange`` follows BetterGI's ``isOrange`` argument.  A matching
         non-orange entry is ignored so a later duplicate with the same text
-        can still be selected.
+        can still be selected. If the only matching entry is non-orange,
+        return immediately without sending the continue key; this is the
+        mobile equivalent of BetterGI's ``FoundButNotOrange`` result and
+        prevents an already-claimed daily option from advancing dialogue.
         """
         for _ in range(max(1, int(skip_times))):
             region = self._text_capture_region()
@@ -470,19 +473,24 @@ class GenshinApi:
                 __import__("bgi_touch.engine.recognition", fromlist=["RecognitionObject"])
                 .RecognitionObject.ocr(1200, 300, 700, 700)
             )
+            matched_non_orange = False
             for h in hits:
                 if str(option) in str(getattr(h, "text", "") or ""):
                     if as_bool(is_orange):
                         try:
                             option_region = self._talk_option_region(region, h)
                             if not self._is_orange_option(option_region):
+                                matched_non_orange = True
                                 continue
                         except (AttributeError, TypeError, ValueError):
                             # A colour check failing closed is safer than
                             # clicking the wrong same-text dialogue option.
+                            matched_non_orange = True
                             continue
                     h.click()
                     return True
+            if matched_non_orange:
+                return False
             self.ctx.input.click_ref(960, 800)  # 点击继续对话
             self.ctx.sleep(800)
         return False
@@ -858,71 +866,137 @@ class GenshinApi:
         return claimed
 
     def claimBattlePassRewards(self):
-        self._open_paimon_menu()
-        opened = self._tap_text("纪行", "BattlePass", "Battle Pass", timeout_s=5)
-        if not opened:
-            self.ctx.input.key_press("ESCAPE")
-            return False
-        claimed = self._tap_text("一键领取", "领取", "Claim All", timeout_s=6)
-        self.ctx.input.key_press("ESCAPE")
-        return claimed
+        """Run the upstream two-page battle-pass reward state machine."""
+        from ..tasks.claim_rewards import ClaimBattlePassRewardsTask
 
-    def claimEncounterPointsRewards(self):
-        self._open_paimon_menu()
-        opened = self._tap_text("冒险之证", "历练点", "Adventurer Handbook", timeout_s=5)
-        if not opened:
-            self.ctx.input.key_press("ESCAPE")
-            return False
-        claimed = self._tap_text("领取", "Claim", timeout_s=6)
-        self.ctx.input.key_press("ESCAPE")
-        return claimed
+        result = ClaimBattlePassRewardsTask(
+            self.ctx,
+            return_main_ui=self.returnMainUi,
+            log=self.log,
+        ).run()
+        return bool(result.get("claimed"))
+
+    def claimEncounterPointsRewards(self, timeout_s: float = 12.0):
+        """Run the dedicated upstream-compatible encounter reward job."""
+        from ..tasks.claim_encounter_rewards import ClaimEncounterPointsRewardsTask
+
+        result = ClaimEncounterPointsRewardsTask(
+            self.ctx,
+            timeout_s=timeout_s,
+            return_main_ui=self.returnMainUi,
+            log=self.log,
+        ).run()
+        return bool(result.get("ok"))
 
     def claimMailRewards(self):
-        """Open the Paimon mail page and claim all available attachments."""
-        self._open_paimon_menu()
-        opened = self._tap_text("邮件", "Mail", timeout_s=5)
-        if not opened:
-            self.ctx.input.key_press("ESCAPE")
-            return False
-        claimed = self._tap_text("全部领取", "领取全部", "Claim All", timeout_s=6)
-        # Reward popups and the mail page can each require one close action.
-        self.ctx.input.key_press("ESCAPE")
-        self.ctx.sleep(400)
-        self.returnMainUi(max_tries=4)
-        return claimed
+        """Run the upstream Paimon-menu/mail reward state machine."""
+        from ..tasks.claim_rewards import ClaimMailRewardsTask
 
-    def goToAdventurersGuild(self, country):
-        return self._run_poi_route("冒险家协会", str(country), "凯瑟琳", "冒险家协会", "Catherine")
+        result = ClaimMailRewardsTask(
+            self.ctx,
+            return_main_ui=self.returnMainUi,
+            log=self.log,
+        ).run()
+        return bool(result.get("claimed"))
 
-    def goToCraftingBench(self, country):
-        return self._run_poi_route("合成台", str(country), "合成", "Craft")
+    def goToAdventurersGuild(
+        self,
+        country,
+        daily_reward_party_name: str = "",
+        only_do_once: bool = False,
+        timeout_s: float = 180.0,
+        encounter_timeout_s: float = 12.0,
+        cancelled: Callable[[], bool] | None = None,
+    ):
+        """Navigate to Catherine and complete the upstream daily-reward job.
 
-    def goCraftResin(self, country):
-        if not self.goToCraftingBench(country):
-            return False
-        return self._tap_text("浓缩树脂", "Condensed Resin", timeout_s=8)
+        ``genshin.goToAdventurersGuild(country)`` remains the script-compatible
+        one-argument form. The optional arguments mirror
+        ``GoToAdventurersGuildTask.Start`` for OneDragon and converted jobs.
+        """
+        from ..tasks.adventurers_guild import AdventurersGuildTask
 
-    def craftMaterial(self, material_name, quantity, material_type=None):
-        quantity = int(quantity)
-        if quantity <= 0:
-            raise ValueError("quantity 必须大于 0")
-        selected = self._tap_text(str(material_name), timeout_s=8)
-        if not selected:
-            return {"success": False, "materialName": str(material_name), "crafted": 0}
-        if material_type:
-            self._tap_text(str(material_type), timeout_s=3)
-        crafted = 0
-        for _ in range(quantity):
-            if not self._tap_text("合成", "Craft", timeout_s=5):
-                break
-            self._tap_text("确认", "Confirm", timeout_s=4)
-            crafted += 1
-        return {
-            "success": crafted == quantity,
-            "materialName": str(material_name),
-            "crafted": crafted,
-            "requested": quantity,
-        }
+        result = AdventurersGuildTask(
+            self.ctx,
+            str(country),
+            daily_reward_party_name=daily_reward_party_name,
+            only_do_once=as_bool(only_do_once, False),
+            timeout_s=timeout_s,
+            encounter_timeout_s=encounter_timeout_s,
+            log=self.log,
+            api=self,
+        ).run(cancelled=cancelled)
+        return bool(result.get("ok"))
+
+    def goToCraftingBench(
+        self,
+        country,
+        timeout_s: float = 180.0,
+        cancelled: Callable[[], bool] | None = None,
+    ):
+        """Navigate to the configured crafting bench and enter its UI.
+
+        Keep the original one-argument script shape while exposing timeout and
+        cancellation hooks to converted dispatcher/OneDragon jobs.
+        """
+        from ..tasks.crafting_bench import CraftingBenchTask
+
+        return CraftingBenchTask(
+            self.ctx,
+            str(country),
+            timeout_s=timeout_s,
+            party_slots=self._party_slots,
+            route_resolver=self._poi_route,
+            talk_detector=self._is_talk_ui_frame,
+            log=self.log,
+        ).go_to_crafting_bench(cancelled=cancelled)
+
+    def goCraftResin(
+        self,
+        country,
+        min_resin_to_keep: int = 0,
+        timeout_s: float = 180.0,
+        cancelled: Callable[[], bool] | None = None,
+    ):
+        """Navigate to a crafting bench and craft safe condensed-resin amount."""
+        from ..tasks.crafting_bench import CraftingBenchTask
+
+        return CraftingBenchTask(
+            self.ctx,
+            str(country),
+            min_resin_to_keep=min_resin_to_keep,
+            timeout_s=timeout_s,
+            party_slots=self._party_slots,
+            route_resolver=self._poi_route,
+            talk_detector=self._is_talk_ui_frame,
+            return_main_ui=self.returnMainUi,
+            log=self.log,
+        ).craft_resin(cancelled=cancelled)
+
+    def craftMaterial(
+        self,
+        material_name,
+        quantity,
+        material_type=None,
+        cancelled: Callable[[], bool] | None = None,
+    ):
+        """Craft a material in the current crafting page.
+
+        The previous implementation clicked the generic ``合成`` label once
+        per requested item and could therefore submit the wrong material or
+        quantity.  Delegate to the upstream-shaped ItemV2/grid/slider task;
+        the optional cancellation callback is used by dispatcher callers and
+        is omitted from the public three-argument script form.
+        """
+        from ..tasks.craft_material import CraftMaterialTask
+
+        return CraftMaterialTask(
+            self.ctx,
+            str(material_name),
+            quantity,
+            material_type,
+            log=self.log,
+        ).run(cancelled=cancelled)
 
     @staticmethod
     def _time_dial_gestures(

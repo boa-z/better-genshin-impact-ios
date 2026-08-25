@@ -438,6 +438,12 @@ class MusicInstrumentSwitcher:
         self.log = log
 
     def switch(self, instrument: str, cancelled: Callable[[], bool] | None = None) -> bool:
+        from .common_jobs import exclusive_realtime_triggers
+
+        with exclusive_realtime_triggers(self.ctx):
+            return self._switch_impl(instrument, cancelled)
+
+    def _switch_impl(self, instrument: str, cancelled: Callable[[], bool] | None = None) -> bool:
         from .inventory_grid import InventoryGridScanner
 
         name = str(instrument).split(",", 1)[0].strip()

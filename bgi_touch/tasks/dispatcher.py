@@ -89,6 +89,7 @@ class TaskDispatcher:
         "AutoFight", "AutoWood", "AutoDomain", "AutoCook", "AutoFishing", "AutoOpenChest",
         "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat", "AutoMusicGame", "AutoAlbum",
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
+        "SereniteaPotRewards", "GoToSereniteaPot", "GoToSereniteaPotTask",
         "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "CharacterDevelopment", "OneDragon", "ScriptGroup", "MusicPlayer", "Shell",
@@ -276,6 +277,14 @@ class TaskDispatcher:
             return self.run_auto_leyline_task(cfg, ct)
         if name in ("QuickSereniteaPot", "SereniteaPot"):
             return self.run_quick_serenitea_pot_task(cfg, ct)
+        if name in (
+            "SereniteaPotRewards",
+            "SereniteaPotReward",
+            "GoToSereniteaPot",
+            "GoToSereniteaPotTask",
+            "领取尘歌壶奖励",
+        ):
+            return self.run_serenitea_pot_rewards_task(cfg, ct)
         if name in ("QuickClaimReward", "OneKeyClaimReward"):
             return self.run_quick_claim_reward_task(cfg, ct)
         if name in ("OneKeyExpedition", "Expedition"):
@@ -619,10 +628,11 @@ class TaskDispatcher:
         self._check_cancelled(ct)
         return bool(self._genshin_api().claimBattlePassRewards())
 
-    def run_claim_encounter_points_rewards_task(self, _param: Any = None,
+    def run_claim_encounter_points_rewards_task(self, param: Any = None,
                                                 ct: Any = None) -> bool:
         self._check_cancelled(ct)
-        return bool(self._genshin_api().claimEncounterPointsRewards())
+        timeout = _value(param, "timeoutSeconds", _value(param, "timeout", 12))
+        return bool(self._genshin_api().claimEncounterPointsRewards(float(timeout or 12)))
 
     def run_claim_mail_rewards_task(self, _param: Any = None,
                                     ct: Any = None) -> bool:
@@ -645,19 +655,75 @@ class TaskDispatcher:
                                          ct: Any = None) -> bool:
         self._check_cancelled(ct)
         country = self._required_text(param, "country", "Country")
-        return bool(self._genshin_api().goToAdventurersGuild(country))
+        options: dict[str, Any] = {}
+        party_name = str(_value(
+            param,
+            "dailyRewardPartyName",
+            _value(param, "daily_reward_party_name", _value(param, "partyName", "")),
+        ) or "").strip()
+        if party_name:
+            options["daily_reward_party_name"] = party_name
+        only_do_once = _value(
+            param, "onlyDoOnce", _value(param, "only_do_once", None)
+        )
+        if only_do_once is not None:
+            options["only_do_once"] = _boolean(
+                only_do_once,
+                False,
+            )
+        timeout = _value(param, "timeoutSeconds", _value(param, "timeout", None))
+        if timeout is not None:
+            options["timeout_s"] = float(_value(
+                param, "timeoutSeconds", _value(param, "timeout", 180),
+            ) or 180)
+        encounter_timeout = _value(
+            param,
+            "encounterTimeoutSeconds",
+            _value(param, "encounterTimeout", None),
+        )
+        if encounter_timeout is not None:
+            options["encounter_timeout_s"] = float(_value(
+                param,
+                "encounterTimeoutSeconds",
+                _value(param, "encounterTimeout", 12),
+            ) or 12)
+        if ct is not None:
+            options["cancelled"] = self._callback(ct)
+        return bool(self._genshin_api().goToAdventurersGuild(country, **options))
 
     def run_go_to_crafting_bench_task(self, param: Any = None,
                                       ct: Any = None) -> bool:
         self._check_cancelled(ct)
         country = self._required_text(param, "country", "Country")
-        return bool(self._genshin_api().goToCraftingBench(country))
+        timeout = _value(param, "timeoutSeconds", _value(param, "timeout", None))
+        options: dict[str, Any] = {}
+        if timeout is not None:
+            options["timeout_s"] = float(timeout)
+        if ct is not None:
+            options["cancelled"] = self._callback(ct)
+        return bool(self._genshin_api().goToCraftingBench(country, **options))
 
     def run_go_craft_resin_task(self, param: Any = None,
                                 ct: Any = None) -> bool:
         self._check_cancelled(ct)
         country = self._required_text(param, "country", "Country")
-        return bool(self._genshin_api().goCraftResin(country))
+        keep = _value(
+            param,
+            "minResinToKeep",
+            _value(param, "min_resin_to_keep", None),
+        )
+        options: dict[str, Any] = {}
+        if keep is not None:
+            try:
+                options["min_resin_to_keep"] = int(keep)
+            except (TypeError, ValueError) as error:
+                raise ValueError("需要有效的 minResinToKeep") from error
+        timeout = _value(param, "timeoutSeconds", _value(param, "timeout", None))
+        if timeout is not None:
+            options["timeout_s"] = float(timeout)
+        if ct is not None:
+            options["cancelled"] = self._callback(ct)
+        return bool(self._genshin_api().goCraftResin(country, **options))
 
     def run_craft_material_task(self, param: Any = None,
                                 ct: Any = None) -> dict[str, Any]:
@@ -669,7 +735,18 @@ class TaskDispatcher:
         except (TypeError, ValueError) as error:
             raise ValueError("需要有效的 quantity") from error
         material_type = _value(param, "materialType", _value(param, "material_type", None))
-        result = self._genshin_api().craftMaterial(material, quantity, material_type)
+        api = self._genshin_api()
+        if ct is None:
+            # Preserve the three-argument BetterGI script call shape for
+            # lightweight hosts and existing adapters.
+            result = api.craftMaterial(material, quantity, material_type)
+        else:
+            result = api.craftMaterial(
+                material,
+                quantity,
+                material_type,
+                cancelled=self._callback(ct),
+            )
         return dict(result) if isinstance(result, Mapping) else {"result": result}
 
     def run_set_time_task(self, param: Any = None, ct: Any = None) -> bool:
@@ -1214,6 +1291,23 @@ class TaskDispatcher:
             log=self.log,
         ).run(cancelled=self._callback(ct))
 
+    def run_serenitea_pot_rewards_task(
+        self, param: Any = None, ct: Any = None,
+    ) -> dict[str, Any]:
+        """Run the full upstream GoToSereniteaPot reward job.
+
+        Keep this separate from ``QuickSereniteaPot``: the latter is an input
+        hotkey helper whose contract is only to enter/leave the realm, while
+        OneDragon's similarly named item must claim rewards first.
+        """
+        from .serenitea_rewards import SereniteaPotRewardsTask
+
+        return SereniteaPotRewardsTask(
+            self.ctx,
+            config=param or {},
+            log=self.log,
+        ).run(cancelled=self._callback(ct))
+
     def run_quick_claim_reward_task(self, param: Any = None, ct: Any = None) -> int:
         from .quick_claim import QuickClaimRewardTask
 
@@ -1466,6 +1560,58 @@ class TaskDispatcher:
                 auto_re_explore_enabled=_boolean(
                     _value(config, "autoReExploreEnabled", True), True,
                 ),
+                auto_get_daily_rewards_enabled=_boolean(
+                    _value(config, "autoGetDailyRewardsEnabled", True), True,
+                ),
+                auto_wait_dialogue_option_voice_enabled=_boolean(
+                    _value(config, "autoWaitDialogueOptionVoiceEnabled", False), False,
+                ),
+                dialogue_option_voice_max_wait_seconds=max(
+                    0,
+                    int(_value(config, "dialogueOptionVoiceMaxWaitSeconds", 30) or 30),
+                ),
+                default_pause_texts=_value(
+                    config,
+                    "defaultPauseOptions",
+                    _value(config, "defaultPauseTexts", None),
+                ),
+                pause_texts=_value(
+                    config,
+                    "pauseOptions",
+                    _value(config, "pauseTexts", None),
+                ),
+                select_texts=_value(
+                    config,
+                    "selectOptions",
+                    _value(config, "selectTexts", None),
+                ),
+                auto_hangout_event_enabled=_boolean(
+                    _value(config, "autoHangoutEventEnabled", False), False,
+                ),
+                auto_hangout_end_choose=str(
+                    _value(config, "autoHangoutEndChoose", "") or ""
+                ),
+                auto_hangout_choose_option_sleep_delay=max(
+                    0,
+                    int(_value(config, "autoHangoutChooseOptionSleepDelay", 0) or 0),
+                ),
+                auto_hangout_press_skip_enabled=_boolean(
+                    _value(config, "autoHangoutPressSkipEnabled", True), True,
+                ),
+                hangout_config_path=_value(config, "hangoutConfigPath", None),
+                submit_goods_enabled=_boolean(
+                    _value(config, "submitGoodsEnabled", True), True,
+                ),
+                use_interaction_key=_boolean(
+                    _value(
+                        config,
+                        "useInteractionKey",
+                        str(_value(config, "selectChatOptionType", "")).casefold()
+                        in {"useinteractionkey", "use_interaction_key", "使用交互键"},
+                    ),
+                    False,
+                ),
+                interaction_key=str(_value(config, "interactionKey", "F") or "F"),
             )
         elif name in ("MapMask", "地图遮罩"):
             self.ctx.enable_trigger(
