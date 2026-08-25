@@ -1897,6 +1897,23 @@ def test_pathing_executor_reaches_waypoint_and_runs_action():
     ctx.input.release_all.assert_called_once()
 
 
+def test_pathing_executor_stops_when_action_is_not_supported():
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.executor import PathingExecutor
+    from bgi_touch.pathing.model import Waypoint
+
+    executor = PathingExecutor.__new__(PathingExecutor)
+    executor.actions = SimpleNamespace(run=lambda _waypoint: False)
+    waypoint = Waypoint(
+        id=7, x=10, y=20, type="target", move_mode="walk",
+        action="future_action",
+    )
+
+    with pytest.raises(RuntimeError, match="future_action 未支持"):
+        executor._do_action(waypoint)
+
+
 def test_pathing_executor_handles_four_leaf_before_movement():
     from unittest.mock import MagicMock
 

@@ -9,6 +9,7 @@ from typing import Callable
 from ..engine.context import GameContext
 from ..engine.genshin_api import GenshinApi
 from ..engine.recognition import Mat, RecognitionObject
+from .common_jobs import exclusive_realtime_triggers
 
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets" / "templates" / "quick_serenitea"
@@ -57,6 +58,10 @@ class QuickSereniteaPotTask:
         return None
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
+        with exclusive_realtime_triggers(self.ctx):
+            return self._run_locked(cancelled)
+
+    def _run_locked(self, cancelled: Callable[[], bool] | None = None) -> bool:
         deadline = time.monotonic() + self.timeout_s
         api = GenshinApi(self.ctx, log=self.log)
         if not api.returnMainUi():
@@ -105,4 +110,3 @@ class QuickSereniteaPotTask:
             self.ctx.sleep(300)
         self.log("[QuickSereniteaPot] 部署后未识别到进入/离开交互")
         return False
-

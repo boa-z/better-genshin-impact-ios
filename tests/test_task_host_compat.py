@@ -141,6 +141,76 @@ return JSON.stringify({
     }
 
 
+def test_dispatcher_linked_cancellation_tokens_follow_runtime_stop(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+const token = dispatcher.getLinkedCancellationToken();
+const source = dispatcher.GetLinkedCancellationTokenSource();
+return JSON.stringify({
+  token: token.isCancellationRequested,
+  tokenPascal: token.IsCancellationRequested,
+  source: source.isCancellationRequested,
+  sourcePascal: source.IsCancellationRequested,
+  canCancel: token.canBeCanceled
+});
+""",
+        encoding="utf-8",
+    )
+
+    runtime = JsScriptRuntime(_context(), tmp_path)
+    runtime.cancelled = True
+
+    result = json.loads(runtime.run())
+
+    assert result == {
+        "token": True,
+        "tokenPascal": True,
+        "source": True,
+        "sourcePascal": True,
+        "canCancel": True,
+    }
+
+
+def test_js_add_trigger_forwards_realtime_timer_config(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        """
+dispatcher.AddTrigger(new RealtimeTimer('AutoPick', {
+  forceInteraction: true,
+  pickKey: 'G',
+  mode: 'Blacklist',
+  blackList: ['进入']
+}));
+return 'ok';
+""",
+        encoding="utf-8",
+    )
+    ctx = _context()
+    ctx.triggers = SimpleNamespace(clear=Mock())
+    ctx.enable_trigger = Mock()
+
+    assert JsScriptRuntime(ctx, tmp_path).run() == "ok"
+
+    ctx.triggers.clear.assert_not_called()
+    assert ctx.enable_trigger.call_args == (("AutoPick",), {
+        "force_interaction": True,
+        "pick_key": "G",
+        "mode": "Blacklist",
+        "text_list": None,
+        "whitelist": None,
+        "blacklist": ["进入"],
+        "fuzzy_blacklist": None,
+        "whitelist_exclusions": None,
+        "blacklist_mode_pick_enabled": False,
+        "whitelist_mode_do_not_pick_enabled": True,
+    })
+
+
 def test_dispatcher_exposes_common_job_entrypoints(tmp_path):
     pytest.importorskip("pythonmonkey")
     from bgi_touch.engine.js_runtime import JsScriptRuntime

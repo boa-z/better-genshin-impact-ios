@@ -54,11 +54,13 @@ def test_pathing_script_uses_shared_auto_pathing_root(tmp_path: Path):
         """
 (async function () {
   const entries = pathingScript.ReadPathSync(".");
+  const nestedEntries = pathingScript.ReadPathSync("nested");
   const text = pathingScript.ReadTextSync("nested\\\\route.json");
   const escaped = pathingScript.ReadTextSync("../secret.json");
   await pathingScript.RunFileFromUser("nested/route.json");
   return JSON.stringify({
     entries,
+    nestedEntries,
     exists: pathingScript.IsExists("nested/route.json"),
     file: pathingScript.IsFile("nested/route.json"),
     folder: pathingScript.IsFolder("nested"),
@@ -80,6 +82,7 @@ def test_pathing_script_uses_shared_auto_pathing_root(tmp_path: Path):
 
     assert result == {
         "entries": ["nested", "root.json"],
+        "nestedEntries": ["nested\\route.json"],
         "exists": True,
         "file": True,
         "folder": True,

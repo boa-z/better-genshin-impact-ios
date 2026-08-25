@@ -18,6 +18,51 @@ from ..vision.ocr import get_ocr
 from .context import GENSHIN_BUNDLE_ID, GameContext
 
 
+def _coerce_float(value, default: float = 0.0) -> float:
+    """Coerce JS/.NET-style numeric arguments without leaking host errors.
+
+    ClearScript's ``double.TryParse`` overloads turn an invalid string into
+    zero for ``genshin.tp(string, string)``. Python's ``float`` raises
+    instead, which made otherwise compatible community scripts fail before
+    the actual teleport task was reached. Keep the conversion finite and
+    deterministic for all coordinate-like API arguments.
+    """
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return float(default)
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return float(default)
+    return number if math.isfinite(number) else float(default)
+
+
+def _coerce_int(value, default: int = 0) -> int:
+    """Coerce integer-like JS arguments, accepting numeric strings."""
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return int(default)
+        number = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+    return number
+
+
+def _is_numeric_argument(value) -> bool:
+    """Return whether an overload argument can represent a finite number."""
+    if isinstance(value, bool):
+        return False
+    try:
+        if isinstance(value, str) and not value.strip():
+            return False
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _todo(name: str):
     raise NotImplementedError(f"genshin.{name} 依赖大地图定位/专用流程，尚未移植（docs/ROADMAP.md）")
 
@@ -74,12 +119,13 @@ class NavigationInstanceApi:
         positioner = self._positioner(self._map_name)
         setter = getattr(positioner, "set_prior_pixel", None)
         if callable(setter):
-            setter(float(x), float(y))
+            setter(_coerce_float(x), _coerce_float(y))
             return
         # Keep compatibility with test doubles and older positioners.
         locator = positioner.locator
-        locator.prev = (float(x), float(y))
-        positioner._last_position = locator.config.image_to_world(float(x), float(y))
+        pixel_x, pixel_y = _coerce_float(x), _coerce_float(y)
+        locator.prev = (pixel_x, pixel_y)
+        positioner._last_position = locator.config.image_to_world(pixel_x, pixel_y)
         positioner._last_fix_at = 0.0
 
     def getPosition(
@@ -107,7 +153,7 @@ class NavigationInstanceApi:
         positioner = self._positioner(map_name)
         world = positioner.get_position_stable(
             self._frame(image_region, self._api.ctx),
-            cache_time_ms=max(0, int(cache_time_ms)),
+            cache_time_ms=max(0, _coerce_int(cache_time_ms, 900)),
         )
         if world is None:
             return None
@@ -525,6 +571,7 @@ class GenshinApi:
             if force is False or force is None:
                 force = map_name
             map_name = None
+        x, y = _coerce_float(x), _coerce_float(y)
         task = self._tp_for(map_name)
         from ..pathing.tp import TeleportPanelNotOpenedError
 
@@ -559,19 +606,20 @@ class GenshinApi:
 
     def moveMapTo(self, x, y, forceCountry=None):
         return self._tp_for().move_map_to(
-            float(x), float(y), force_country=forceCountry,
+            _coerce_float(x), _coerce_float(y), force_country=forceCountry,
         )
 
     def clickMapPoint(self, x, y, forceCountry=None):
         """移动到世界坐标并点击地图上的点，保持地图选择面板打开。"""
         return self._tp_for().click_map_point(
-            float(x), float(y), force_country=forceCountry,
+            _coerce_float(x), _coerce_float(y), force_country=forceCountry,
         )
 
     def moveIndependentMapTo(self, x, y, map_name, forceCountry=None):
         task = self._tp_for(str(map_name))
         return task.move_independent_map_to(
-            float(x), float(y), str(map_name), force_country=forceCountry,
+            _coerce_float(x), _coerce_float(y), str(map_name),
+            force_country=forceCountry,
         )
 
     def tpToStatueOfTheSeven(self):
@@ -614,22 +662,65 @@ class GenshinApi:
             if isinstance(first, str):
                 map_name = first
                 numeric = args[1:]
-                if len(numeric) == 1 and isinstance(numeric[0], (int, float)):
-                    cache_time_ms = int(numeric[0])
+                if len(numeric) == 1 and _is_numeric_argument(numeric[0]):
+                    cache_time_ms = _coerce_int(numeric[0], 900)
                 elif len(numeric) >= 2 and all(
-                    isinstance(value, (int, float)) for value in numeric[:2]
+                    _is_numeric_argument(value) for value in numeric[:2]
                 ):
-                    prior = (float(numeric[0]), float(numeric[1]))
-                    if len(numeric) >= 3 and isinstance(numeric[2], (int, float)):
-                        cache_time_ms = int(numeric[2])
-            elif isinstance(first, (int, float)):
-                cache_time_ms = int(first)
+                    prior = (_coerce_float(numeric[0]), _coerce_float(numeric[1]))
+                    if len(numeric) >= 3 and _is_numeric_argument(numeric[2]):
+                        cache_time_ms = _coerce_int(numeric[2], 900)
+            elif _is_numeric_argument(first):
+                cache_time_ms = _coerce_int(first, 900)
         positioner = self._positioner_for(map_name)
+        frame = self.ctx.capture_bgr()
         if prior is not None:
             positioner.set_prior(*prior)
-        pos = positioner.get_position_stable(
-            self.ctx.capture_bgr(), cache_time_ms=max(0, cache_time_ms)
-        )
+            # The upstream overload is explicitly a local match: it seeds
+            # NavigationInstance.SetPrevPosition and calls GetPosition, not
+            # the cached stable path. This matters for scripts that provide
+            # a route waypoint as the search prior and must not get the prior
+            # itself back from a still-valid cache.
+            get_pixel = getattr(positioner, "get_position_pixel", None)
+            pixel = None
+            if callable(get_pixel):
+                raw_pixel = get_pixel(frame)
+                if raw_pixel is None:
+                    return None
+                pixel = raw_pixel
+                try:
+                    pixel = (_coerce_float(pixel[0]), _coerce_float(pixel[1]))
+                except (IndexError, KeyError, TypeError, ValueError):
+                    # Lightweight mocks and older positioners may expose the
+                    # method without implementing the pixel-return contract.
+                    pixel = None
+                if pixel is not None:
+                    config = getattr(
+                        getattr(positioner, "locator", None), "config", None,
+                    )
+                    image_to_world = getattr(config, "image_to_world", None)
+                    try:
+                        pos = (
+                            image_to_world(*pixel)
+                            if callable(image_to_world)
+                            else pixel
+                        )
+                    except (TypeError, ValueError):
+                        pos = pixel
+                    if hasattr(positioner, "_last_position"):
+                        positioner._last_position = pos
+                    if hasattr(positioner, "_last_fix_at"):
+                        positioner._last_fix_at = time.monotonic()
+            if pixel is None:
+                # Lightweight host doubles may only implement the stable
+                # matcher; retain their old compatibility path.
+                pos = positioner.get_position_stable(
+                    frame, cache_time_ms=max(0, cache_time_ms)
+                )
+        else:
+            pos = positioner.get_position_stable(
+                frame, cache_time_ms=max(0, cache_time_ms)
+            )
         if pos is None:
             return None
         from .recognition import Point2f
@@ -652,9 +743,9 @@ class GenshinApi:
             else:
                 map_name, matching_method = str(args[0]), str(args[1])
                 if len(args) >= 3:
-                    cache_time_ms = int(args[2])
-        elif args and isinstance(args[0], (int, float)):
-            cache_time_ms = int(args[0])
+                    cache_time_ms = _coerce_int(args[2], 900)
+        elif args and _is_numeric_argument(args[0]):
+            cache_time_ms = _coerce_int(args[0], 900)
         if str(matching_method).lower() != "sift":
             self.log(f"[genshin] 地图匹配方法 {matching_method} 暂未移植，回退 SIFT")
         return self.getPositionFromMap(map_name, cache_time_ms)
@@ -737,7 +828,7 @@ class GenshinApi:
         return True
 
     def setBigMapZoomLevel(self, level):
-        return self._tp_for().set_big_map_zoom_level(float(level))
+        return self._tp_for().set_big_map_zoom_level(_coerce_float(level, 3.0))
 
     def getBigMapZoomLevel(self):
         return self._tp_for().get_big_map_zoom_level()

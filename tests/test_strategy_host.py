@@ -25,6 +25,8 @@ const children = strategyFile.readPathSync("群友分享");
 return JSON.stringify({
   roots,
   children,
+  windowsPath: children[0].split("\\\\").length === 2,
+  textFile: children[0].endsWith(".txt"),
   folder: strategyFile.IsFolder("群友分享"),
   file: strategyFile.isFile("群友分享/策略.txt"),
   exists: strategyFile.IsExists("群友分享/策略.txt"),
@@ -46,7 +48,9 @@ return JSON.stringify({
 
     assert result == {
         "roots": ["群友分享"],
-        "children": ["群友分享/策略.txt"],
+        "children": ["群友分享\\策略.txt"],
+        "windowsPath": True,
+        "textFile": True,
         "folder": True,
         "file": True,
         "exists": True,

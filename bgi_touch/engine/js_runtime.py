@@ -20,7 +20,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError
 
+from ..config_values import as_bool
 from ..macro.keymouse import MacroPlayer, load_keymouse
 from ..pathing.executor import PathingExecutor
 from ..pathing.model import PathingTask
@@ -129,7 +131,9 @@ class JsScriptRuntime:
                  strategy_roots: list[str | Path] | None = None,
                  pathing_root: str | Path | None = None,
                  pathing_config: dict | None = None,
-                 notification_config_path: str | Path | None = None):
+                 notification_config_path: str | Path | None = None,
+                 allow_js_notification: bool | None = None,
+                 allow_js_http_hash: str | None = None):
         import pythonmonkey as pm
 
         self.pm = pm
@@ -137,6 +141,17 @@ class JsScriptRuntime:
         self.script_dir = Path(script_dir).resolve()
         self.log = log
         self.cancelled = False
+        # ``None`` means this runtime was started directly rather than from a
+        # ScriptGroup project.  Direct JS execution has historically only
+        # been governed by the global notification setting and manifest URL
+        # allow-list, so keep that behavior intact.
+        self.allow_js_notification = (
+            None if allow_js_notification is None
+            else as_bool(allow_js_notification, True)
+        )
+        self.allow_js_http_hash = (
+            None if allow_js_http_hash is None else str(allow_js_http_hash)
+        )
         self.manifest = self._load_manifest()
         self.settings = self._load_settings(settings or {})
         if party_slots is not None:
@@ -205,6 +220,19 @@ class JsScriptRuntime:
             raise PermissionError(f"路径越出 Pathing 根目录: {sub_path}")
         return p
 
+    @staticmethod
+    def _visible_path(path: Path, root: Path) -> str:
+        """Return a BetterGI-compatible relative path for JavaScript.
+
+        BetterGI runs scripts with Windows path semantics even when the
+        caller only asks for entries below a relative directory. Keep the
+        local filesystem representation private and expose the same
+        backslash-separated relative string that desktop scripts receive.
+        ``_resolve`` and ``_resolve_pathing`` deliberately normalize this
+        representation back before touching the filesystem.
+        """
+        return path.relative_to(root).as_posix().replace("/", "\\")
+
     def _check_cancel(self) -> None:
         if self.cancelled:
             raise ScriptCancelled()
@@ -249,8 +277,27 @@ class JsScriptRuntime:
         return self._case_proxy(obj)
 
     def _http_request(self, method: str, url: str, body: Any = None, headers_json: str = "") -> dict:
-        allowed = self.manifest.get("http_allowed_urls") or []
-        ok = any(url.startswith(a.rstrip("*")) or a == "https://*" or a == "*" for a in allowed)
+        raw_allowed = self.manifest.get("http_allowed_urls") or []
+        allowed = (
+            raw_allowed if isinstance(raw_allowed, (list, tuple))
+            else [raw_allowed]
+        )
+        allowed = [str(value) for value in allowed if value is not None]
+        configured_hash = getattr(self, "allow_js_http_hash", None)
+        if configured_hash is not None:
+            manifest_hash = "|".join(allowed)
+            if manifest_hash != configured_hash:
+                raise PermissionError(
+                    "当前 JS 脚本未获得 HTTP 权限：ScriptGroup 的 "
+                    "AllowJsHTTPHash 与 manifest http_allowed_urls 不匹配"
+                )
+        def matches(pattern: str) -> bool:
+            # Match BetterGI's anchored wildcard semantics.  A literal URL
+            # must match exactly; '*' is the only wildcard character.
+            expression = re.escape(pattern).replace(r"\*", ".*")
+            return re.fullmatch(expression, url) is not None
+
+        ok = any(matches(pattern) for pattern in allowed)
         if not ok:
             raise PermissionError(f"URL 未在 manifest http_allowed_urls 中声明: {url}")
         headers = json.loads(headers_json) if headers_json else {}
@@ -259,8 +306,25 @@ class JsScriptRuntime:
             data = (body if isinstance(body, (bytes, str)) else json.dumps(body))
             data = data.encode() if isinstance(data, str) else data
         req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return {"status_code": resp.status, "headers": dict(resp.headers), "body": resp.read().decode("utf-8", "replace")}
+
+        def response_payload(response: Any, status_code: int | None = None) -> dict:
+            return {
+                "status_code": int(
+                    response.status if status_code is None else status_code
+                ),
+                "headers": dict(response.headers),
+                "body": response.read().decode("utf-8", "replace"),
+            }
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return response_payload(resp)
+        except HTTPError as error:
+            # HttpClient.SendAsync returns a response for HTTP 4xx/5xx and
+            # lets scripts inspect status_code/body.  urllib raises those
+            # statuses as HTTPError, so convert only that protocol-level
+            # failure while preserving network/permission exceptions.
+            return response_payload(error, error.code)
 
     def _ensure_js_timers(self, global_object: Any) -> None:
         """Keep BetterGI's timer globals available in every JS runtime.
@@ -444,16 +508,22 @@ class JsScriptRuntime:
         expose("log", wrap(_Log()), proxy=False)
 
         class _Notification:
+            @staticmethod
+            def _send(msg, result):
+                if getattr(rt, "allow_js_notification", None) is False:
+                    log(f"[通知] ScriptGroup 项目未授权 JS 通知，消息被拦截: {msg}")
+                    return
+                rt._notification_service.notify(
+                    "JsNotification", str(msg), result=result, from_js=True,
+                )
+
             def send(self, msg):
                 log(f"[通知] {msg}")
-                rt._notification_service.notify(
-                    "JsNotification", str(msg), result="Success", from_js=True,
-                )
+                self._send(msg, "Success")
+
             def error(self, msg):
                 log(f"[通知-错误] {msg}")
-                rt._notification_service.notify(
-                    "JsNotification", str(msg), result="Fail", from_js=True,
-                )
+                self._send(msg, "Fail")
         expose("notification", wrap(_Notification()), proxy=False)
         g["settings"] = pm.eval("(o) => o")(self.settings)
 
@@ -526,7 +596,10 @@ class JsScriptRuntime:
                 return bool(_cv2.imwrite(str(out), bgr))
             def readPathSync(self, folder):
                 base = rt._resolve(folder)
-                return [str(p.relative_to(rt.script_dir)) for p in sorted(base.iterdir())]
+                return [
+                    rt._visible_path(p, rt.script_dir)
+                    for p in sorted(base.iterdir())
+                ]
             def createDirectory(self, folder):
                 try:
                     rt._resolve(folder).mkdir(parents=True, exist_ok=True)
@@ -569,7 +642,7 @@ class JsScriptRuntime:
                 if not base.is_dir():
                     return []
                 return [
-                    str(path.relative_to(self.root))
+                    JsScriptRuntime._visible_path(path, self.root)
                     for path in sorted(base.iterdir())
                 ]
 
@@ -1194,7 +1267,7 @@ class JsScriptRuntime:
                     if not base.is_dir():
                         return []
                     return [
-                        str(child.relative_to(rt.pathing_root))
+                        rt._visible_path(child, rt.pathing_root)
                         for child in sorted(base.iterdir())
                     ]
                 except (OSError, ValueError, PermissionError) as error:
@@ -1222,14 +1295,25 @@ class JsScriptRuntime:
         )
 
         class _CTS:
-            def __init__(self):
+            def __init__(self, linked_cancelled: Callable[[], bool] | None = None):
                 self._cancelled = False
                 self._callbacks = []
                 self._timer = None
+                self._linked_cancelled = linked_cancelled
+            def _runtime_cancelled(self) -> bool:
+                if self._linked_cancelled is None:
+                    return False
+                try:
+                    return bool(self._linked_cancelled())
+                except Exception:
+                    # A linked token must remain usable while the runtime is
+                    # tearing down. Treat a failed status probe as the local
+                    # token state instead of hiding the original task error.
+                    return False
             @property
-            def cancelled(self): return self._cancelled
+            def cancelled(self): return self._cancelled or self._runtime_cancelled()
             @property
-            def isCancellationRequested(self): return self._cancelled
+            def isCancellationRequested(self): return self.cancelled
             @property
             def canBeCanceled(self): return True
             def cancel(self, _throw_on_first=False):
@@ -1388,8 +1472,10 @@ class JsScriptRuntime:
                     log(f"[dispatcher] {e}")
             def clearAllTriggers(self):
                 task_dispatcher.clear_all_triggers()
-            def getLinkedCancellationTokenSource(self): return wrap(_CTS())
-            def getLinkedCancellationToken(self): return wrap(_CTS())
+            def getLinkedCancellationTokenSource(self):
+                return wrap(_CTS(linked_cancelled=lambda: rt.cancelled))
+            def getLinkedCancellationToken(self):
+                return wrap(_CTS(linked_cancelled=lambda: rt.cancelled))
 
             # ClearScript exposes the dispatcher with case-insensitive member
             # lookup.  PythonMonkey can proxy most host objects, but the

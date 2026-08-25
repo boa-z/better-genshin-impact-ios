@@ -49,6 +49,26 @@ def test_genshin_tp_decodes_string_force_values():
     task.tp.assert_called_once_with(4328.0, 3960.0, force=False)
 
 
+def test_genshin_tp_accepts_string_coordinate_overload():
+    task = MagicMock()
+    task.tp.return_value = True
+    api = _api_with_task(task)
+
+    assert api.tp("4328.25", "3960.75")
+
+    task.tp.assert_called_once_with(4328.25, 3960.75, force=False)
+
+
+def test_genshin_tp_invalid_string_coordinate_matches_try_parse_zero():
+    task = MagicMock()
+    task.tp.return_value = True
+    api = _api_with_task(task)
+
+    assert api.tp("not-a-number", "")
+
+    task.tp.assert_called_once_with(0.0, 0.0, force=False)
+
+
 def test_genshin_tp_does_not_retry_when_point_panel_is_not_opened():
     from bgi_touch.pathing.tp import TeleportPanelNotOpenedError
 
@@ -391,6 +411,49 @@ def test_genshin_matching_method_full_overload_preserves_map_and_cache():
 
     assert api.getPositionFromMapWithMatchingMethod("层岩巨渊", "SIFT", 1200) == "position"
     api.getPositionFromMap.assert_called_once_with("层岩巨渊", 1200)
+
+
+def test_genshin_local_position_overload_uses_pixel_match_not_stable_cache():
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    frame = object()
+    positioner = SimpleNamespace(
+        set_prior=Mock(),
+        get_position_pixel=Mock(return_value=(100.0, 200.0)),
+        locator=SimpleNamespace(
+            config=SimpleNamespace(
+                image_to_world=lambda x, y: (321.5, 654.25),
+            ),
+        ),
+    )
+    api = GenshinApi.__new__(GenshinApi)
+    api.ctx = SimpleNamespace(capture_bgr=Mock(return_value=frame))
+    api._positioner_for = Mock(return_value=positioner)
+
+    point = api.getPositionFromMap("Teyvat", "12.5", "24.5")
+
+    assert (point.x, point.y) == (321.5, 654.25)
+    positioner.set_prior.assert_called_once_with(12.5, 24.5)
+    positioner.get_position_pixel.assert_called_once_with(frame)
+
+
+def test_genshin_position_cache_overload_accepts_numeric_string():
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    frame = object()
+    positioner = SimpleNamespace(
+        get_position_stable=Mock(return_value=(1.0, 2.0)),
+    )
+    api = GenshinApi.__new__(GenshinApi)
+    api.ctx = SimpleNamespace(capture_bgr=Mock(return_value=frame))
+    api._positioner_for = Mock(return_value=positioner)
+
+    point = api.getPositionFromMap("Teyvat", "1200")
+
+    assert (point.x, point.y) == (1.0, 2.0)
+    positioner.get_position_stable.assert_called_once_with(
+        frame, cache_time_ms=1200,
+    )
 
 
 def test_clear_party_cache_discards_team_mapping_without_resetting_map_position():

@@ -61,6 +61,55 @@ def test_script_group_loads_original_bettergi_schema_and_skips_disabled(tmp_path
     assert runner.groups[0].projects[0].settings == {"count": 3}
 
 
+def test_script_group_round_trips_bettergi_schema_and_saves_atomically(tmp_path: Path):
+    from bgi_touch.tasks.script_group import ScriptGroup
+
+    source = _write_group(
+        tmp_path / "daily.json",
+        [{
+            "Name": "采集脚本",
+            "FolderName": "collect",
+            "Type": "Javascript",
+            "Status": "Enabled",
+            "Schedule": "Daily",
+            "RunNum": 2,
+            "JsScriptSettingsObject": {"count": 3},
+            "AllowJsNotification": False,
+            "AllowJsHTTPHash": "sha256:demo",
+        }],
+    )
+
+    group = ScriptGroup.load(source)
+    destination = tmp_path / "saved" / "daily.json"
+    assert group.save(destination) == destination.resolve()
+    assert group.source_path == destination.resolve()
+    assert not list(destination.parent.glob(".daily.json.*.tmp"))
+
+    saved = json.loads(destination.read_text(encoding="utf-8"))
+    assert saved["Name"] == "每日配置"
+    assert saved["Projects"][0]["JsScriptSettingsObject"] == {"count": 3}
+    assert saved["Projects"][0]["AllowJsNotification"] is False
+    assert saved["Projects"][0]["AllowJsHTTPHash"] == "sha256:demo"
+    restored = ScriptGroup.load(destination)
+    assert restored.projects[0].folder_name == "collect"
+    assert restored.projects[0].run_num == 2
+
+
+def test_script_group_save_failure_keeps_existing_file_and_cleans_temp(tmp_path: Path):
+    from bgi_touch.tasks.script_group import ScriptGroup
+
+    destination = tmp_path / "daily.json"
+    destination.write_text("old", encoding="utf-8")
+    group = ScriptGroup("每日配置", [])
+
+    with patch("bgi_touch.tasks.script_group.os.replace", side_effect=OSError("busy")):
+        with pytest.raises(OSError, match="busy"):
+            group.save(destination)
+
+    assert destination.read_text(encoding="utf-8") == "old"
+    assert not list(tmp_path.glob(".daily.json.*.tmp"))
+
+
 def test_script_group_progress_resumes_at_failed_project(tmp_path: Path):
     from bgi_touch.tasks.script_group import ScriptGroupRunner
     from bgi_touch.tasks.task_progress import TaskProgressStore
@@ -132,7 +181,11 @@ def test_script_group_dispatches_javascript_keymouse_pathing_and_shell(tmp_path:
     group = ScriptGroup(
         "测试组",
         [
-            ScriptGroupProject("JS", "demo", "Javascript", settings={"n": 2}),
+            ScriptGroupProject(
+                "JS", "demo", "Javascript", settings={"n": 2},
+                allow_js_notification=False,
+                allow_js_http_hash="https://example.test/*",
+            ),
             ScriptGroupProject("macro.json", "", "KeyMouse"),
             ScriptGroupProject("route.json", "folder", "Pathing"),
             ScriptGroupProject("echo ok", "", "Shell"),
@@ -170,6 +223,8 @@ def test_script_group_dispatches_javascript_keymouse_pathing_and_shell(tmp_path:
 
     assert runtime.call_args.args[1] == js
     assert runtime.call_args.kwargs["settings"] == {"n": 2}
+    assert runtime.call_args.kwargs["allow_js_notification"] is False
+    assert runtime.call_args.kwargs["allow_js_http_hash"] == "https://example.test/*"
     player.return_value.play.assert_called_once_with({"macroEvents": []})
     assert executor.call_args.kwargs["farming_route_info"]["group_name"] == "测试组"
     assert executor.call_args.kwargs["pathing_config"].hurry_on_avatar == "夜兰"

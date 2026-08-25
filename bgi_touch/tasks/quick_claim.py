@@ -8,6 +8,7 @@ from typing import Callable
 
 from ..engine.context import GameContext
 from ..engine.recognition import Mat, RecognitionObject
+from .common_jobs import exclusive_realtime_triggers
 
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets" / "templates" / "quick_claim"
@@ -72,26 +73,26 @@ class QuickClaimRewardTask:
         self.ctx.sleep(300)
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> int:
-        deadline = time.monotonic() + self.timeout_s
-        clicks = 0
-        scrolls = 0
-        while clicks < self.max_clicks and time.monotonic() < deadline:
-            if cancelled and cancelled():
+        with exclusive_realtime_triggers(self.ctx):
+            deadline = time.monotonic() + self.timeout_s
+            clicks = 0
+            scrolls = 0
+            while clicks < self.max_clicks and time.monotonic() < deadline:
+                if cancelled and cancelled():
+                    break
+                candidates = self._find_candidates(self.ctx.capture_region())
+                if candidates:
+                    name, candidate = candidates[0]
+                    candidate.click()
+                    clicks += 1
+                    self.log(f"[QuickClaimReward] 点击{name}图标（{clicks}）")
+                    self._dismiss_continue()
+                    self.ctx.sleep(180)
+                    continue
+                if self.scroll_down and scrolls < self.max_scrolls:
+                    self._scroll()
+                    scrolls += 1
+                    continue
                 break
-            candidates = self._find_candidates(self.ctx.capture_region())
-            if candidates:
-                name, candidate = candidates[0]
-                candidate.click()
-                clicks += 1
-                self.log(f"[QuickClaimReward] 点击{name}图标（{clicks}）")
-                self._dismiss_continue()
-                self.ctx.sleep(180)
-                continue
-            if self.scroll_down and scrolls < self.max_scrolls:
-                self._scroll()
-                scrolls += 1
-                continue
-            break
-        self.log(f"[QuickClaimReward] 本次领取完成，共点击 {clicks} 个图标")
-        return clicks
-
+            self.log(f"[QuickClaimReward] 本次领取完成，共点击 {clicks} 个图标")
+            return clicks

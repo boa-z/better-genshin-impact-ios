@@ -564,14 +564,18 @@ function ensureMask(item) {
     shell.append(iframe, close); $('#maskLayer').append(shell);
     state = {shell, iframe, loaded:false, pending:[]};
     iframe.onload = () => {
-      state.loaded = true;
-      state.pending.splice(0).forEach(message => dispatchMask(item.id, message));
+      markMaskReady(item.id);
     };
     iframe.src = maskAssetUrl(item);
     maskFrames.set(item.id, state);
   }
   state.shell.classList.toggle('click-through', !!item.clickThrough);
   return state;
+}
+function markMaskReady(id) {
+  const state = maskFrames.get(id); if (!state) return;
+  state.loaded = true;
+  state.pending.splice(0).forEach(message => dispatchMask(id, message));
 }
 function dispatchMask(id, message) {
   const state = maskFrames.get(id); if (!state) return;
@@ -592,10 +596,21 @@ function syncMasks(windows) {
 window.addEventListener('message', event => {
   if (event.origin !== location.origin) return;
   const message = event.data || {};
+  if (message.type === 'bgi-html-mask-ready') {
+    const state = maskFrames.get(message.windowId);
+    if (state && event.source === state.iframe.contentWindow) {
+      markMaskReady(message.windowId);
+    }
+    return;
+  }
   if (message.type === 'bgi-key-mouse-hook') {
+    const state = maskFrames.get(message.windowId);
+    if (!state || event.source !== state.iframe.contentWindow) return;
     hookEvent(message.event || {}); return;
   }
   if (message.type !== 'bgi-html-mask' || !maskFrames.has(message.windowId)) return;
+  const state = maskFrames.get(message.windowId);
+  if (!state || event.source !== state.iframe.contentWindow) return;
   post(`/api/html-masks/${encodeURIComponent(message.windowId)}/message`, {
     url: message.url || '', data: message.data,
     requestId: message.requestId || null

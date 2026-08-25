@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable, Mapping
 from ..engine.context import GameContext
 from ..engine.genshin_api import GenshinApi
 from ..engine.recognition import RecognitionObject
+from .common_jobs import exclusive_realtime_triggers
 
 
 @dataclass(frozen=True)
@@ -162,17 +163,18 @@ class UseRedemptionCodeTask:
         return False
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> dict[str, bool]:
-        deadline = time.monotonic() + self.timeout_s
-        api = GenshinApi(self.ctx, log=self.log)
-        if not api.returnMainUi() or not self._open_redeem_dialog(deadline):
-            raise RuntimeError("无法打开设置中的兑换码界面")
-        results: dict[str, bool] = {}
-        try:
-            for item in self.codes:
-                if time.monotonic() >= deadline or (cancelled and cancelled()):
-                    break
-                self.log(f"[UseRedemptionCode] 输入兑换码 {item.code}")
-                results[item.code] = self._use_one(item, deadline)
-            return results
-        finally:
-            api.returnMainUi()
+        with exclusive_realtime_triggers(self.ctx):
+            deadline = time.monotonic() + self.timeout_s
+            api = GenshinApi(self.ctx, log=self.log)
+            if not api.returnMainUi() or not self._open_redeem_dialog(deadline):
+                raise RuntimeError("无法打开设置中的兑换码界面")
+            results: dict[str, bool] = {}
+            try:
+                for item in self.codes:
+                    if time.monotonic() >= deadline or (cancelled and cancelled()):
+                        break
+                    self.log(f"[UseRedemptionCode] 输入兑换码 {item.code}")
+                    results[item.code] = self._use_one(item, deadline)
+                return results
+            finally:
+                api.returnMainUi()

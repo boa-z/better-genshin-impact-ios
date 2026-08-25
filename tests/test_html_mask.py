@@ -116,6 +116,8 @@ def test_webui_injects_html_mask_bridge_and_serves_assets(tmp_path):
         assert "bgi-html-mask" in body
         assert "scopedStorage" in body
         assert "storageNamespace" in body
+        assert "const existingMask = window.htmlMask" in body
+        assert "bgi-html-mask-ready" in body
         assert body.lower().index("window.htmlmask") < body.lower().index("<body")
         assert f'/api/html-masks/{window_id}/files/' in body
 
@@ -123,6 +125,16 @@ def test_webui_injects_html_mask_bridge_and_serves_assets(tmp_path):
         assert asset.path == (tmp_path / "asset.txt").resolve()
     finally:
         html_mask_manager.close(window_id)
+
+
+def test_webui_mask_page_tracks_iframe_ready_and_source():
+    from bgi_touch.webui.server import STATIC_DIR
+
+    page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert "function markMaskReady" in page
+    assert "bgi-html-mask-ready" in page
+    assert "event.source !== state.iframe.contentWindow" in page
 
 
 def test_js_runtime_exposes_html_mask_lifecycle(tmp_path):

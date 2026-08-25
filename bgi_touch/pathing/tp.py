@@ -42,6 +42,11 @@ MAX_VIEW_PX_PER_FEATURE = 20.0
 MAP_MOVE_MAX_ITERATIONS = 24
 TP_MOVE_MAX_ITERATIONS = 28
 MAP_MOVE_STAGNANT_LIMIT = 2
+# A map locator can report a small, plausible center drift while the target
+# itself is not getting any closer. Treat that as a separate failure mode
+# from an exactly duplicated frame so a bad gesture/profile cannot keep
+# issuing swipes until the iteration budget is exhausted.
+MAP_MOVE_DISTANCE_STAGNANT_LIMIT = 3
 MAP_MOVE_PROGRESS_EPSILON = 1.5
 # SIFT coordinates are in the 256/1024 feature space, while the target
 # distance in the diagnostic log is in device pixels.  Use a small relative
@@ -524,6 +529,7 @@ class TpTask:
         last_distance: float | None = None
         last_expected_direction: tuple[float, float] | None = None
         stagnant_iterations = 0
+        distance_stagnant_iterations = 0
         recovered = False
         pan_sign = -1.0
         feedback_frame = None
@@ -549,6 +555,24 @@ class TpTask:
                 f"比例{px_per_map:.2f} 目标偏移 {dist:.0f}px"
             )
 
+            distance_margin = max(
+                MAP_MOVE_DISTANCE_EPSILON,
+                0.02 * max(
+                    last_distance if last_distance is not None else dist,
+                    dist,
+                ),
+            )
+            distance_not_reduced = (
+                last_distance is not None
+                and dist >= last_distance - distance_margin
+            )
+            if last_distance is None:
+                distance_stagnant_iterations = 0
+            elif distance_not_reduced:
+                distance_stagnant_iterations += 1
+            else:
+                distance_stagnant_iterations = 0
+
             if last_view is not None and last_expected_direction is not None:
                 actual_dx = vx - last_view[0]
                 actual_dy = vy - last_view[1]
@@ -570,14 +594,6 @@ class TpTask:
                         actual_dx * last_expected_direction[0]
                         + actual_dy * last_expected_direction[1]
                     ) / (actual_distance * expected_distance)
-                    distance_margin = max(
-                        MAP_MOVE_DISTANCE_EPSILON,
-                        0.02 * max(last_distance or dist, dist),
-                    )
-                    distance_not_reduced = (
-                        last_distance is not None
-                        and dist >= last_distance - distance_margin
-                    )
                     direction_is_wrong = projection < -MAP_MOVE_DIRECTION_COS_EPSILON
                     direction_is_ambiguous = (
                         distance_not_reduced
@@ -605,11 +621,18 @@ class TpTask:
                 stagnant_iterations = 0
             last_view = (vx, vy)
             last_distance = dist
+            recovery_reason = None
             if stagnant_iterations >= MAP_MOVE_STAGNANT_LIMIT:
-                if recovered or not self._recover_device_channel("连续拖动后地图视野未变化"):
+                recovery_reason = "连续拖动后地图视野未变化"
+            elif distance_stagnant_iterations >= MAP_MOVE_DISTANCE_STAGNANT_LIMIT:
+                recovery_reason = "目标距离连续未缩小"
+            if recovery_reason is not None:
+                if recovered or not self._recover_device_channel(recovery_reason):
+                    self.log(f"[tp] {recovery_reason}，恢复后仍未收敛")
                     raise RuntimeError(error_message)
                 recovered = True
                 stagnant_iterations = 0
+                distance_stagnant_iterations = 0
                 last_view = None
                 last_distance = None
                 last_expected_direction = None

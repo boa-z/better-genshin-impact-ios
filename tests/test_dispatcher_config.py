@@ -84,3 +84,37 @@ def test_timer_dispatcher_coerces_string_boolean_values():
         "config": {"hotkeyTpEnabled": "false"},
     })
     assert ctx.enable_trigger.call_args.kwargs["hotkey_tp_enabled"] is False
+
+
+def test_add_trigger_preserves_timer_config_without_clearing_existing_triggers():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    ctx = SimpleNamespace(
+        triggers=SimpleNamespace(clear=Mock()),
+        enable_trigger=Mock(),
+    )
+    dispatcher = TaskDispatcher(ctx)
+
+    dispatcher.add_trigger({
+        "name": "AutoPick",
+        "config": {
+            "forceInteraction": True,
+            "pickKey": "G",
+            "mode": "Blacklist",
+            "blackList": ["进入"],
+        },
+    })
+
+    ctx.triggers.clear.assert_not_called()
+    assert ctx.enable_trigger.call_args == (("AutoPick",), {
+        "force_interaction": True,
+        "pick_key": "G",
+        "mode": "Blacklist",
+        "text_list": None,
+        "whitelist": None,
+        "blacklist": ["进入"],
+        "fuzzy_blacklist": None,
+        "whitelist_exclusions": None,
+        "blacklist_mode_pick_enabled": False,
+        "whitelist_mode_do_not_pick_enabled": True,
+    })

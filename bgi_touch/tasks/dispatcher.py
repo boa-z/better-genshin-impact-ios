@@ -1471,9 +1471,13 @@ class TaskDispatcher:
             self.ctx, party_slots=self.party_slots, log=self.log
         ).run(str(script))
 
-    def add_timer(self, timer: Any) -> None:
+    def add_timer(self, timer: Any, *, clear_existing: bool = True) -> None:
         name = str(_value(timer, "name", timer))
-        self.ctx.triggers.clear()
+        # BetterGI's AddTimer starts a fresh realtime-trigger set, while
+        # AddTrigger appends/replaces only the named trigger.  Both entry
+        # points share the same external-config conversion below.
+        if clear_existing:
+            self.ctx.triggers.clear()
         config = _value(timer, "config", {}) or {}
         if name == "AutoPick":
             force_interaction = _value(
@@ -1481,10 +1485,21 @@ class TaskDispatcher:
                 "forceInteraction",
                 _value(config, "force_interaction", False),
             )
+            pick_key = _value(
+                config,
+                "pickKey",
+                _value(config, "pick_key", "F"),
+            )
             self.ctx.enable_trigger(
                 name,
                 force_interaction=_boolean(force_interaction, False),
+                pick_key=str(pick_key or "F").strip() or "F",
                 mode=_value(config, "mode", "Whitelist"),
+                text_list=_value(
+                    config,
+                    "textList",
+                    _value(config, "text_list", None),
+                ),
                 whitelist=_value(
                     config,
                     "whitelist",
@@ -1679,7 +1694,7 @@ class TaskDispatcher:
             self.ctx.enable_trigger(name)
 
     def add_trigger(self, trigger: Any) -> None:
-        self.ctx.enable_trigger(str(_value(trigger, "name", trigger)))
+        self.add_timer(trigger, clear_existing=False)
 
     def clear_all_triggers(self) -> None:
         self.ctx.triggers.clear()

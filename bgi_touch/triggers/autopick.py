@@ -61,6 +61,7 @@ class AutoPickTrigger:
         ctx: GameContext,
         blacklist: list[str] | None = None,
         whitelist: list[str] | None = None,
+        text_list: list[str] | None = None,
         fuzzy_blacklist: list[str] | None = None,
         whitelist_exclusions: list[str] | None = None,
         blacklist_mode_pick_enabled: bool = False,
@@ -68,6 +69,7 @@ class AutoPickTrigger:
         mode: str = "Whitelist",
         log: Callable[[str], None] = print,
         force_interaction: bool = False,
+        pick_key: str = "F",
     ):
         self.ctx = ctx
         self.enabled = True
@@ -82,6 +84,9 @@ class AutoPickTrigger:
         custom_whitelist = {
             _normalize_text(value) for value in (whitelist or []) if _normalize_text(value)
         }
+        self.text_list = frozenset(
+            _normalize_text(value) for value in (text_list or []) if _normalize_text(value)
+        )
         selected_whitelist = set(_default_whitelist()) | custom_whitelist
         exclusions = {
             _normalize_text(value) for value in (whitelist_exclusions or []) if _normalize_text(value)
@@ -93,6 +98,7 @@ class AutoPickTrigger:
         self.blacklist_mode_pick_enabled = bool(blacklist_mode_pick_enabled)
         self.log = log
         self.force_interaction = bool(force_interaction)
+        self.pick_key = str(pick_key or "F").strip() or "F"
         self._last_action_at = 0.0
         self._last_text = ""
         # 交互列表出现在交互按钮右侧（ref 空间），OCR 该竖条区域
@@ -107,6 +113,10 @@ class AutoPickTrigger:
             self._press_interaction()
             return
         hits = region.find_multi(RecognitionObject.ocr(*self.roi), limit=5)
+        # OCR engines do not promise reading order.  The mobile interaction
+        # list is vertical, so process the top-most candidate first and keep
+        # the input edge deterministic when several drops are visible.
+        hits = sorted(hits, key=lambda hit: (float(hit.y), float(hit.x)))
         for h in hits:
             text = _normalize_text(h.text)
             if not self._should_pick(text):
@@ -114,9 +124,12 @@ class AutoPickTrigger:
             now = time.monotonic()
             if text == self._last_text and now - self._last_action_at < 1.2:
                 continue
-            # 命中可拾取物：直接点该条目（移动端点条目即拾取）
+            # 命中可拾取物：复用 BetterGI 的拾取/交互键。DeviceHub profile
+            # 会把该键解析为 KeyF（或用户配置的自定义键），避免直接 tap
+            # OCR 文字区域而绕过 profile 会话。
             self.log(f"[AutoPick] 拾取: {text}")
-            h.click()
+            if not self._press_interaction():
+                return
             self._last_text = text
             self._last_action_at = now
             return
@@ -126,6 +139,11 @@ class AutoPickTrigger:
         text = _normalize_text(text)
         if len(text) <= 1 or self._always_excluded(text):
             return False
+        # RealtimeTimer("AutoPick", { TextList: [...] }) is the upstream
+        # script-level escape hatch for dialogue/action labels that are not
+        # part of the persistent pick lists.  An explicit list is exclusive.
+        if getattr(self, "text_list", ()):
+            return text in self.text_list
         if self.mode == "Whitelist":
             return text in self.whitelist
         if self.blacklist_mode_pick_enabled and text in self.blacklist_pick_list:
@@ -141,18 +159,27 @@ class AutoPickTrigger:
             return True
         if "霜月" in text and "坊" in text:
             return True
+        if "叮铃" in text or "眶螂" in text:
+            return True
+        if "蛋卷" in text and "坊" in text:
+            return True
+        if any(value in text for value in ("西风成垒", "望崖营壁", "魔女的花园")):
+            return True
+        if "月谕圣牌" in text:
+            return True
         return "我在" in text and any(
             value in text for value in ("声望", "回声", "悬木人", "流泉")
         )
 
-    def _press_interaction(self) -> None:
+    def _press_interaction(self) -> bool:
         now = time.monotonic()
         if now - self._last_action_at < 0.8:
-            return
-        self.ctx.input.key_press("F")
+            return False
+        self.ctx.input.key_press(getattr(self, "pick_key", "F"))
         self.log("[AutoPick] 直接交互")
         self._last_text = ""
         self._last_action_at = now
+        return True
 
     def _is_gameplay_frame(self, region: ImageRegion) -> bool:
         """Require gameplay HUD and explicitly reject the big-map overlay.

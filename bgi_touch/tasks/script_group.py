@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -138,6 +140,64 @@ class ScriptGroup:
         if not isinstance(raw, Mapping):
             raise ValueError(f"ScriptGroup 根节点必须是对象：{source}")
         return cls.from_mapping(raw, source_path=source)
+
+    def to_mapping(self) -> dict[str, Any]:
+        """Serialize using BetterGI's persisted ScriptGroup property names."""
+        return {
+            "Name": self.name,
+            "Config": self.config,
+            "Projects": [
+                {
+                    "Name": project.name,
+                    "FolderName": project.folder_name,
+                    "Type": project.type,
+                    "Status": project.status,
+                    "Schedule": project.schedule,
+                    "RunNum": project.run_num,
+                    "JsScriptSettingsObject": project.settings,
+                    "AllowJsNotification": project.allow_js_notification,
+                    "AllowJsHTTPHash": project.allow_js_http_hash,
+                }
+                for project in self.projects
+            ],
+        }
+
+    def to_json(self) -> str:
+        """Return a portable UTF-8 JSON representation of this group."""
+        return json.dumps(self.to_mapping(), ensure_ascii=False, indent=2) + "\n"
+
+    def save(self, path: str | Path | None = None) -> Path:
+        """Atomically persist this group and return the final file path.
+
+        BetterGI edits a group in memory and then replaces the old JSON file.
+        A direct write can leave a truncated configuration when the process is
+        interrupted, which is especially easy to hit while a long-running
+        mobile task is being stopped.  Use a sibling temporary file, flush it
+        to disk, and replace the destination in one filesystem operation.
+        """
+        raw_path = path if path is not None else self.source_path
+        if raw_path is None:
+            raise ValueError("ScriptGroup 未指定保存路径")
+        destination = Path(raw_path).expanduser().resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as stream:
+                stream.write(self.to_json())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, destination)
+        finally:
+            try:
+                Path(temporary_name).unlink()
+            except FileNotFoundError:
+                pass
+        self.source_path = destination
+        return destination
 
 
 class ScriptGroupCancelled(RuntimeError):
@@ -337,6 +397,8 @@ class ScriptGroupRunner:
                 party_slots=self.party_slots,
                 pathing_root=self.roots.pathing,
                 pathing_config=group.config,
+                allow_js_notification=project.allow_js_notification,
+                allow_js_http_hash=project.allow_js_http_hash,
                 log=self.log,
             ).run()
             return

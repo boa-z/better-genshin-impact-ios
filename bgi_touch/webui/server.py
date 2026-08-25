@@ -880,7 +880,7 @@ def _mask_bridge(window_id: str, storage_namespace: str | None = None) -> str:
     parent.postMessage({{type:'bgi-html-mask', windowId, url, data, requestId}}, location.origin);
   }}
   function postKey(type, event) {{
-    parent.postMessage({{type:'bgi-key-mouse-hook', event:{{
+    parent.postMessage({{type:'bgi-key-mouse-hook', windowId, event:{{
       type, key:event.key, code:event.code, repeat:event.repeat,
       altKey:event.altKey, ctrlKey:event.ctrlKey,
       shiftKey:event.shiftKey, metaKey:event.metaKey
@@ -888,38 +888,48 @@ def _mask_bridge(window_id: str, storage_namespace: str | None = None) -> str:
   }}
   window.addEventListener('keydown', event => postKey('keyDown', event), true);
   window.addEventListener('keyup', event => postKey('keyUp', event), true);
-  window.htmlMask = {{
-    onMessage: null,
-    send(url, data) {{ post(url, data ?? {{}}, null); }},
-    request(url, data) {{
+  // BetterGI injects this object before page scripts run. Preserve an
+  // object/polyfill that the document may already have created, especially
+  // its onMessage assignment, while replacing transport methods with the
+  // local iframe bridge.
+  const existingMask = window.htmlMask;
+  const mask = existingMask && (
+    typeof existingMask === 'object' || typeof existingMask === 'function'
+  ) ? existingMask : {{}};
+  if (!('onMessage' in mask)) mask.onMessage = null;
+  mask.send = function(url, data) {{ post(url, data ?? {{}}, null); }};
+  mask.request = function(url, data) {{
       const requestId = '__req_' + (++sequence);
       return new Promise((resolve, reject) => {{
         callbacks.set(requestId, {{resolve, reject}});
         post(url, data ?? {{}}, requestId);
       }});
-    }},
-    _dispatch(message) {{
-      const callback = message.requestId && callbacks.get(message.requestId);
-      if (callback) {{
-        callbacks.delete(message.requestId);
-        callback.resolve(message);
-        return;
-      }}
-      if (typeof this.onMessage !== 'function') return;
-      const result = this.onMessage(message);
-      if (message.requestId && result !== undefined) {{
-        Promise.resolve(result).then(data =>
-          post('/__response__', data ?? null, message.requestId));
-      }}
+  }};
+  mask._dispatch = function(message) {{
+    if (!message || typeof message !== 'object') return;
+    const callback = message.requestId && callbacks.get(message.requestId);
+    if (callback) {{
+      callbacks.delete(message.requestId);
+      callback.resolve(message);
+      return;
+    }}
+    const handler = mask.onMessage;
+    if (typeof handler !== 'function') return;
+    const result = handler.call(mask, message);
+    if (message.requestId && result !== undefined) {{
+      Promise.resolve(result).then(data =>
+        post('/__response__', data ?? null, message.requestId));
     }}
   }};
+  window.htmlMask = mask;
   window.addEventListener('message', event => {{
     if (event.origin !== location.origin) return;
     const envelope = event.data || {{}};
     if (envelope.type === 'bgi-html-mask-host' && envelope.windowId === windowId) {{
-      window.htmlMask._dispatch(envelope.message);
+      mask._dispatch(envelope.message);
     }}
   }});
+  parent.postMessage({{type:'bgi-html-mask-ready', windowId}}, location.origin);
 }})();
 </script>
 """

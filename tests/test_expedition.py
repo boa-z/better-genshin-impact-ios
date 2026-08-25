@@ -46,6 +46,23 @@ def test_one_key_expedition_collects_retries_and_redispatches():
     ctx.input.release_all.assert_called_once_with()
 
 
+def test_one_key_expedition_pauses_and_restores_shared_trigger_loop():
+    from bgi_touch.tasks.expedition import OneKeyExpeditionTask
+
+    collect = Hit(True)
+    redispatch = Hit(True)
+    ctx = _context([collect, redispatch])
+    loop = SimpleNamespace(
+        pause=Mock(return_value=([], False, 1)),
+        resume=Mock(),
+    )
+    ctx.triggers = loop
+
+    assert OneKeyExpeditionTask(ctx).run()
+    loop.pause.assert_called_once_with()
+    loop.resume.assert_called_once_with(([], False, 1))
+
+
 def test_one_key_expedition_leaves_page_unchanged_when_nothing_completed():
     from bgi_touch.tasks.expedition import OneKeyExpeditionTask
 

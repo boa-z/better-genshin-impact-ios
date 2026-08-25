@@ -149,3 +149,110 @@ def test_js_notification_host_routes_send_and_error_to_service(tmp_path, monkeyp
         "result": "Fail", "from_js": True,
     }
     notification_service.close.assert_called_once_with()
+
+
+def test_js_notification_host_honors_script_group_permission(tmp_path, monkeypatch):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.notification import NotificationService
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    notification_service = SimpleNamespace(notify=Mock(), close=Mock())
+    monkeypatch.setattr(
+        NotificationService,
+        "load",
+        lambda *_args, **_kwargs: notification_service,
+    )
+    (tmp_path / "main.js").write_text(
+        'notification.send("完成"); notification.error("失败"); return "ok";',
+        encoding="utf-8",
+    )
+    input_simulator = SimpleNamespace(
+        key_down=Mock(), key_up=Mock(), key_press=Mock(), click_ref=Mock(),
+        move_camera_by=Mock(), attack=Mock(), attack_down=Mock(), attack_up=Mock(),
+        button_down=Mock(), button_up=Mock(), release_all=Mock(),
+    )
+    context = SimpleNamespace(
+        input=input_simulator,
+        device=SimpleNamespace(paste_text=Mock()),
+        transform=ScreenTransform(1920, 1080),
+        sleep=lambda _ms: None,
+    )
+
+    assert JsScriptRuntime(
+        context,
+        tmp_path,
+        allow_js_notification=False,
+        log=lambda _message: None,
+    ).run() == "ok"
+    notification_service.notify.assert_not_called()
+    notification_service.close.assert_called_once_with()
+
+
+def test_js_http_permission_hash_must_match_manifest(tmp_path):
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    runtime = JsScriptRuntime.__new__(JsScriptRuntime)
+    runtime.manifest = {"http_allowed_urls": ["https://example.test/*"]}
+    runtime.allow_js_http_hash = "https://other.test/*"
+
+    with pytest.raises(PermissionError, match="AllowJsHTTPHash"):
+        runtime._http_request("GET", "https://example.test/data")
+
+
+def test_js_http_permission_allows_matching_manifest_hash_and_url(monkeypatch):
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    runtime = JsScriptRuntime.__new__(JsScriptRuntime)
+    runtime.manifest = {"http_allowed_urls": ["https://example.test/*"]}
+    runtime.allow_js_http_hash = "https://example.test/*"
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok":true}'
+
+    monkeypatch.setattr("bgi_touch.engine.js_runtime.urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+
+    result = runtime._http_request("GET", "https://example.test/data")
+
+    assert result == {
+        "status_code": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": '{"ok":true}',
+    }
+
+
+def test_js_http_returns_http_error_responses_for_script_inspection(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    runtime = JsScriptRuntime.__new__(JsScriptRuntime)
+    runtime.manifest = {"http_allowed_urls": ["https://example.test/*"]}
+    runtime.allow_js_http_hash = "https://example.test/*"
+    monkeypatch.setattr(
+        "bgi_touch.engine.js_runtime.urllib.request.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(HTTPError(
+            "https://example.test/data",
+            429,
+            "Too Many Requests",
+            {"Retry-After": "1"},
+            io.BytesIO(b'{"retry":true}'),
+        )),
+    )
+
+    assert runtime._http_request("GET", "https://example.test/data") == {
+        "status_code": 429,
+        "headers": {"Retry-After": "1"},
+        "body": '{"retry":true}',
+    }

@@ -7,6 +7,7 @@ from typing import Callable
 
 from ..engine.context import GameContext
 from ..engine.recognition import RecognitionObject
+from .common_jobs import exclusive_realtime_triggers
 
 
 class OneKeyExpeditionTask:
@@ -53,44 +54,45 @@ class OneKeyExpeditionTask:
         return self.ctx.capture_region().find(recognition)
 
     def run(self, cancelled: Callable[[], bool] | None = None) -> bool:
-        deadline = time.monotonic() + self.timeout_s
-        try:
-            collect = None
-            for attempt in range(self.collect_retries):
-                if self._cancelled(deadline, cancelled):
+        with exclusive_realtime_triggers(self.ctx):
+            deadline = time.monotonic() + self.timeout_s
+            try:
+                collect = None
+                for attempt in range(self.collect_retries):
+                    if self._cancelled(deadline, cancelled):
+                        return False
+                    collect = self._find(self.ro_collect)
+                    if collect.is_exist():
+                        break
+                    self.log("[Expedition] 未找到全部领取按钮")
+                    if attempt + 1 < self.collect_retries:
+                        self.ctx.sleep(1000)
+                if collect is None or not collect.is_exist():
                     return False
-                collect = self._find(self.ro_collect)
-                if collect.is_exist():
-                    break
-                self.log("[Expedition] 未找到全部领取按钮")
-                if attempt + 1 < self.collect_retries:
-                    self.ctx.sleep(1000)
-            if collect is None or not collect.is_exist():
+
+                collect.click()
+                self.log("[Expedition] 全部领取")
+                self.ctx.sleep(1100)
+
+                for attempt in range(self.redispatch_retries):
+                    if self._cancelled(deadline, cancelled):
+                        return False
+                    redispatch = self._find(self.ro_redispatch)
+                    if redispatch.is_exist():
+                        redispatch.click()
+                        self.log("[Expedition] 再次派遣")
+                        self.ctx.sleep(500)
+                        if self.close_page:
+                            self.ctx.input.key_press("ESCAPE")
+                            self.ctx.sleep(250)
+                        self.log("[Expedition] 完成")
+                        return True
+                    if attempt + 1 < self.redispatch_retries:
+                        self.ctx.sleep(1000)
+                self.log("[Expedition] 未检测到再次派遣按钮")
                 return False
-
-            collect.click()
-            self.log("[Expedition] 全部领取")
-            self.ctx.sleep(1100)
-
-            for attempt in range(self.redispatch_retries):
-                if self._cancelled(deadline, cancelled):
-                    return False
-                redispatch = self._find(self.ro_redispatch)
-                if redispatch.is_exist():
-                    redispatch.click()
-                    self.log("[Expedition] 再次派遣")
-                    self.ctx.sleep(500)
-                    if self.close_page:
-                        self.ctx.input.key_press("ESCAPE")
-                        self.ctx.sleep(250)
-                    self.log("[Expedition] 完成")
-                    return True
-                if attempt + 1 < self.redispatch_retries:
-                    self.ctx.sleep(1000)
-            self.log("[Expedition] 未检测到再次派遣按钮")
-            return False
-        except Exception as error:
-            self.log(f"[Expedition] 执行失败：{error}")
-            return False
-        finally:
-            self.ctx.input.release_all()
+            except Exception as error:
+                self.log(f"[Expedition] 执行失败：{error}")
+                return False
+            finally:
+                self.ctx.input.release_all()

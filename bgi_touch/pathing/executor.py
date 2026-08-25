@@ -633,4 +633,9 @@ class PathingExecutor:
     # ---- actions ----
 
     def _do_action(self, wp: Waypoint) -> None:
-        self.actions.run(wp)
+        if self.actions.run(wp):
+            return
+        action = wp.action.strip() or "<empty>"
+        raise RuntimeError(
+            f"[pathing] 路点 {wp.id} 动作 {action} 未支持，已停止路线"
+        )

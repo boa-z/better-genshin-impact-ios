@@ -310,6 +310,8 @@ def test_dispatcher_passes_bettergi_force_interaction_config():
         "name": "AutoPick",
         "config": {
             "forceInteraction": True,
+            "pickKey": "G",
+            "textList": ["调查"],
             "mode": "Blacklist",
             "blackList": ["调查"],
             "fuzzyBlacklist": ["进入"],
@@ -321,6 +323,8 @@ def test_dispatcher_passes_bettergi_force_interaction_config():
     })
     assert ctx.calls == [(('AutoPick',), {
         "force_interaction": True,
+        "pick_key": "G",
+        "text_list": ["调查"],
         "mode": "Blacklist",
         "whitelist": ["甜甜花"],
         "blacklist": ["调查"],
@@ -341,15 +345,70 @@ def test_autopick_defaults_to_recommended_whitelist_and_supports_blacklist():
     trigger.fuzzy_blacklist = ("进入",)
     trigger.blacklist_mode_pick_enabled = False
     trigger.blacklist_pick_list = frozenset()
+    trigger.text_list = frozenset()
 
     assert trigger._should_pick("甜甜花")
     assert not trigger._should_pick("优兰尼娅湖")
     assert not trigger._should_pick("聚所")
+    for text in (
+        "叮铃", "眶螂", "蛋卷坊", "西风成垒", "望崖营壁",
+        "魔女的花园", "月谕圣牌",
+    ):
+        assert not trigger._should_pick(text)
 
     trigger.mode = "Blacklist"
     assert trigger._should_pick("甜甜花")
     assert not trigger._should_pick("调查")
     assert not trigger._should_pick("进入秘境")
+
+
+def test_autopick_uses_profile_key_for_mobile_candidates_and_external_text_list():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+
+    key_press = Mock()
+    ctx = SimpleNamespace(input=SimpleNamespace(key_press=key_press))
+    trigger = AutoPickTrigger(
+        ctx,
+        mode="Blacklist",
+        text_list=["调查"],
+        pick_key="G",
+    )
+    assert trigger._should_pick("调查")
+    assert not trigger._should_pick("甜甜花")
+
+    class Hit:
+        def __init__(self, text, x, y):
+            self.text = text
+            self.x = x
+            self.y = y
+            self.clicks = 0
+
+        def click(self):
+            self.clicks += 1
+
+    lower = Hit("调查", 1200, 520)
+    upper = Hit("调查", 1200, 420)
+
+    class Region:
+        def find_multi(self, _recognition, *, limit):
+            assert limit == 5
+            return [lower, upper]
+
+    trigger._is_gameplay_frame = lambda _region: True
+    trigger.on_frame(Region())
+
+    key_press.assert_called_once_with("G")
+    assert upper.clicks == 0
+    assert lower.clicks == 0
+
+    # A throttled edge must not consume a newly recognized candidate.
+    trigger._last_action_at = time.monotonic()
+    trigger.on_frame(Region())
+    assert key_press.call_count == 1
+    assert trigger._last_text == "调查"
 
 
 def test_autopick_uses_upstream_default_lists_and_mode_specific_overrides():
@@ -711,6 +770,90 @@ def test_map_move_flips_direction_when_target_distance_does_not_shrink():
     assert task._drag_map.call_args_list[0].args == (-10.0, -0.0)
     assert task._drag_map.call_args_list[1].args == (9.0, -10.0)
     assert any("目标距离未缩小" in call.args[0] for call in task.log.call_args_list)
+
+
+def test_map_move_recovers_when_small_view_drift_does_not_converge():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    frames = [object() for _ in range(5)]
+    initial, retry_initial = frames[0], frames[4]
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=100, device_height=60),
+        capture_bgr=Mock(side_effect=[initial, retry_initial]),
+        sleep=Mock(),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = Mock()
+    task.open_map = Mock(return_value=True)
+    task.big = SimpleNamespace(
+        world_to_feature=Mock(return_value=(100.0, 0.0)),
+        locate_view=Mock(side_effect=[
+            (0.0, 0.0, 1.0),
+            (2.0, 2.0, 1.0),
+            (4.0, 4.0, 1.0),
+            (6.0, 6.0, 1.0),
+            (0.0, 0.0, 1.0),  # fresh view after channel recovery
+            (100.0, 0.0, 1.0),
+        ]),
+    )
+    task._drag_map = Mock(side_effect=frames[1:])
+    task._recover_device_channel = Mock(return_value=True)
+
+    assert task._move_map_to(1, 2)
+
+    task._recover_device_channel.assert_called_once_with("目标距离连续未缩小")
+    # Three non-converging gestures are allowed before recovery, then the
+    # recovered channel receives one fresh gesture and reaches the target.
+    assert task._drag_map.call_count == 4
+    assert ctx.capture_bgr.call_count == 2
+
+
+def test_map_move_stops_after_failed_distance_progress_recovery():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    frames = [object() for _ in range(4)]
+    ctx = SimpleNamespace(
+        transform=SimpleNamespace(device_width=100, device_height=60),
+        capture_bgr=Mock(return_value=frames[0]),
+        sleep=Mock(),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+    task.log = Mock()
+    task.open_map = Mock(return_value=True)
+    task.big = SimpleNamespace(
+        world_to_feature=Mock(return_value=(100.0, 0.0)),
+        locate_view=Mock(side_effect=[
+            (0.0, 0.0, 1.0),
+            (2.0, 2.0, 1.0),
+            (4.0, 4.0, 1.0),
+            (6.0, 6.0, 1.0),
+        ]),
+    )
+    task._drag_map = Mock(side_effect=frames[1:])
+    task._recover_device_channel = Mock(return_value=False)
+
+    with pytest.raises(RuntimeError, match="地图移动失败"):
+        task._move_map_view_to(
+            1,
+            2,
+            timeout_s=5,
+            log_prefix="[map] 迭代",
+            max_iterations=8,
+            error_message="地图移动失败",
+        )
+
+    task._recover_device_channel.assert_called_once_with("目标距离连续未缩小")
+    # Recovery failure must end the gesture loop instead of issuing another
+    # swipe against the same, non-converging map view.
+    assert task._drag_map.call_count == 3
 
 
 def test_teleport_confirm_ignores_top_map_label_and_clicks_bottom_button():
