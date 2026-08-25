@@ -244,9 +244,10 @@ bgi-touch convert \
 - ✅ 未发现不兼容 API —— 可直接 `bgi-touch run`
 - ⚠️ 部分能力为近似实现 —— 能跑，个别行为与 PC 不同（例如持续鼠标拖动会在
   左键释放时合并为单次触控滑动，实时触发器也按移动端能力执行）
-- ❌ 存在未移植依赖 —— 列出的调用（例如仍未实现的 `genshin.tp`）
-  执行到会抛错；`dispatcher.runTask` 已提供异步 Promise 兼容入口。若未移植调用只在
-  可选分支里，脚本主流程仍可能可用
+- ❌ 存在未移植依赖 —— 只有转换报告列出的 API 会在执行时抛错；当前核心地图 API
+  （包括 `genshin.tp`、`moveMapTo` 和 `getPositionFromMap`）已接入 iOS 路径/传送层。
+  `dispatcher.runTask` 已提供异步 Promise 兼容入口；若未来新增未移植调用只在可选
+  分支里，脚本主流程仍可能可用
 
 ### 5.3 运行 JS 脚本包
 
@@ -712,7 +713,7 @@ ctx.close()
 | 脚本运行到一半没反应 | iOS 弹层（游戏模式横幅、控制中心、通知）会吞触控。长跑前开勿扰模式，别碰设备 |
 | OCR 相关识别永远为空 | 未装 OCR 后端：`pip install -e '.[ocr]'` |
 | `bgi-touch run` 报 pythonmonkey 缺失 | `pip install -e '.[js]'` |
-| JS 脚本抛 `NotImplementedError` | 依赖未移植能力（COMPAT.md 会预警），常见是 `genshin.tp`，见 docs/ROADMAP.md |
+| JS 脚本抛 `NotImplementedError` | 依赖了转换报告列出的未移植 API、未知 SoloTask 或不支持的识别类型；先查看 `COMPAT.md` 和任务日志 |
 | 切人切错角色 | `config/party.json` 与游戏内编队顺序不一致；或脚本中途手动切过人导致内部活跃槽位记录偏移（重启脚本复位） |
 | 设备操作偶发超时（CoreDevice timed out） | 设备侧瞬态错误，重试即可；频繁出现则重连设备 |
 
