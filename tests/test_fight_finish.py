@@ -156,3 +156,41 @@ def test_auto_fight_dispatcher_maps_finish_detection_config():
     config = task.call_args.kwargs["finish_detect_config"]
     assert config.fast_check_enabled is True
     assert config.block_after_start_s == 4
+
+
+def test_auto_fight_dispatcher_recognizes_party_from_cached_frame(monkeypatch):
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    ctx = SimpleNamespace(
+        cached_frame=Mock(return_value=(frame, 0.1)),
+        party_slots={},
+    )
+    detected = {"钟离": 1, "夜兰": 2, "枫原万叶": 3}
+    recognize = Mock(return_value=detected)
+    monkeypatch.setattr("bgi_touch.engine.party_hud.recognize_party_slots", recognize)
+
+    with patch("bgi_touch.tasks.auto_fight.AutoFightTask") as task:
+        task.return_value.run.return_value = True
+        assert TaskDispatcher(ctx).run_auto_fight_task({})
+
+    ctx.cached_frame.assert_called_once_with()
+    recognize.assert_called_once()
+    assert task.call_args.kwargs["party_slots"] == detected
+    assert ctx.party_slots == detected
+
+
+def test_auto_fight_dispatcher_keeps_explicit_party_without_hud_capture(monkeypatch):
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    ctx = SimpleNamespace(cached_frame=Mock(side_effect=AssertionError("no capture")))
+    recognize = Mock(side_effect=AssertionError("explicit party must win"))
+    monkeypatch.setattr("bgi_touch.engine.party_hud.recognize_party_slots", recognize)
+
+    with patch("bgi_touch.tasks.auto_fight.AutoFightTask") as task:
+        task.return_value.run.return_value = True
+        dispatcher = TaskDispatcher(ctx, party_slots={"钟离": 1})
+        assert dispatcher.run_auto_fight_task({})
+
+    assert task.call_args.kwargs["party_slots"] == {"钟离": 1}
+    assert ctx.party_slots == {"钟离": 1}

@@ -1,8 +1,7 @@
 """小地图定位器：GameContext 帧 → 世界坐标（PathingExecutor 的 Positioner 实现）。
 
-裁剪位置来自布局 profile 的 minimapCenter；匹配走 MapLocator（SIFT 两级）。
-注：原版还有小地图 alpha 渐晕补偿（MiniMapPreprocessor），实测朴素灰度在
-SIFT 下已能稳定匹配，暂未移植；若弱纹理区域丢失率高再补。
+裁剪位置来自布局 profile 的 minimapCenter；匹配走 BetterGI 风格的
+小地图预处理与 MapLocator（SIFT 两级）。
 """
 
 from __future__ import annotations
@@ -14,9 +13,15 @@ import cv2
 import numpy as np
 
 from ..engine.context import GameContext
+from .camera import orientation_with_confidence
 from .map_locator import MapLocator
+from .minimap import (
+    MINIMAP_CAPTURE_RADIUS_N,
+    MINIMAP_NORMALIZED_SIZE,
+    preprocess_minimap_for_matching,
+)
 
-MINIMAP_RADIUS_N = 0.042  # 半径 / 屏宽（实测 iPhone 13 Pro Max）
+MINIMAP_RADIUS_N = MINIMAP_CAPTURE_RADIUS_N  # 半径 / 屏宽（实测 iPhone 13 Pro Max）
 # BetterGI's MiniMapPreprocessor normalizes the usable minimap to 156x156
 # before matching.  The same HUD occupies about 233x233 native pixels on an
 # iPhone 13 Pro Max; feeding those pixels to SIFT directly changes descriptor
@@ -32,9 +37,11 @@ class MinimapPositioner:
         self._last_position: tuple[float, float] | None = None
         self._last_fix_at = 0.0
 
-    def crop_minimap(self, bgr: np.ndarray) -> np.ndarray | None:
+    def _crop_native_minimap(self, bgr: np.ndarray) -> np.ndarray | None:
         mm = self.ctx.layout.buttons.get("minimapCenter")
         if mm is None:
+            return None
+        if not isinstance(bgr, np.ndarray) or bgr.ndim < 2:
             return None
         h, w = bgr.shape[:2]
         cx, cy, r = mm[0] * w, mm[1] * h, MINIMAP_RADIUS_N * w
@@ -42,7 +49,26 @@ class MinimapPositioner:
         size = int(2 * r)
         if x0 < 0 or y0 < 0 or y0 + size > h or x0 + size > w:
             return None
-        minimap = bgr[y0:y0 + size, x0:x0 + size]
+        return bgr[y0:y0 + size, x0:x0 + size]
+
+    def crop_minimap_color(self, bgr: np.ndarray) -> np.ndarray | None:
+        """Return the native minimap normalized to BetterGI's 212px input."""
+        minimap = self._crop_native_minimap(bgr)
+        if minimap is None:
+            return None
+        if minimap.shape[:2] != (MINIMAP_NORMALIZED_SIZE, MINIMAP_NORMALIZED_SIZE):
+            minimap = cv2.resize(
+                minimap,
+                (MINIMAP_NORMALIZED_SIZE, MINIMAP_NORMALIZED_SIZE),
+                interpolation=cv2.INTER_LINEAR,
+            )
+        return minimap
+
+    def crop_minimap(self, bgr: np.ndarray) -> np.ndarray | None:
+        """Return the legacy 156px grayscale crop used by callers."""
+        minimap = self._crop_native_minimap(bgr)
+        if minimap is None:
+            return None
         if minimap.shape[:2] != (MINIMAP_MATCH_SIZE, MINIMAP_MATCH_SIZE):
             minimap = cv2.resize(
                 minimap,
@@ -54,11 +80,28 @@ class MinimapPositioner:
             )
         return cv2.cvtColor(minimap, cv2.COLOR_BGR2GRAY)
 
-    def get_position(self, bgr: np.ndarray) -> tuple[float, float] | None:
-        mm = self.crop_minimap(bgr)
-        if mm is None:
+    def _preprocessed_query(
+        self,
+        bgr: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        minimap = self.crop_minimap_color(bgr)
+        if minimap is None:
             return None
-        return self.locator.locate_world(mm)
+        angle, _confidence = orientation_with_confidence(minimap)
+        return preprocess_minimap_for_matching(minimap, angle)
+
+    def get_position(self, bgr: np.ndarray) -> tuple[float, float] | None:
+        query = self._preprocessed_query(bgr)
+        if query is not None:
+            position = self.locator.locate_world(*query)
+            if position is not None:
+                return position
+        # The BetterGI-preprocessed image is ideal for the desktop template
+        # matcher, while the iOS SIFT asset path can still prefer the raw
+        # 156px descriptor geometry.  Keep that proven query as a bounded
+        # fallback when the new mask/alpha path has no match.
+        legacy = self.crop_minimap(bgr)
+        return None if legacy is None else self.locator.locate_world(legacy)
 
     def get_position_stable(
         self,
@@ -112,10 +155,13 @@ class MinimapPositioner:
         return position
 
     def get_position_pixel(self, bgr: np.ndarray) -> tuple[float, float] | None:
-        mm = self.crop_minimap(bgr)
-        if mm is None:
-            return None
-        return self.locator.locate_pixel(mm)
+        query = self._preprocessed_query(bgr)
+        if query is not None:
+            position = self.locator.locate_pixel(*query)
+            if position is not None:
+                return position
+        legacy = self.crop_minimap(bgr)
+        return None if legacy is None else self.locator.locate_pixel(legacy)
 
     def reset(self) -> None:
         self.locator.reset()

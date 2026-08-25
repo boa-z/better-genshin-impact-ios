@@ -72,6 +72,24 @@ def test_flow_waits_on_one_shared_frame_and_clicks_last_match_center():
     input_simulator.click_ref.assert_called_once_with(120.0, 210.0)
 
 
+@pytest.mark.parametrize("recognition_type", ["ColorMatch", "ColorRangeAndOcr"])
+def test_bv_locator_accepts_upstream_color_recognition_types(recognition_type):
+    ctx, _input_simulator = _context()
+    ro = RecognitionObject()
+    ro.RecognitionType = recognition_type
+    locator = BvLocator(ctx, ro, text="目标")
+    expected = _region(ctx, 30, 40, 20, 10, )
+    other = _region(ctx, 80, 90, 20, 10)
+    expected.text = "目标"
+    other.text = "其他"
+    screen = SimpleNamespace(
+        find_multi=Mock(return_value=[expected, other]),
+    )
+
+    assert locator._find_all_in(screen) == [expected]
+    screen.find_multi.assert_called_once_with(locator.recognition_object, limit=100)
+
+
 def test_flow_action_until_repeats_action_after_retry_interval():
     from bgi_touch.engine.bv import BvPage
 

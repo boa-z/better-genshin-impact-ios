@@ -127,10 +127,18 @@ class BvLocator:
         if ro.recognition_type == "TemplateMatch":
             found = screen.find(ro)
             return [found] if found.is_exist() else []
-        if ro.recognition_type not in ("Ocr", "OcrMatch"):
+        if ro.recognition_type not in (
+            "Ocr",
+            "OcrMatch",
+            "ColorMatch",
+            "ColorRangeAndOcr",
+        ):
             raise NotImplementedError(
                 f"BvLocator 不支持识别类型 {ro.recognition_type}"
             )
+        # ImageRegion already owns the OpenCV/color/OCR implementation.  Do
+        # not duplicate it here: BvLocator only adds collection conversion
+        # and optional text filtering on top of the shared frame operation.
         values = screen.find_multi(ro, limit=100)
         if self.any_texts:
             return [

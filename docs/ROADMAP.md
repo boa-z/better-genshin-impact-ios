@@ -6,6 +6,8 @@
 - `Genshin-Impact-fixed-16by9` profile 的原始 KeyboardEvent.code 映射，以及
   `config/controls/genshin-native-ui.json` 的小游戏键位覆盖。
 - BetterGI 兼容 JS 运行时、统一 `TaskDispatcher`、战斗 DSL、宏和 WebUI/CLI 任务入口。
+- BvLocator 已复用统一识别层支持 `TemplateMatch`、`Ocr`、`OcrMatch`、`ColorMatch` 和
+  `ColorRangeAndOcr`，颜色识别不会再因宿主类型被错误拒绝。
 - AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（鱼条控制）、
   AutoOpenChest、AutoEat、AutoMusicGame 和 AutoAlbum 的可测试 Python 实现。
 - AutoBoss、AutoLeyLineOutcrop、AutoStygianOnslaught 和 AutoGeniusInvokation 的
@@ -51,7 +53,8 @@
 - 对齐 BetterGI pathing JSON 的 `moveMode`/`pointExtParams`/异常处理和实时触发器配置。
 - 提瓦特、层岩巨渊、渊下宫、旧日之海、远古圣山、空之神殿和霜月均已接入各自
   坐标系、官方地图资产与多楼层 SIFT；执行器会按路线 `map_name` 自动切换定位器。
-- 小地图定位支持短缓存、局部优先、跨楼层全局回退和异常跳点过滤；连续丢失时会重置匹配状态。
+- 小地图定位支持 BetterGI 风格的 212→156 中心裁剪、径向渐晕/图标/背景遮罩，
+  再进行短缓存、局部优先、跨楼层全局回退和异常跳点过滤；连续丢失时会重置匹配状态。
 - 地图追踪支持传送、方位点、走点反馈、卡死脱困、失败重试和常用采集/战斗动作。
 - CLI/WebUI/JS 入口共用 `PathingExecutor`，样例路线可以直接 `--dry-run` 校验。
 - MapMask 实时触发器复用同一截图循环，后台只保留最新待定位帧；主界面输出玩家世界
@@ -65,8 +68,9 @@
 离线链路已可用，剩余工作是不同地图/设备上的真机调参：
 
 1. **小地图定位**（`bgi_touch/pathing/positioner.py`）
-   - 小地图裁剪 → SIFT/模板匹配到大地图，特征数据来自原版地图资产。
-   - 当前支持短缓存、上次位置附近的局部搜索、全局回退和跳点过滤；相机朝向检测仍为简化实现。
+   - 小地图裁剪 → BetterGI 预处理遮罩 → SIFT/模板匹配到大地图，特征数据来自原版地图资产。
+   - 当前支持短缓存、上次位置附近的局部搜索、全局回退和跳点过滤；相机朝向已移植
+     BetterGI 的极坐标边缘峰值算法，并在低置信度时回退兼容检测。
 2. **大地图传送**（`PathingExecutor._teleport`）
    - 打开地图 → OCR 切换目标区域 → 按该地图坐标系拖动 → 点传送锚点 → OCR/模板确认。
    - 已接入上游 `tp.json` 传送点索引；`force=false` 会按最近点语义吸附并选择国家，

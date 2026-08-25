@@ -23,6 +23,7 @@ import numpy as np
 
 from ..vision.game_ui import is_main_ui
 from ..vision.ocr import get_ocr
+from ..engine.party_hud import PARTY_NAME_ROI, map_party_hits
 from ..engine.recognition import RecognitionObject
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -307,30 +308,25 @@ class SkillCdTrigger:
         if not callable(find_multi):
             return {}
         try:
-            hits = find_multi(RecognitionObject.ocr(1560, 120, 360, 480), limit=8)
+            hits = find_multi(RecognitionObject.ocr(*PARTY_NAME_ROI), limit=8)
         except Exception as error:
             self.log(f"[SkillCD] 队伍 OCR 失败（保留现有配置）：{error}")
             return {}
-        others = [slot for slot in (1, 2, 3, 4) if slot != self._active_slot]
-        defaults = (0.212, 0.348, 0.457)
-        row_y = [
-            float(self.ctx.layout.buttons.get(
-                f"partyRow{row}", (0.96, defaults[row - 1])
-            )[1]) * 1080
-            for row in (1, 2, 3)
-        ]
-        cooldowns = _avatar_cooldowns()
-        observed: dict[int, str] = {}
-        for hit in hits:
-            text = "".join(str(getattr(hit, "text", "") or "").split())
-            name = next((candidate for candidate in cooldowns if candidate == text), None)
-            if name is None:
-                continue
-            y = float(getattr(hit, "y", -1000.0))
-            row = min(range(3), key=lambda index: abs(y - row_y[index]))
-            if abs(y - row_y[row]) <= 90:
-                observed[others[row]] = name
-        return observed
+        existing = {
+            name: slot for slot, name in enumerate(self._team, start=1) if name
+        }
+        mapped = map_party_hits(
+            hits,
+            active_slot=self._active_slot,
+            row_centers=(
+                float(self.ctx.layout.buttons.get(
+                    f"partyRow{row}", (0.96, fallback)
+                )[1]) * 1080
+                for row, fallback in enumerate((0.212, 0.348, 0.457), start=1)
+            ),
+            existing=existing,
+        )
+        return {slot: name for name, slot in mapped.items() if slot != self._active_slot}
 
     def _record_slot(self, slot: int, now: float, *, allow_fallback: bool) -> None:
         if not 1 <= slot <= 4:

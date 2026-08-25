@@ -198,18 +198,32 @@ class MapLocator:
 
     # ---- 小地图帧处理 ----
 
-    def _extract(self, minimap_gray: np.ndarray) -> tuple[np.ndarray | None, np.ndarray]:
+    def _extract(
+        self,
+        minimap_gray: np.ndarray,
+        valid_mask: np.ndarray | None = None,
+    ) -> tuple[np.ndarray | None, np.ndarray]:
         h, w = minimap_gray.shape[:2]
-        mask = np.zeros((h, w), np.uint8)
-        cv2.circle(mask, (w // 2, h // 2), int(min(h, w) * 0.46), 255, -1)
+        if (
+            isinstance(valid_mask, np.ndarray)
+            and valid_mask.shape[:2] == (h, w)
+        ):
+            mask = valid_mask.astype(np.uint8, copy=False)
+        else:
+            mask = np.zeros((h, w), np.uint8)
+            cv2.circle(mask, (w // 2, h // 2), int(min(h, w) * 0.46), 255, -1)
         kps, desc = self._sift.detectAndCompute(minimap_gray, mask)
         pts = np.float32([k.pt for k in kps]) if kps else np.zeros((0, 2), np.float32)
         return desc, pts
 
-    def locate_pixel(self, minimap_gray: np.ndarray) -> tuple[float, float] | None:
+    def locate_pixel(
+        self,
+        minimap_gray: np.ndarray,
+        valid_mask: np.ndarray | None = None,
+    ) -> tuple[float, float] | None:
         """小地图灰度图 → 当前地图原生特征尺度像素坐标。线程安全。"""
         with self._lock:
-            desc, pts = self._extract(minimap_gray)
+            desc, pts = self._extract(minimap_gray, valid_mask)
             if desc is None:
                 return None
             center = (minimap_gray.shape[1] / 2, minimap_gray.shape[0] / 2)
@@ -236,10 +250,14 @@ class MapLocator:
                     return self.prev
             return None
 
-    def locate_world(self, minimap_gray: np.ndarray) -> tuple[float, float] | None:
+    def locate_world(
+        self,
+        minimap_gray: np.ndarray,
+        valid_mask: np.ndarray | None = None,
+    ) -> tuple[float, float] | None:
         if self.config is None:
             raise RuntimeError("MapConfig 未设置（世界坐标换算常数）")
-        p = self.locate_pixel(minimap_gray)
+        p = self.locate_pixel(minimap_gray, valid_mask)
         return None if p is None else self.config.image_to_world(*p)
 
     def reset(self) -> None:

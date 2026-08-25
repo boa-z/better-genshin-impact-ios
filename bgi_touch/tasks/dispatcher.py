@@ -108,7 +108,7 @@ class TaskDispatcher:
         restrict_strategy_roots: bool = False,
     ):
         self.ctx = ctx
-        self.party_slots = party_slots or {}
+        self.party_slots = self._normalize_party_slots(party_slots)
         self.log = log
         self.cancelled = cancelled or (lambda: False)
         default_root = Path(__file__).resolve().parents[2] / "scripts" / "combat"
@@ -117,6 +117,79 @@ class TaskDispatcher:
             for value in (strategy_roots or [default_root])
         ]
         self.restrict_strategy_roots = bool(restrict_strategy_roots)
+
+    @staticmethod
+    def _normalize_party_slots(value: Any) -> dict[str, int]:
+        result: dict[str, int] = {}
+        if not isinstance(value, Mapping):
+            return result
+        for raw_name, raw_slot in value.items():
+            name = str(raw_name).strip()
+            try:
+                slot = int(raw_slot)
+            except (TypeError, ValueError):
+                continue
+            if name and 1 <= slot <= 4 and slot not in result.values():
+                result[name] = slot
+        return result
+
+    def _party_slots_from_hud(self) -> dict[str, int]:
+        """Resolve a team from the latest caller-owned mobile HUD frame.
+
+        A task may be started without ``config/party.json`` (or with a new
+        test account).  Reuse the frame already published by TriggerLoop or a
+        previous task first; this keeps AutoFight from becoming a second
+        screenshot producer.  If no frame exists, one startup capture is the
+        safe fallback.  OCR is advisory and never prevents the task from
+        running.
+        """
+        existing = self._normalize_party_slots(getattr(self.ctx, "party_slots", None))
+        frame = None
+        cached_frame = getattr(self.ctx, "cached_frame", None)
+        if callable(cached_frame):
+            try:
+                value = cached_frame()
+                frame = value[0] if isinstance(value, (tuple, list)) else value
+            except Exception as error:
+                self.log(f"[combat] HUD 队伍识别无法读取缓存帧：{error}")
+        if frame is None:
+            capture = getattr(self.ctx, "capture_bgr", None)
+            if callable(capture):
+                try:
+                    frame = capture()
+                except Exception as error:
+                    self.log(f"[combat] HUD 队伍识别截图失败（保留已有配置）：{error}")
+        if frame is None or not hasattr(frame, "shape"):
+            return existing
+
+        try:
+            from ..engine.party_hud import recognize_party_slots
+            from ..engine.recognition import ImageRegion
+
+            slots = recognize_party_slots(
+                self.ctx,
+                ImageRegion(self.ctx, frame),
+                existing=existing,
+                log=self.log,
+            )
+        except Exception as error:
+            self.log(f"[combat] HUD 队伍识别失败（继续 AutoFight）：{error}")
+            return existing
+        return self._normalize_party_slots(slots) or existing
+
+    def _resolve_auto_fight_party(self) -> dict[str, int]:
+        # A caller-provided mapping is authoritative.  HUD OCR only fills the
+        # missing configuration path and may refresh a stale context mapping.
+        slots = dict(self.party_slots)
+        if not slots:
+            slots = self._party_slots_from_hud()
+        if slots:
+            self.party_slots = dict(slots)
+            try:
+                setattr(self.ctx, "party_slots", dict(slots))
+            except Exception:
+                pass
+        return slots
 
     def _is_cancelled(self, token: Any = None) -> bool:
         return bool(self.cancelled()) or _requested(token)
@@ -225,11 +298,12 @@ class TaskDispatcher:
         # BetterGI AutoFightParam.Timeout is expressed in seconds.
         timeout_s = float(timeout) if timeout else 120
         pickup_config = PostFightPickupConfig.from_mapping(param)
+        party_slots = self._resolve_auto_fight_party()
         return AutoFightTask(
             self.ctx,
             combat_strategy_path=strategy,
             timeout_s=timeout_s,
-            party_slots=self.party_slots,
+            party_slots=party_slots,
             log=self.log,
             fight_finish_detect_enabled=_boolean(
                 _value(param, "fightFinishDetectEnabled", True), True,

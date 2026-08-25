@@ -26,6 +26,7 @@ from ..engine.js_modules import rewrite_import_specifiers
 # JS 兼容性扫描：本移植版已实现 / 部分实现 / 未实现的 API
 SUPPORTED = [
     "sleep", "log.", "click", "keyPress", "keyDown", "keyUp", "captureGameRegion",
+    "getAvatars", "setGameMetrics", "getGameMetrics",
     "RecognitionObject", "Mat", "Point2f", "Region", "ImageRegion",
     "DesktopRegion", "Pen", "Color", "BvImage", "Mat.Get", "Vec3b",
     "OpenCvSharp.Scalar", "ColorMatch", "ColorRangeAndOcr",

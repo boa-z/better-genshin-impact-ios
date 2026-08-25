@@ -1,9 +1,9 @@
 """BetterGI ``CombatScenes`` and ``Avatar`` JavaScript host compatibility.
 
 The desktop implementation discovers the team with YOLO/OCR and then routes
-combat actions through Windows input. On iOS, configured ``party_slots`` are
-the authoritative team model and every action is sent through InputSimulator,
-so DeviceHub profiles keep held movement and buttons on the device side.
+combat actions through Windows input. On iOS, configured ``party_slots`` remain
+the authoritative fallback, while the visible mobile party labels can refresh
+the three inactive slots from the caller-owned frame.
 """
 
 from __future__ import annotations
@@ -330,7 +330,17 @@ class CombatScenes:
         if configured_names:
             slots = {name: index for index, name in enumerate(configured_names, 1)}
         else:
-            slots = self.party_slots
+            from .party_hud import recognize_party_slots
+
+            slots = recognize_party_slots(
+                self.ctx,
+                _image_region,
+                existing=self.party_slots,
+                log=self.log,
+            )
+            if slots:
+                self.party_slots = dict(slots)
+                setattr(self.ctx, "party_slots", dict(slots))
         self.avatars = [
             Avatar(self, name, slot) for name, slot in sorted(slots.items(), key=lambda item: item[1])
         ]

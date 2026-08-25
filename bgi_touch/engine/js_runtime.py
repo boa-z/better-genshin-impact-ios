@@ -28,6 +28,7 @@ from .context import GameContext
 from .keymouse_hook import KeyMouseHookManager
 from .recognition import (
     DesktopRegion,
+    GameCaptureRegion,
     ImageRegion,
     Mat,
     Point2f,
@@ -278,7 +279,61 @@ class JsScriptRuntime:
         expose("sleep", self._sleep)
         expose("getVersion", lambda: BETTERGI_COMPAT_VERSION)
         expose("captureGameRegion", self._capture)
-        expose("getAvatars", lambda: list(self.party_slots.keys()))
+
+        def _get_avatars() -> list[str]:
+            """Return the current mobile party without spawning a new stream.
+
+            BetterGI's desktop implementation recognizes the party from the
+            same capture that backs ``CaptureGameRegion``.  The iOS runtime
+            must not make every ``getAvatars()`` call another DeviceHub
+            screenshot request: community scripts commonly call it several
+            times while building a route.  Prefer the caller-owned cached
+            frame and only take one initial frame when no cache exists.
+            """
+            self._check_cancel()
+            existing = getattr(ctx, "party_slots", None)
+            if not isinstance(existing, dict):
+                existing = self.party_slots
+            else:
+                existing = dict(existing)
+
+            frame = None
+            cached_frame = getattr(ctx, "cached_frame", None)
+            if callable(cached_frame):
+                try:
+                    cached = cached_frame()
+                    frame = cached[0] if isinstance(cached, (tuple, list)) else cached
+                except Exception as error:
+                    log(f"[combat] getAvatars 无法读取缓存帧：{error}")
+            if frame is None:
+                frame = ctx.capture_bgr()
+
+            try:
+                from .party_hud import recognize_party_slots
+
+                result = recognize_party_slots(
+                    ctx,
+                    ImageRegion(ctx, frame),
+                    existing=existing,
+                    log=log,
+                )
+            except Exception as error:
+                log(f"[combat] getAvatars 队伍识别失败（保留已有配置）：{error}")
+                result = existing
+
+            if result:
+                self.party_slots = dict(result)
+                try:
+                    setattr(ctx, "party_slots", dict(result))
+                except Exception:
+                    pass
+            ordered = sorted(
+                ((int(slot), str(name)) for name, slot in self.party_slots.items()),
+                key=lambda item: item[0],
+            )
+            return [name for _slot, name in ordered]
+
+        expose("getAvatars", _get_avatars)
         expose("inputText", lambda text: ctx.device.paste_text(str(text)))
         expose("setGameMetrics", pointer.set_metrics)
         expose("getGameMetrics", pointer.get_metrics)
@@ -555,12 +610,90 @@ class JsScriptRuntime:
             "BottomLeft:'BottomLeft', BottomRight:'BottomRight', Center:'Center'})"
         )
 
-        g["Point2f"] = pm.eval(
-            "factory => function Point2f(x = 0, y = 0) { return factory(x, y); }"
-        )(lambda x=0, y=0: wrap(Point2f(float(x), float(y))))
-        g["Mat"] = pm.eval(
-            "factory => function Mat() { return factory(); }"
-        )(lambda: wrap(Mat()))
+        point_factory = lambda x=0, y=0: wrap(Point2f(float(x), float(y)))
+
+        def _point_from_point(x, y=None):
+            return wrap(Point2f(float(x), float(y))) if y is not None else wrap(Point2f.from_point(x))
+
+        def _point_from_vec2f(x, y=None):
+            return wrap(Point2f(float(x), float(y))) if y is not None else wrap(Point2f.from_vec2f(x))
+
+        point2f_type = pm.eval(r"""
+            (factory, fromPoint, fromVec2f, distance, dotProduct, crossProduct) => {
+              function Point2f(x = 0, y = 0) { return factory(x, y); }
+              const component = (value, ...names) => {
+                for (const name of names) {
+                  if (value != null && value[name] != null) return value[name];
+                }
+                return 0;
+              };
+              Point2f.fromPoint = Point2f.FromPoint = point => fromPoint(
+                component(point, 'X', 'x'), component(point, 'Y', 'y')
+              );
+              Point2f.fromVec2f = Point2f.FromVec2f = vec => fromVec2f(
+                component(vec, 'Item0', 'item0'), component(vec, 'Item1', 'item1')
+              );
+              Point2f.distance = Point2f.Distance = distance;
+              Point2f.dotProduct = Point2f.DotProduct = dotProduct;
+              Point2f.crossProduct = Point2f.CrossProduct = crossProduct;
+              return Point2f;
+            }
+        """)(point_factory, _point_from_point, _point_from_vec2f,
+             Point2f.distance, Point2f.dot_product_static,
+             Point2f.cross_product_static)
+        g["Point2f"] = point2f_type
+
+        def _create_mat(*args):
+            values = [getattr(value, "__wrapped__", value) for value in args]
+            if not values:
+                return wrap(Mat())
+            if len(values) == 1:
+                value = values[0]
+                if isinstance(value, Mat):
+                    return wrap(value.clone())
+                return wrap(Mat.from_array(value))
+            if len(values) == 2 and all(
+                isinstance(value, (int, float)) for value in values
+            ):
+                return wrap(Mat.zeros(int(values[0]), int(values[1]), 0))
+            if len(values) == 3 and all(
+                isinstance(value, (int, float)) for value in values
+            ):
+                return wrap(Mat.zeros(int(values[0]), int(values[1]), int(values[2])))
+            raise TypeError("Mat 构造函数参数不受支持")
+
+        def _mat_static(name, *args):
+            factory = getattr(Mat, name)
+            return wrap(factory(*args))
+
+        mat_type = pm.eval(r"""
+            (factory, fromArray, fromPixelData, imDecode, fromImageData,
+             diag, zeros, ones, eye) => {
+              function Mat(...args) { return factory(...args); }
+              Object.assign(Mat, {
+                fromArray, FromArray: fromArray,
+                fromPixelData, FromPixelData: fromPixelData,
+                imDecode, ImDecode: imDecode,
+                fromImageData, FromImageData: fromImageData,
+                diag, Diag: diag,
+                zeros, Zeros: zeros,
+                ones, Ones: ones,
+                eye, Eye: eye
+              });
+              return Mat;
+            }
+        """)(
+            _create_mat,
+            lambda value: _mat_static("from_array", value),
+            lambda *values: _mat_static("from_pixel_data", *values),
+            lambda *values: _mat_static("im_decode", *values),
+            lambda *values: _mat_static("from_image_data", *values),
+            lambda *values: _mat_static("diag", *values),
+            lambda *values: _mat_static("zeros", *values),
+            lambda *values: _mat_static("ones", *values),
+            lambda *values: _mat_static("eye", *values),
+        )
+        g["Mat"] = mat_type
 
         def _create_region(x=0, y=0, w=0, h=0, *_unused):
             dx, dy = ctx.transform.to_device(float(x), float(y))
@@ -660,6 +793,13 @@ class JsScriptRuntime:
                 raise TypeError("ImageRegion 构造函数需要 Mat")
             return wrap(ImageRegion(ctx, bgr, float(x), float(y)))
 
+        def _create_game_capture_region(mat, x=0, y=0):
+            value = getattr(mat, "__wrapped__", mat)
+            bgr = value.bgr if isinstance(value, Mat) else getattr(value, "bgr", None)
+            if bgr is None:
+                raise TypeError("GameCaptureRegion 构造函数需要 Mat")
+            return wrap(GameCaptureRegion(ctx, bgr, float(x), float(y)))
+
         # Python callables are not constructable with JS ``new``. Wrap the
         # sandboxed factory in a native JS constructor whose explicit object
         # return value becomes the constructed ImageRegion.
@@ -715,7 +855,7 @@ class JsScriptRuntime:
               return GameCaptureRegion;
             }
         """)(
-            _create_image_region, _game_region_click, _game_region_move,
+            _create_game_capture_region, _game_region_click, _game_region_move,
             _game_region_move_by, _game_region_1080p_click,
             _game_region_1080p_move,
         )
@@ -1124,9 +1264,37 @@ class JsScriptRuntime:
             def getLinkedCancellationToken(self): return wrap(_CTS())
         expose("dispatcher", wrap(_Dispatcher()), proxy=False)
 
-        # 构造器类：脚本里 new RealtimeTimer("AutoPick") / new SoloTask("AutoFight")
-        g["RealtimeTimer"] = pm.eval("(function(){ return function RealtimeTimer(name, cfg){ this.name = name; this.config = cfg; }; })()")
-        g["SoloTask"] = pm.eval("(function(){ return function SoloTask(name, cfg){ this.name = name; this.config = cfg; }; })()")
+        # 构造器类：脚本里 new RealtimeTimer("AutoPick") / new SoloTask("AutoFight")。
+        # ClearScript 的自动大小写别名在 PythonMonkey 原生 JS 构造器上
+        # 不会自动生成，因此显式保留 d.ts 中的 Name/Interval/Config。
+        g["RealtimeTimer"] = pm.eval(r"""
+            (function () {
+              function RealtimeTimer(name, cfg) {
+                this.name = name == null ? '' : String(name);
+                this.interval = 50;
+                this.config = cfg;
+                Object.defineProperties(this, {
+                  Name: { get: () => this.name, set: value => this.name = String(value) },
+                  Interval: { get: () => this.interval, set: value => this.interval = Number(value) },
+                  Config: { get: () => this.config, set: value => this.config = value }
+                });
+              }
+              return RealtimeTimer;
+            })()
+        """)
+        g["SoloTask"] = pm.eval(r"""
+            (function () {
+              function SoloTask(name, cfg) {
+                this.name = name == null ? '' : String(name);
+                this.config = cfg;
+                Object.defineProperties(this, {
+                  Name: { get: () => this.name, set: value => this.name = String(value) },
+                  Config: { get: () => this.config, set: value => this.config = value }
+                });
+              }
+              return SoloTask;
+            })()
+        """)
         g["CountInventoryItemParam"] = pm.eval(
             "(function(){ return function CountInventoryItemParam(){"
             "this.gridScreenName='Materials';this.itemName=null;this.itemNames=[];"
@@ -1347,6 +1515,9 @@ class JsScriptRuntime:
                 return caseInsensitive(this);
               }
 
+              AutoFightParam.SwimmingEnabled = false;
+              AutoFightParam.FightFinishDetectConfig = FightFinishDetectConfig;
+
               return {
                 FightFinishDetectConfig, AutoFightParam, AutoDomainParam,
                 AutoLeyLineOutcropParam, AutoStygianOnslaughtParam, AutoBossParam,
@@ -1360,6 +1531,11 @@ class JsScriptRuntime:
             "AutoSkipConfig", "CancellationTokenSource", "CancellationToken", "PostMessage",
         ):
             g[name] = constructors[name]
+        pm.eval(r"""
+            globalThis.AutoFightParam.SwimmingEnabled = false;
+            globalThis.AutoFightParam.FightFinishDetectConfig =
+              globalThis.FightFinishDetectConfig;
+        """)
         pm.eval("""
             CancellationTokenSource.createLinkedTokenSource = (...tokens) => {
               const source = new CancellationTokenSource();

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -76,6 +76,35 @@ import icon from 'assets/icon.png';
         "value": 13, "label": "module-default", "renamed": "renamed",
         "width": 5, "height": 3,
     }
+
+
+def test_js_get_avatars_uses_cached_frame_before_device_capture(tmp_path):
+    pytest.importorskip("pythonmonkey")
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+
+    (tmp_path / "main.js").write_text(
+        "return JSON.stringify(getAvatars());", encoding="utf-8",
+    )
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    ctx = _context()
+    ctx.cached_frame = Mock(return_value=(frame, 0.05))
+    ctx.capture_bgr = Mock(side_effect=AssertionError("不应创建第二个截图请求"))
+    ctx.party_slots = {"钟离": 1}
+
+    with patch(
+        "bgi_touch.engine.party_hud.recognize_party_slots",
+        return_value={"钟离": 1, "夜兰": 2, "纳西妲": 3, "芙宁娜": 4},
+    ) as recognize:
+        result = json.loads(JsScriptRuntime(
+            ctx, tmp_path, party_slots={"钟离": 1},
+        ).run())
+
+    assert result == ["钟离", "夜兰", "纳西妲", "芙宁娜"]
+    ctx.cached_frame.assert_called_once_with()
+    ctx.capture_bgr.assert_not_called()
+    assert recognize.call_count == 1
+    region = recognize.call_args.args[1]
+    assert region.bgr is frame
 
 
 def test_js_runtime_replays_virtual_cursor_drag_and_mouse_virtual_keys(tmp_path):

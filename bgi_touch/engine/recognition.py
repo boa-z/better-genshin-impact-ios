@@ -434,15 +434,37 @@ class SearchOptions:
     Clone = clone
 
 
+def _native_array_value(value):
+    """Remove PythonMonkey's array protocol shim before NumPy conversion."""
+    unwrapped = getattr(value, "__wrapped__", None)
+    if unwrapped is not None:
+        value = unwrapped
+    if isinstance(value, np.ndarray) or isinstance(value, (bytes, bytearray, memoryview)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_native_array_value(item) for item in value]
+    return value
+
+
 class Mat:
     """OpenCvSharp Mat 的替身：BGR ndarray + 惰性灰度缓存。"""
 
+    _CV_DEPTH_DTYPES = {
+        0: np.uint8,
+        1: np.int8,
+        2: np.uint16,
+        3: np.int16,
+        4: np.int32,
+        5: np.float32,
+        6: np.float64,
+    }
+
     def __init__(self, bgr: np.ndarray | None = None):
-        self.bgr = (
-            bgr if bgr is not None
-            else np.empty((0, 0, 3), dtype=np.uint8)
+        self.bgr = np.asarray(
+            bgr if bgr is not None else np.empty((0, 0, 3), dtype=np.uint8)
         )
         self._gray: np.ndarray | None = None
+        self._disposed = False
 
     @classmethod
     def from_file(cls, path: str) -> "Mat":
@@ -451,20 +473,251 @@ class Mat:
             raise FileNotFoundError(f"无法读取图像: {path}")
         return cls(data)
 
+    @classmethod
+    def _from_cv_type(cls, rows: int, cols: int, type_code: int,
+                      fill=None) -> "Mat":
+        """Create an array from OpenCV's packed depth/channel type code."""
+        code = int(type_code)
+        depth = code & 7
+        channels = (code >> 3) + 1
+        dtype = cls._CV_DEPTH_DTYPES.get(depth)
+        if dtype is None:
+            raise ValueError(f"不支持的 OpenCV Mat 深度: {depth}")
+        shape = (int(rows), int(cols))
+        if channels > 1:
+            shape += (channels,)
+        array = np.full(shape, 0 if fill is None else fill, dtype=dtype)
+        return cls(array)
+
+    @staticmethod
+    def _size_rows_cols(size) -> tuple[int, int]:
+        width, height = _size_tuple(size)
+        return int(round(height)), int(round(width))
+
+    @classmethod
+    def from_array(cls, array) -> "Mat":
+        value = _native_array_value(array)
+        if isinstance(value, Mat):
+            return value.clone()
+        return cls(np.asarray(value).copy())
+
+    @classmethod
+    def from_pixel_data(cls, width: int, height: int, *args) -> "Mat":
+        """Build a Mat from a packed pixel buffer.
+
+        OpenCvSharp exposes several ``FromPixelData`` overloads.  JS scripts
+        generally pass either ``(width, height, data)`` or
+        ``(width, height, type, data[, step])``.  The portable host accepts
+        bytes, typed-array-like lists, and already shaped nested arrays.
+        """
+        if len(args) == 1:
+            type_code, data, step = None, args[0], None
+        elif len(args) in (2, 3):
+            type_code, data = args[:2]
+            step = args[2] if len(args) == 3 else None
+        else:
+            raise TypeError(
+                "Mat.FromPixelData 需要 width、height、data 或 type、data[, step]"
+            )
+        rows, cols = int(height), int(width)
+        if rows < 0 or cols < 0:
+            raise ValueError("Mat 尺寸不能为负数")
+        value = _native_array_value(data)
+        if isinstance(value, Mat):
+            return value.clone()
+        if isinstance(value, dict) and "data" in value:
+            value = value["data"]
+        array = np.asarray(value)
+        if type_code is None:
+            if array.ndim >= 2 and array.shape[:2] == (rows, cols):
+                return cls(array.copy())
+            raw = np.frombuffer(value, dtype=np.uint8) if isinstance(
+                value, (bytes, bytearray, memoryview)
+            ) else np.asarray(value).reshape(-1)
+            pixels = rows * cols
+            if pixels == 0:
+                return cls(np.empty((rows, cols), dtype=raw.dtype))
+            if raw.size % pixels:
+                raise ValueError("像素数据长度与 Mat 尺寸不匹配")
+            channels = raw.size // pixels
+            if channels not in (1, 2, 3, 4):
+                raise ValueError(f"无法从像素数据推断通道数: {channels}")
+            shape = (rows, cols) if channels == 1 else (rows, cols, channels)
+            return cls(raw.reshape(shape).copy())
+
+        code = int(type_code)
+        depth = code & 7
+        channels = (code >> 3) + 1
+        dtype = cls._CV_DEPTH_DTYPES.get(depth)
+        if dtype is None:
+            raise ValueError(f"不支持的 OpenCV Mat 深度: {depth}")
+        bytes_per_pixel = channels * np.dtype(dtype).itemsize
+        row_step = int(step) if step is not None else cols * bytes_per_pixel
+        if row_step < cols * bytes_per_pixel:
+            raise ValueError("Mat 行步长小于一行像素所需字节数")
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raw = np.frombuffer(value, dtype=np.uint8)
+            needed = row_step * rows
+            if raw.size < needed:
+                raise ValueError("像素数据长度小于 Mat 行步长要求")
+            rows_data = raw[:needed].reshape(rows, row_step)
+            packed = rows_data[:, :cols * bytes_per_pixel].reshape(-1)
+            typed = packed.view(dtype)
+        else:
+            typed = np.asarray(value, dtype=dtype).reshape(-1)
+            needed_values = rows * cols * channels
+            if typed.size < needed_values:
+                raise ValueError("像素数据长度小于 Mat 尺寸要求")
+            typed = typed[:needed_values]
+        shape = (rows, cols) if channels == 1 else (rows, cols, channels)
+        return cls(typed.reshape(shape).copy())
+
+    @classmethod
+    def im_decode(cls, data, flags=None) -> "Mat":
+        value = _native_array_value(data)
+        if isinstance(value, Mat):
+            return value.clone()
+        if isinstance(value, str):
+            encoded = np.fromfile(value, dtype=np.uint8)
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            encoded = np.frombuffer(value, dtype=np.uint8)
+        else:
+            encoded = np.asarray(value, dtype=np.uint8).reshape(-1)
+        mode = cv2.IMREAD_COLOR if flags is None else int(flags)
+        image = cv2.imdecode(encoded, mode)
+        if image is None:
+            raise ValueError("Mat.ImDecode 无法解码图像数据")
+        return cls(image)
+
+    @classmethod
+    def from_image_data(cls, image_data, flags=None) -> "Mat":
+        value = _native_array_value(image_data)
+        if isinstance(value, Mat):
+            return value.clone()
+        if isinstance(value, dict):
+            width = value.get("width", value.get("Width"))
+            height = value.get("height", value.get("Height"))
+            data = value.get("data", value.get("Data"))
+        else:
+            width = getattr(value, "width", getattr(value, "Width", None))
+            height = getattr(value, "height", getattr(value, "Height", None))
+            data = getattr(value, "data", getattr(value, "Data", value))
+        if width is None or height is None:
+            return cls.from_array(data)
+        raw = np.asarray(data, dtype=np.uint8)
+        channels = raw.size // (int(width) * int(height)) if width and height else 0
+        mat = cls.from_pixel_data(int(width), int(height), raw)
+        if channels == 4 and (flags is None or int(flags) != cv2.IMREAD_UNCHANGED):
+            mat = cls(cv2.cvtColor(mat.bgr, cv2.COLOR_RGBA2BGR))
+        return mat
+
+    @staticmethod
+    def _factory_dimensions(*args) -> tuple[int, int, int]:
+        if len(args) == 1:
+            rows, columns = Mat._size_rows_cols(args[0])
+            return rows, columns, 0
+        if len(args) == 2:
+            rows, columns = Mat._size_rows_cols(args[0]) if not isinstance(
+                args[0], (int, float, np.integer, np.floating)
+            ) else (int(args[0]), int(args[0]))
+            return rows, columns, int(args[1])
+        if len(args) == 3:
+            return int(args[0]), int(args[1]), int(args[2])
+        raise TypeError("Mat 工厂需要 Size/type 或 rows/cols/type")
+
+    @staticmethod
+    def zeros(*args) -> "Mat":
+        rows, columns, type_value = Mat._factory_dimensions(*args)
+        return Mat._from_cv_type(rows, columns, type_value)
+
+    @staticmethod
+    def ones(*args) -> "Mat":
+        result = Mat.zeros(*args)
+        result.bgr[...] = 1
+        return result
+
+    @staticmethod
+    def eye(*args) -> "Mat":
+        rows, columns, type_value = Mat._factory_dimensions(*args)
+        result = Mat._from_cv_type(rows, columns, type_value)
+        if result.channels() == 1:
+            np.fill_diagonal(result.bgr, 1)
+        else:
+            for channel in range(result.channels()):
+                np.fill_diagonal(result.bgr[:, :, channel], 1)
+        return result
+
+    @staticmethod
+    def im_decode_bytes(data, flags=None) -> "Mat":
+        return Mat.im_decode(data, flags)
+
     @property
     def rows(self) -> int:
-        return self.bgr.shape[0]
+        return int(self.bgr.shape[0]) if self.bgr.ndim else 0
 
     @property
     def cols(self) -> int:
-        return self.bgr.shape[1]
+        if self.bgr.ndim < 2:
+            return 1 if self.bgr.ndim else 0
+        return int(self.bgr.shape[1])
+
+    @property
+    def dims(self) -> int:
+        return int(self.bgr.ndim)
+
+    @property
+    def flags(self) -> int:
+        return int(self.bgr.flags.c_contiguous)
+
+    @property
+    def data(self):
+        self.throw_if_disposed()
+        return self.bgr.tobytes()
+
+    @property
+    def data_pointer(self):
+        return int(self.bgr.__array_interface__["data"][0]) if self.bgr.size else 0
+
+    @property
+    def data_start(self):
+        return self.data_pointer
+
+    @property
+    def data_end(self):
+        return self.data_pointer + int(self.bgr.nbytes)
+
+    @property
+    def data_limit(self):
+        return self.data_end
+
+    @property
+    def cv_ptr(self):
+        return self.data_pointer
+
+    @property
+    def is_disposed(self) -> bool:
+        return self._disposed
+
+    @property
+    def is_enabled_dispose(self) -> bool:
+        return True
 
     width = property(lambda self: self.cols)
     height = property(lambda self: self.rows)
+    Rows = property(lambda self: self.rows)
+    Cols = property(lambda self: self.cols)
+    Width = property(lambda self: self.width)
+    Height = property(lambda self: self.height)
 
     def gray(self) -> np.ndarray:
+        self.throw_if_disposed()
         if self._gray is None:
-            self._gray = cv2.cvtColor(self.bgr, cv2.COLOR_BGR2GRAY)
+            if self.bgr.ndim == 2:
+                self._gray = self.bgr
+            elif self.bgr.ndim == 3 and self.bgr.shape[2] == 1:
+                self._gray = self.bgr[:, :, 0]
+            else:
+                self._gray = cv2.cvtColor(self.bgr, cv2.COLOR_BGR2GRAY)
         return self._gray
 
     def empty(self) -> bool:
@@ -475,46 +728,716 @@ class Mat:
             return 1
         return int(self.bgr.shape[2])
 
-    def get(self, _pixel_type, row: int, column: int):
-        """Return one pixel using OpenCvSharp's ``Mat.Get<T>`` shape.
+    def total(self, start_dim: int = 0, end_dim: int | None = None) -> int:
+        self.throw_if_disposed()
+        start = max(0, int(start_dim))
+        end = self.bgr.ndim if end_dim is None else min(self.bgr.ndim, int(end_dim) + 1)
+        return int(np.prod(self.bgr.shape[start:end], dtype=np.int64))
 
-        Community scripts pass ``OpenCvSharp.Vec3b`` as the first argument
-        and consume the returned value through ``Item0``/``Item1``/``Item2``.
-        The type token is intentionally only a compatibility marker: the
-        actual channel count comes from the matrix.
-        """
-        y, x = int(row), int(column)
-        if y < 0 or x < 0 or y >= self.rows or x >= self.cols:
-            raise IndexError(f"Mat.Get 坐标越界: row={y}, column={x}")
-        pixel = self.bgr[y, x]
-        if np.isscalar(pixel):
-            values = [int(pixel)]
-        else:
-            values = [int(value) for value in np.asarray(pixel).reshape(-1)]
+    def size(self, dim: int | None = None):
+        self.throw_if_disposed()
+        if dim is not None:
+            return int(self.bgr.shape[int(dim)])
+        return Size(self.cols, self.rows)
+
+    def step(self, dim: int | None = None) -> int:
+        self.throw_if_disposed()
+        if dim is None:
+            return int(self.bgr.strides[0]) if self.bgr.ndim else 0
+        return int(self.bgr.strides[int(dim)])
+
+    def step1(self, dim: int = 0) -> int:
+        return int(self.step(dim) // max(1, self.bgr.dtype.itemsize))
+
+    def elem_size1(self) -> int:
+        return int(self.bgr.dtype.itemsize)
+
+    def elem_size(self) -> int:
+        return int(self.bgr.dtype.itemsize * self.channels())
+
+    def depth(self) -> int:
+        dtype = np.dtype(self.bgr.dtype)
+        for depth, candidate in self._CV_DEPTH_DTYPES.items():
+            if dtype == np.dtype(candidate):
+                return depth
+        return 0
+
+    def type(self) -> int:
+        return int(self.depth() + ((self.channels() - 1) << 3))
+
+    def is_continuous(self) -> bool:
+        return bool(self.bgr.flags.c_contiguous)
+
+    def is_submatrix(self) -> bool:
+        return not bool(self.bgr.flags.owndata)
+
+    def throw_if_disposed(self) -> None:
+        if self._disposed:
+            raise RuntimeError("Mat 已释放")
+
+    @staticmethod
+    def _pixel_result(pixel):
+        values = []
+        for value in np.asarray(pixel).reshape(-1):
+            values.append(
+                int(value) if np.issubdtype(np.asarray(value).dtype, np.integer)
+                else float(value)
+            )
         return {
             **{f"Item{index}": value for index, value in enumerate(values)},
             **{f"item{index}": value for index, value in enumerate(values)},
         }
 
+    def get(self, *args):
+        """Return one pixel using OpenCvSharp's ``Mat.Get<T>`` shape.
+
+        Community scripts pass ``OpenCvSharp.Vec3b`` as the first argument
+        and consume the returned value through ``Item0``/``Item1``/``Item2``.
+        The type token is intentionally only a compatibility marker.  The
+        one- and two-index forms mirror OpenCvSharp's direct indexer access.
+        """
+        self.throw_if_disposed()
+        if len(args) == 3 and not isinstance(args[0], (int, float)):
+            _pixel_type, row, column = args
+            location = (int(row), int(column))
+        elif len(args) == 2:
+            location = tuple(int(value) for value in args)
+        elif len(args) == 1:
+            index = int(args[0])
+            location = (index,) if self.bgr.ndim < 2 else divmod(index, self.cols)
+        elif len(args) == 3:
+            location = tuple(int(value) for value in args)
+        else:
+            raise TypeError("Mat.Get 需要一个、两个或三个索引参数")
+        pixel = self.bgr[location]
+        if np.asarray(pixel).ndim == 0:
+            value = np.asarray(pixel).item()
+            return int(value) if isinstance(value, (int, np.integer)) else float(value)
+        return self._pixel_result(pixel)
+
+    def set(self, *args) -> None:
+        """Set a pixel using one-, two- or three-index overloads."""
+        self.throw_if_disposed()
+        if len(args) == 2:
+            index, value = args
+            location = (int(index),) if self.bgr.ndim < 2 else divmod(int(index), self.cols)
+        elif len(args) == 3:
+            row, column, value = args
+            location = (int(row), int(column))
+        elif len(args) == 4:
+            i0, i1, i2, value = args
+            location = (int(i0), int(i1), int(i2))
+        else:
+            raise TypeError("Mat.Set 需要索引和一个值")
+        if isinstance(value, Mapping):
+            folded = {str(key).casefold(): item for key, item in value.items()}
+            values = [folded.get(f"item{index}", folded.get(f"val{index}", 0))
+                      for index in range(self.channels())]
+        elif isinstance(value, (list, tuple, np.ndarray)):
+            values = list(np.asarray(value).reshape(-1))
+        else:
+            values = [value]
+        target = self.bgr[location]
+        if np.asarray(target).ndim == 0:
+            self.bgr[location] = values[0]
+        else:
+            channels = int(np.asarray(target).size)
+            values = (values + [values[-1]])[:channels]
+            self.bgr[location] = np.asarray(values, dtype=self.bgr.dtype)
+        self._gray = None
+
+    def at(self, *args):
+        return self.get(*args)
+
+    def item(self, *args):
+        return self.get(*args)
+
+    def get_array(self, _index=None):
+        self.throw_if_disposed()
+        return self.bgr.tolist()
+
+    def get_rectangular_array(self, _index=None):
+        return self.get_array(_index)
+
+    def set_array(self, data) -> None:
+        self.bgr = np.asarray(data).copy()
+        self._gray = None
+        self._disposed = False
+
+    def set_rectangular_array(self, data) -> None:
+        self.set_array(data)
+
+    def clone(self, roi=None) -> "Mat":
+        self.throw_if_disposed()
+        if roi is None:
+            return Mat(self.bgr.copy())
+        x, y, width, height = _rect_tuple(roi)
+        x, y, width, height = map(int, (x, y, width, height))
+        return Mat(self.bgr[y:y + height, x:x + width].copy())
+
+    def copy_to(self, dst: "Mat", mask=None) -> None:
+        self.throw_if_disposed()
+        dst = getattr(dst, "__wrapped__", dst)
+        if not isinstance(dst, Mat):
+            raise TypeError("Mat.CopyTo 需要 Mat 目标")
+        mask = getattr(mask, "__wrapped__", mask)
+        if isinstance(mask, Mat) and not mask.empty():
+            selection = mask.bgr if mask.bgr.ndim == 2 else mask.bgr[:, :, 0]
+            dst.bgr = np.where(selection[..., None] > 0, self.bgr, dst.bgr)
+        else:
+            dst.bgr = self.bgr.copy()
+        dst._gray = None
+        dst._disposed = False
+
+    def set_to(self, value, mask=None) -> "Mat":
+        self.throw_if_disposed()
+        if isinstance(value, Mapping):
+            folded = {str(key).casefold(): item for key, item in value.items()}
+            values = [folded.get(f"val{index}", folded.get(f"item{index}", 0))
+                      for index in range(max(1, self.channels()))]
+        elif isinstance(value, (list, tuple, np.ndarray)):
+            values = list(np.asarray(value).reshape(-1))
+        else:
+            values = [value]
+        fill = np.asarray(values, dtype=self.bgr.dtype)
+        if self.bgr.ndim == 3 and fill.size > 1:
+            fill = fill[:self.bgr.shape[2]]
+        else:
+            fill = fill.flat[0]
+        mask = getattr(mask, "__wrapped__", mask)
+        if isinstance(mask, Mat) and not mask.empty():
+            selection = mask.bgr if mask.bgr.ndim == 2 else mask.bgr[:, :, 0]
+            self.bgr[selection > 0] = fill
+        else:
+            self.bgr[...] = fill
+        self._gray = None
+        return self
+
+    def _binary(self, other, operation: str) -> "Mat":
+        self.throw_if_disposed()
+        value = getattr(other, "__wrapped__", other)
+        operand = value.bgr if isinstance(value, Mat) else value
+        operations = {
+            "add": cv2.add, "subtract": cv2.subtract,
+            "multiply": cv2.multiply, "divide": cv2.divide,
+            "and": cv2.bitwise_and, "or": cv2.bitwise_or,
+            "xor": cv2.bitwise_xor,
+        }
+        try:
+            result = operations[operation](self.bgr, operand)
+        except cv2.error as error:
+            raise ValueError(f"Mat.{operation} 操作失败: {error}") from error
+        return Mat(result)
+
+    def _compare(self, other, operation: str) -> "Mat":
+        self.throw_if_disposed()
+        value = getattr(other, "__wrapped__", other)
+        operand = value.bgr if isinstance(value, Mat) else value
+        operations = {
+            "lt": np.less, "le": np.less_equal,
+            "ne": np.not_equal, "gt": np.greater,
+            "ge": np.greater_equal,
+        }
+        result = operations[operation](self.bgr, operand)
+        return Mat(np.asarray(result, dtype=np.uint8) * 255)
+
+    def less_than(self, other): return self._compare(other, "lt")
+    def less_than_or_equal(self, other): return self._compare(other, "le")
+    def not_equals(self, other): return self._compare(other, "ne")
+    def greater_than(self, other): return self._compare(other, "gt")
+    def greater_than_or_equal(self, other): return self._compare(other, "ge")
+
+    def col(self, x: int) -> "Mat":
+        return Mat(self.bgr[:, int(x):int(x) + 1].copy())
+
+    def row(self, y: int) -> "Mat":
+        return Mat(self.bgr[int(y):int(y) + 1].copy())
+
+    @staticmethod
+    def _range_tuple(value) -> tuple[int, int]:
+        value = getattr(value, "__wrapped__", value)
+        if isinstance(value, (list, tuple)):
+            return int(value[0]), int(value[1])
+        start = getattr(value, "start", getattr(value, "Start", 0))
+        end = getattr(value, "end", getattr(value, "End", 0))
+        return int(start), int(end)
+
+    def col_range(self, *args) -> "Mat":
+        if len(args) == 1:
+            start, end = self._range_tuple(args[0])
+        elif len(args) == 2:
+            start, end = map(int, args)
+        else:
+            raise TypeError("Mat.ColRange 需要 Range 或 start/end")
+        return Mat(self.bgr[:, start:end].copy())
+
+    def row_range(self, *args) -> "Mat":
+        if len(args) == 1:
+            start, end = self._range_tuple(args[0])
+        elif len(args) == 2:
+            start, end = map(int, args)
+        else:
+            raise TypeError("Mat.RowRange 需要 Range 或 start/end")
+        return Mat(self.bgr[start:end].copy())
+
+    def sub_mat(self, *args) -> "Mat":
+        if len(args) == 1:
+            x, y, width, height = _rect_tuple(args[0])
+            return self.clone((x, y, width, height))
+        if len(args) == 2:
+            row_start, row_end = self._range_tuple(args[0])
+            col_start, col_end = self._range_tuple(args[1])
+            return Mat(self.bgr[row_start:row_end, col_start:col_end].copy())
+        if len(args) == 4:
+            row_start, row_end, col_start, col_end = map(int, args)
+            return Mat(self.bgr[row_start:row_end, col_start:col_end].copy())
+        raise TypeError("Mat.SubMat 需要 Rect、两个 Range 或四个索引")
+
+    def diag(self_or_mat, diagonal: int = 0) -> "Mat":
+        """Support both ``Mat.Diag(mat)`` and ``mat.Diag()`` forms."""
+        value = getattr(self_or_mat, "__wrapped__", self_or_mat)
+        if not isinstance(value, Mat):
+            raise TypeError("Mat.Diag 需要 Mat")
+        return Mat(np.diag(value.bgr, k=int(diagonal)))
+
+    def convert_to(self, dst: "Mat", rtype: int, alpha: float = 1,
+                   beta: float = 0) -> None:
+        self.throw_if_disposed()
+        dst = getattr(dst, "__wrapped__", dst)
+        if not isinstance(dst, Mat):
+            raise TypeError("Mat.ConvertTo 需要 Mat 目标")
+        depth = int(rtype) & 7
+        dtype = self._CV_DEPTH_DTYPES.get(depth)
+        if dtype is None:
+            raise ValueError(f"不支持的目标深度: {depth}")
+        converted = self.bgr.astype(np.float64) * float(alpha) + float(beta)
+        if np.issubdtype(np.dtype(dtype), np.integer):
+            info = np.iinfo(dtype)
+            converted = np.clip(np.rint(converted), info.min, info.max)
+        dst.bgr = converted.astype(dtype)
+        dst._gray = None
+        dst._disposed = False
+
+    def assign_to(self, dst: "Mat", type_code: int = -1) -> None:
+        if int(type_code) < 0:
+            self.copy_to(dst)
+            return
+        self.convert_to(dst, int(type_code))
+
+    def reshape(self, cn: int, rows: int = 0) -> "Mat":
+        self.throw_if_disposed()
+        channels = int(cn) or self.channels()
+        total_values = self.bgr.size
+        target_rows = int(rows) or self.rows
+        if target_rows <= 0 or total_values % (target_rows * channels):
+            raise ValueError("Mat.Reshape 的尺寸与元素数量不匹配")
+        target_cols = total_values // (target_rows * channels)
+        shape = (target_rows, target_cols) if channels == 1 else (target_rows, target_cols, channels)
+        return Mat(self.bgr.reshape(shape).copy())
+
+    def t(self) -> "Mat":
+        self.throw_if_disposed()
+        if self.bgr.ndim == 2:
+            return Mat(self.bgr.T.copy())
+        return Mat(np.transpose(self.bgr, (1, 0, *range(2, self.bgr.ndim))).copy())
+
+    def inv(self, method: int = cv2.DECOMP_LU) -> "Mat":
+        return Mat(cv2.invert(self.bgr, int(method))[1])
+
+    def mul(self, other, scale: float = 1) -> "Mat":
+        value = getattr(other, "__wrapped__", other)
+        operand = value.bgr if isinstance(value, Mat) else value
+        return Mat(cv2.multiply(self.bgr, operand, scale=float(scale)))
+
+    def cross(self, other: "Mat") -> "Mat":
+        value = getattr(other, "__wrapped__", other)
+        return Mat(np.cross(self.bgr, value.bgr if isinstance(value, Mat) else value))
+
+    def dot(self, other: "Mat") -> float:
+        value = getattr(other, "__wrapped__", other)
+        operand = value.bgr if isinstance(value, Mat) else value
+        return float(np.dot(self.bgr.reshape(-1), np.asarray(operand).reshape(-1)))
+
+    def create(self, *args) -> None:
+        if len(args) == 2:
+            rows, cols = self._size_rows_cols(args[0])
+            type_code = args[1]
+        elif len(args) == 3:
+            rows, cols, type_code = map(int, args)
+        else:
+            raise TypeError("Mat.Create 需要 Size/type 或 rows/cols/type")
+        replacement = self._from_cv_type(rows, cols, int(type_code))
+        self.bgr, self._gray, self._disposed = replacement.bgr, None, False
+
+    def abs(self) -> "Mat":
+        return Mat(np.abs(self.bgr))
+
+    def sum(self) -> Scalar:
+        values = np.asarray(self.bgr, dtype=np.float64)
+        if values.ndim >= 3:
+            channels = [float(values[:, :, index].sum()) for index in range(values.shape[2])]
+        else:
+            channels = [float(values.sum())]
+        return Scalar(*(channels + [0.0] * (4 - len(channels))))
+
+    def count_non_zero(self) -> int:
+        source = self.bgr if self.bgr.ndim == 2 else cv2.cvtColor(self.bgr, cv2.COLOR_BGR2GRAY)
+        return int(cv2.countNonZero(source))
+
+    def find_non_zero(self) -> "Mat":
+        source = self.bgr if self.bgr.ndim == 2 else cv2.cvtColor(self.bgr, cv2.COLOR_BGR2GRAY)
+        points = cv2.findNonZero(source)
+        return Mat(np.empty((0, 1, 2), dtype=np.int32) if points is None else points)
+
+    def mean(self, mask=None) -> Scalar:
+        value = getattr(mask, "__wrapped__", mask)
+        mask_array = None if value is None else value.bgr if isinstance(value, Mat) else value
+        channels = cv2.mean(self.bgr, mask=mask_array)
+        return Scalar(*channels)
+
+    def split(self) -> list["Mat"]:
+        if self.bgr.ndim == 2:
+            return [self.clone()]
+        return [Mat(channel.copy()) for channel in cv2.split(self.bgr)]
+
+    def extract_channel(self, coi: int) -> "Mat":
+        return Mat(cv2.extractChannel(self.bgr, int(coi)))
+
+    def insert_channel(self, channel: "Mat", coi: int) -> None:
+        value = getattr(channel, "__wrapped__", channel)
+        if not isinstance(value, Mat):
+            raise TypeError("Mat.InsertChannel 需要 Mat 通道")
+        cv2.insertChannel(value.bgr, self.bgr, int(coi))
+        self._gray = None
+
+    def flip(self, flip_code: int) -> "Mat":
+        return Mat(cv2.flip(self.bgr, int(flip_code)))
+
+    def repeat(self, ny: int, nx: int) -> "Mat":
+        return Mat(cv2.repeat(self.bgr, int(ny), int(nx)))
+
+    def in_range(self, lower, upper) -> "Mat":
+        return Mat(cv2.inRange(self.bgr, _scalar_tuple(lower), _scalar_tuple(upper)))
+
+    def sqrt(self) -> "Mat": return Mat(np.sqrt(self.bgr.astype(np.float64)))
+    def pow(self, power: float) -> "Mat": return Mat(np.power(self.bgr, float(power)))
+    def exp(self) -> "Mat": return Mat(np.exp(self.bgr.astype(np.float64)))
+    def log(self) -> "Mat": return Mat(np.log(np.maximum(self.bgr, 1e-12)))
+
+    def threshold(self, thresh: float, maxval: float, threshold_type: int) -> "Mat":
+        source = self.gray()
+        if source.dtype not in (np.uint8, np.uint16, np.float32, np.float64):
+            source = source.astype(np.float32)
+        _, result = cv2.threshold(source, float(thresh), float(maxval), int(threshold_type))
+        return Mat(result)
+
+    def adaptive_threshold(self, max_value: float, adaptive_method: int,
+                           threshold_type: int, block_size: int, c: float) -> "Mat":
+        result = cv2.adaptiveThreshold(
+            self.gray(), float(max_value), int(adaptive_method),
+            int(threshold_type), int(block_size), float(c),
+        )
+        return Mat(result)
+
+    def cvt_color(self, code: int, dst_cn: int = 0) -> "Mat":
+        kwargs = {} if not dst_cn else {"dstCn": int(dst_cn)}
+        return Mat(cv2.cvtColor(self.bgr, int(code), **kwargs))
+
+    def match_template(self, template: "Mat", method: int, mask=None) -> "Mat":
+        value = getattr(template, "__wrapped__", template)
+        if not isinstance(value, Mat):
+            raise TypeError("Mat.MatchTemplate 需要 Mat 模板")
+        mask_value = getattr(mask, "__wrapped__", mask)
+        mask_array = mask_value.bgr if isinstance(mask_value, Mat) else mask_value
+        return Mat(cv2.matchTemplate(self.bgr, value.bgr, int(method), mask=mask_array))
+
+    def add(self, other): return self._binary(other, "add")
+    def subtract(self, other): return self._binary(other, "subtract")
+    def multiply(self, other): return self._binary(other, "multiply")
+    def divide(self, other): return self._binary(other, "divide")
+    def bitwise_and(self, other): return self._binary(other, "and")
+    def bitwise_or(self, other): return self._binary(other, "or")
+    def xor(self, other): return self._binary(other, "xor")
+    def plus(self): return self.clone()
+    def negate(self): return Mat(cv2.multiply(self.bgr, -1))
+    def ones_complement(self): return Mat(cv2.bitwise_not(self.bgr))
+
     def dispose(self) -> None:
         self.bgr = np.empty((0, 0, 3), dtype=np.uint8)
         self._gray = None
+        self._disposed = True
 
+    # OpenCvSharp exposes both camelCase and PascalCase names.  Keep the
+    # aliases on the Python object as well as in the JS constructor so values
+    # returned from another host method remain script-compatible.
+    Dims = property(lambda self: self.dims)
+    Flags = property(lambda self: self.flags)
+    Data = property(lambda self: self.data)
+    DataPointer = property(lambda self: self.data_pointer)
+    DataStart = property(lambda self: self.data_start)
+    DataEnd = property(lambda self: self.data_end)
+    DataLimit = property(lambda self: self.data_limit)
+    CvPtr = property(lambda self: self.cv_ptr)
+    IsDisposed = property(lambda self: self.is_disposed)
+    IsEnabledDispose = property(lambda self: self.is_enabled_dispose)
+    Total = total
+    Size = size
+    Step = step
+    Step1 = step1
+    ElemSize = elem_size
+    ElemSize1 = elem_size1
+    Type = type
+    Depth = depth
+    IsContinuous = is_continuous
+    IsSubmatrix = is_submatrix
+    ThrowIfDisposed = throw_if_disposed
     Dispose = dispose
+    Release = dispose
     Empty = empty
     Channels = channels
     Get = get
+    At = at
+    Set = set
+    GetArray = get_array
+    GetRectangularArray = get_rectangular_array
+    SetArray = set_array
+    SetRectangularArray = set_rectangular_array
+    Item = item
+    Clone = clone
+    CopyTo = copy_to
+    SetTo = set_to
+    Add = add
+    Subtract = subtract
+    Multiply = multiply
+    Divide = divide
+    BitwiseAnd = bitwise_and
+    BitwiseOr = bitwise_or
+    Xor = xor
+    Plus = plus
+    Negate = negate
+    OnesComplement = ones_complement
+    LessThan = less_than
+    LessThanOrEqual = less_than_or_equal
+    NotEquals = not_equals
+    GreaterThan = greater_than
+    GreaterThanOrEqual = greater_than_or_equal
+    Col = col
+    ColRange = col_range
+    Row = row
+    RowRange = row_range
+    SubMat = sub_mat
+    Diag = diag
+    ConvertTo = convert_to
+    AssignTo = assign_to
+    Reshape = reshape
+    T = t
+    Inv = inv
+    Mul = mul
+    Cross = cross
+    Dot = dot
+    Create = create
+    Abs = abs
+    Sum = sum
+    CountNonZero = count_non_zero
+    FindNonZero = find_non_zero
+    Mean = mean
+    Split = split
+    ExtractChannel = extract_channel
+    InsertChannel = insert_channel
+    Flip = flip
+    Repeat = repeat
+    InRange = in_range
+    Sqrt = sqrt
+    Pow = pow
+    Exp = exp
+    Log = log
+    Threshold = threshold
+    AdaptiveThreshold = adaptive_threshold
+    CvtColor = cvt_color
+    MatchTemplate = match_template
+
+    # Static OpenCvSharp factories.  They are assigned explicitly instead of
+    # relying on the case-insensitive JS proxy for class properties.
+    FromArray = from_array
+    FromPixelData = from_pixel_data
+    ImDecode = im_decode
+    FromImageData = from_image_data
+    Zeros = zeros
+    Ones = ones
+    Eye = eye
+
+
+def _point_tuple(value) -> tuple[float, float]:
+    """Read an OpenCvSharp point/vector-like value.
+
+    BetterGI scripts pass ``Point2f`` values back through PythonMonkey, but
+    ``FromPoint``/``FromVec2f`` are also commonly used with plain JS objects
+    and OpenCvSharp tuple values.  Keeping this conversion in one place makes
+    the arithmetic methods behave consistently for all three forms.
+    """
+    value = getattr(value, "__wrapped__", value)
+    if isinstance(value, Mapping):
+        folded = {str(key).casefold(): item for key, item in value.items()}
+        x = folded.get("x", folded.get("item0", 0))
+        y = folded.get("y", folded.get("item1", 0))
+    elif isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+        x, y = value[0], value[1]
+    else:
+        def member(*names):
+            for name in names:
+                try:
+                    return value[name]
+                except (KeyError, TypeError, AttributeError):
+                    pass
+                try:
+                    return getattr(value, name)
+                except (AttributeError, TypeError):
+                    pass
+            return 0
+
+        x = member("x", "X", "item0", "Item0")
+        y = member("y", "Y", "item1", "Item1")
+    try:
+        return float(x), float(y)
+    except (TypeError, ValueError) as error:
+        raise TypeError("点坐标必须是数字") from error
 
 
 class Point2f:
-    def __init__(self, x: float, y: float):
-        self.x = x
-        self.y = y
+    """OpenCvSharp.Point2f 的脚本兼容值对象。"""
 
-    def distance_to(self, other: "Point2f") -> float:
-        return float(np.hypot(self.x - other.x, self.y - other.y))
+    def __init__(self, x: float = 0, y: float = 0):
+        self.x = float(x)
+        self.y = float(y)
 
-    distanceTo = distance_to
+    X = property(
+        lambda self: self.x,
+        lambda self, value: setattr(self, "x", float(value)),
+    )
+    Y = property(
+        lambda self: self.y,
+        lambda self, value: setattr(self, "y", float(value)),
+    )
+
+    def to_point(self) -> dict[str, int]:
+        """Return the integer OpenCvSharp.Point-shaped value."""
+        return {
+            "x": int(round(self.x)), "y": int(round(self.y)),
+            "X": int(round(self.x)), "Y": int(round(self.y)),
+        }
+
+    def to_vec2f(self) -> dict[str, float]:
+        """Return the OpenCvSharp.Vec2f-shaped value."""
+        return {
+            "item0": self.x, "item1": self.y,
+            "Item0": self.x, "Item1": self.y,
+        }
+
+    def plus(self) -> "Point2f":
+        return Point2f(self.x, self.y)
+
+    def negate(self) -> "Point2f":
+        return Point2f(-self.x, -self.y)
+
+    def add(self, other) -> "Point2f":
+        x, y = _point_tuple(other)
+        return Point2f(self.x + x, self.y + y)
+
+    def subtract(self, other) -> "Point2f":
+        x, y = _point_tuple(other)
+        return Point2f(self.x - x, self.y - y)
+
+    def multiply(self, scalar: float) -> "Point2f":
+        return Point2f(self.x * float(scalar), self.y * float(scalar))
+
+    def distance_to(self, other) -> float:
+        x, y = _point_tuple(other)
+        return float(np.hypot(self.x - x, self.y - y))
+
+    def dot_product(self, *args) -> float:
+        if len(args) == 1:
+            x, y = _point_tuple(args[0])
+        elif len(args) == 2:
+            x, y = _point_tuple(args[1])
+        else:
+            raise TypeError("Point2f.DotProduct 需要一个或两个点参数")
+        if len(args) == 2:
+            x0, y0 = _point_tuple(args[0])
+            return float(x0 * x + y0 * y)
+        return float(self.x * x + self.y * y)
+
+    def cross_product(self, *args) -> float:
+        if len(args) == 1:
+            x, y = _point_tuple(args[0])
+            return float(self.x * y - self.y * x)
+        if len(args) == 2:
+            x0, y0 = _point_tuple(args[0])
+            x1, y1 = _point_tuple(args[1])
+            return float(x0 * y1 - y0 * x1)
+        raise TypeError("Point2f.CrossProduct 需要一个或两个点参数")
+
+    def deconstruct(self, *_output) -> list[float]:
+        # PythonMonkey cannot mutate C#-style out parameters.  Returning the
+        # tuple as an array preserves the normal JS destructuring form.
+        return [self.x, self.y]
+
+    @staticmethod
+    def from_point(point) -> "Point2f":
+        return Point2f(*_point_tuple(point))
+
+    @staticmethod
+    def from_vec2f(vec) -> "Point2f":
+        return Point2f(*_point_tuple(vec))
+
+    @staticmethod
+    def distance(p1, p2) -> float:
+        x0, y0 = _point_tuple(p1)
+        x1, y1 = _point_tuple(p2)
+        return float(np.hypot(x0 - x1, y0 - y1))
+
+    @staticmethod
+    def dot_product_static(*args) -> float:
+        if len(args) == 1:
+            x, y = _point_tuple(args[0])
+            return float(x * x + y * y)
+        if len(args) == 2:
+            x0, y0 = _point_tuple(args[0])
+            x1, y1 = _point_tuple(args[1])
+            return float(x0 * x1 + y0 * y1)
+        raise TypeError("Point2f.DotProduct 需要一个或两个点参数")
+
+    @staticmethod
+    def cross_product_static(*args) -> float:
+        if len(args) == 1:
+            x, y = _point_tuple(args[0])
+            return float(x * y)
+        if len(args) == 2:
+            x0, y0 = _point_tuple(args[0])
+            x1, y1 = _point_tuple(args[1])
+            return float(x0 * y1 - y0 * x1)
+        raise TypeError("Point2f.CrossProduct 需要一个或两个点参数")
+
+    def __iter__(self):
+        yield self.x
+        yield self.y
+
+    def __repr__(self) -> str:
+        return f"Point2f({self.x:g}, {self.y:g})"
+
+    ToPoint = to_point
+    ToVec2f = to_vec2f
+    Plus = plus
+    Negate = negate
+    Add = add
+    Subtract = subtract
+    Multiply = multiply
+    DistanceTo = distance_to
+    DotProduct = dot_product
+    CrossProduct = cross_product
+    Deconstruct = deconstruct
+    FromPoint = from_point
+    FromVec2f = from_vec2f
+    Distance = distance
 
 
 class RecognitionObject:
@@ -534,6 +1457,7 @@ class RecognitionObject:
         self.mask_color = (0, 255, 0)  # BGR
         self.mask_mat: Mat | None = None
         self.draw_on_window = False
+        self.draw_on_window_pen = None
         self.max_match_count = -1
         self.use_binary_match = False
         self.binary_threshold = 128
@@ -679,6 +1603,10 @@ class RecognitionObject:
         lambda self: self.draw_on_window,
         lambda self, value: setattr(self, "draw_on_window", bool(value)),
     )
+    drawOnWindowPen = property(
+        lambda self: self.draw_on_window_pen,
+        lambda self, value: setattr(self, "draw_on_window_pen", value),
+    )
     maxMatchCount = property(
         lambda self: self.max_match_count,
         lambda self, value: setattr(self, "max_match_count", int(value)),
@@ -760,6 +1688,7 @@ class RecognitionObject:
     MaskColor = maskColor
     MaskMat = maskMat
     DrawOnWindow = drawOnWindow
+    DrawOnWindowPen = drawOnWindowPen
     MaxMatchCount = maxMatchCount
     UseBinaryMatch = useBinaryMatch
     BinaryThreshold = binaryThreshold
@@ -799,16 +1728,63 @@ class RecognitionObject:
     Dispose = dispose
 
 
+class _Drawable:
+    """Serializable drawing descriptor used by the touch runtime.
+
+    BetterGI normally hands these objects to a desktop overlay.  DeviceHub
+    has no window overlay, but scripts still construct and pass drawables
+    while debugging recognition.  Keeping the geometry as a plain host value
+    preserves that flow without asking for a new screenshot or mutating the
+    trigger frame.
+    """
+
+    def __init__(self, kind: str, name: str, pen=None, **geometry):
+        self.kind = str(kind)
+        self.name = str(name)
+        self.pen = pen
+        for key, value in geometry.items():
+            setattr(self, key, float(value))
+
+    Kind = property(lambda self: self.kind)
+    Name = property(lambda self: self.name)
+    Pen = property(lambda self: self.pen)
+    X = property(lambda self: getattr(self, "x", 0.0))
+    Y = property(lambda self: getattr(self, "y", 0.0))
+    Width = property(lambda self: getattr(self, "width", 0.0))
+    Height = property(lambda self: getattr(self, "height", 0.0))
+    X1 = property(lambda self: getattr(self, "x1", 0.0))
+    Y1 = property(lambda self: getattr(self, "y1", 0.0))
+    X2 = property(lambda self: getattr(self, "x2", 0.0))
+    Y2 = property(lambda self: getattr(self, "y2", 0.0))
+
+    def to_dict(self) -> dict:
+        result = {
+            "kind": self.kind,
+            "Kind": self.kind,
+            "name": self.name,
+            "Name": self.name,
+            "pen": self.pen,
+            "Pen": self.pen,
+        }
+        for key, value in vars(self).items():
+            if key not in {"kind", "name", "pen"}:
+                result[key] = value
+                result[key[:1].upper() + key[1:]] = value
+        return result
+
+
 class Region:
     """已识别（或派生）的矩形。对脚本暴露 ref 坐标，内部持有设备像素矩形。"""
 
     def __init__(self, ctx: "GameContext", dx: float, dy: float, dw: float, dh: float,
-                 text: str = "", score: float = 0.0, empty: bool = False):
+                 text: str = "", score: float = 0.0, empty: bool = False,
+                 prev: "Region | None" = None):
         self.ctx = ctx
         self.dx, self.dy, self.dw, self.dh = dx, dy, dw, dh
         self.text = text
         self.score = score
         self._empty = empty
+        self._prev = prev
 
     @property
     def x(self) -> float:
@@ -900,7 +1876,10 @@ class Region:
         else:
             raise TypeError("Region.Derive 需要 Rect、x/y 或 x/y/w/h")
         s = self.ctx.transform.scale
-        return Region(self.ctx, self.dx + x * s, self.dy + y * s, w * s, h * s, empty=self._empty)
+        return Region(
+            self.ctx, self.dx + x * s, self.dy + y * s, w * s, h * s,
+            empty=self._empty, prev=self,
+        )
 
     def convert_position_to_game_capture_region(
         self, x: float, y: float, w: float | None = None, h: float | None = None,
@@ -925,14 +1904,57 @@ class Region:
     def to_rect(self):
         return _rect_result(self.x, self.y, self.width, self.height)
 
-    def draw_self(self, name: str = "rect", pen=None) -> None:
-        """Drawing is optional on the touch console; preserve script flow."""
+    def to_image_region(self) -> "ImageRegion":
+        """Materialize a result region without taking another screenshot."""
+        if isinstance(self, ImageRegion):
+            return self
+        source = self._prev
+        while source is not None and not isinstance(source, ImageRegion):
+            source = source._prev
+        if source is not None:
+            return source.derive_crop(
+                self.x - source.x, self.y - source.y,
+                self.width, self.height,
+            )
+        return ImageRegion(self.ctx, self.ctx.capture_bgr()).derive_crop(
+            self.x, self.y, self.width, self.height,
+        )
 
-    def draw_rect(self, *args) -> None:
-        """Compatibility no-op until a script requests persistent debug drawing."""
+    def self_to_rect_drawable(self, name: str = "rect", pen=None) -> _Drawable:
+        return _Drawable(
+            "rect", name, pen,
+            x=self.x, y=self.y, width=self.width, height=self.height,
+        )
 
-    def draw_line(self, *args) -> None:
-        """Compatibility no-op until a script requests persistent debug drawing."""
+    def to_rect_drawable(self, *args) -> _Drawable:
+        if len(args) in (1, 2, 3):
+            rect = _rect_tuple(args[0])
+            name = args[1] if len(args) >= 2 else "rect"
+            pen = args[2] if len(args) >= 3 else None
+            x, y, width, height = rect
+        elif len(args) in (4, 5, 6):
+            x, y, width, height = map(float, args[:4])
+            name = args[4] if len(args) >= 5 else "rect"
+            pen = args[5] if len(args) >= 6 else None
+        else:
+            raise TypeError("Region.ToRectDrawable 需要 Rect 或 x/y/w/h")
+        return _Drawable("rect", name, pen, x=x, y=y, width=width, height=height)
+
+    def to_line_drawable(self, x1: float, y1: float, x2: float, y2: float,
+                         name: str = "line", pen=None) -> _Drawable:
+        return _Drawable(
+            "line", name, pen,
+            x1=float(x1), y1=float(y1), x2=float(x2), y2=float(y2),
+        )
+
+    def draw_self(self, name: str = "rect", pen=None) -> _Drawable:
+        return self.self_to_rect_drawable(name, pen)
+
+    def draw_rect(self, *args) -> _Drawable:
+        return self.to_rect_drawable(*args)
+
+    def draw_line(self, *args) -> _Drawable:
+        return self.to_line_drawable(*args)
 
     def dispose(self) -> None:
         """Region arrays are garbage-collected; expose IDisposable semantics."""
@@ -962,6 +1984,8 @@ class Region:
     ConvertPositionToGameCaptureRegion = convert_position_to_game_capture_region
     convertPositionToDesktopRegion = convert_position_to_desktop_region
     ConvertPositionToDesktopRegion = convert_position_to_desktop_region
+    toImageRegion = to_image_region
+    ToImageRegion = to_image_region
     toRect = to_rect
     ToRect = to_rect
     drawSelf = draw_self
@@ -970,6 +1994,12 @@ class Region:
     DrawRect = draw_rect
     drawLine = draw_line
     DrawLine = draw_line
+    selfToRectDrawable = self_to_rect_drawable
+    SelfToRectDrawable = self_to_rect_drawable
+    toRectDrawable = to_rect_drawable
+    ToRectDrawable = to_rect_drawable
+    toLineDrawable = to_line_drawable
+    ToLineDrawable = to_line_drawable
     Dispose = dispose
     X = property(lambda self: self.x, lambda self, value: setattr(self, "x", value))
     Y = property(lambda self: self.y, lambda self, value: setattr(self, "y", value))
@@ -982,6 +2012,10 @@ class Region:
         lambda self, value: setattr(self, "height", value),
     )
     Text = property(lambda self: self.text, lambda self, value: setattr(self, "text", str(value)))
+    prev = property(lambda self: self._prev)
+    Prev = prev
+    prevConverter = property(lambda self: None)
+    PrevConverter = prevConverter
     top = property(lambda self: self.y, lambda self, value: setattr(self, "y", value))
     Top = top
     bottom = property(lambda self: self.y + self.height)
@@ -1029,7 +2063,7 @@ class DesktopRegion(Region):
         if not isinstance(value, Mat):
             raise TypeError("DesktopRegion.Derive 需要 Mat")
         dx, dy = self.ctx.transform.to_device(float(x), float(y))
-        return ImageRegion(self.ctx, value.bgr, dx, dy)
+        return GameCaptureRegion(self.ctx, value.bgr, dx, dy)
 
     def derive(self, *args):
         if args and isinstance(getattr(args[0], "__wrapped__", args[0]), Mat):
@@ -1051,10 +2085,25 @@ class ImageRegion(Region):
         super().__init__(ctx, dx, dy, bgr.shape[1], bgr.shape[0])
         self.bgr = bgr
         self._reference_search_allowed = bool(reference_search_allowed)
+        self._src_mat: Mat | None = None
+        self._cache_grey_mat: Mat | None = None
 
     @property
     def src_mat(self) -> Mat:
-        return Mat(self.bgr)
+        if self._src_mat is None:
+            self._src_mat = Mat(self.bgr)
+        return self._src_mat
+
+    @property
+    def cache_grey_mat(self) -> Mat:
+        if self._cache_grey_mat is None:
+            self._cache_grey_mat = Mat(self.src_mat.gray())
+        return self._cache_grey_mat
+
+    @property
+    def cache_image(self) -> Mat:
+        """Portable image backing used by BetterGI's detector API."""
+        return self.src_mat
 
     def _roi_to_device(self, roi) -> tuple[int, int, int, int]:
         h_img, w_img = self.bgr.shape[:2]
@@ -1338,6 +2387,7 @@ class ImageRegion(Region):
                 ) or self._has_reference_search(ro):
                     result = Region(
                         self.ctx, self.dx + cx, self.dy + cy, cw, ch, text=text,
+                        prev=self,
                     )
                 else:
                     self.text = text
@@ -1429,8 +2479,10 @@ class ImageRegion(Region):
                 if max_val < ro.threshold:
                     break
                 mx, my = max_loc
-                out.append(Region(self.ctx, self.dx + cx + mx, self.dy + cy + my,
-                                  tpl.shape[1], tpl.shape[0], score=float(max_val)))
+                out.append(Region(
+                    self.ctx, self.dx + cx + mx, self.dy + cy + my,
+                    tpl.shape[1], tpl.shape[0], score=float(max_val), prev=self,
+                ))
                 x0 = max(0, mx - tpl.shape[1] // 2)
                 y0 = max(0, my - tpl.shape[0] // 2)
                 work[y0:my + tpl.shape[0] // 2 + 1, x0:mx + tpl.shape[1] // 2 + 1] = -1.0
@@ -1454,7 +2506,7 @@ class ImageRegion(Region):
                 return []
             result = Region(
                 self.ctx, self.dx + cx, self.dy + cy, cw, ch,
-                score=float(match_count),
+                score=float(match_count), prev=self,
             )
             results = [result]
             if callable(success_action):
@@ -1482,7 +2534,7 @@ class ImageRegion(Region):
                 Region(self.ctx, self.dx + cx + it.x, self.dy + cy + it.y,
                        it.width, it.height,
                        text=self._apply_text_replacements(ro, str(it.text)),
-                       score=it.confidence)
+                       score=it.confidence, prev=self)
                 for it in items[:limit]
             ]
             if results:
@@ -1510,7 +2562,7 @@ class ImageRegion(Region):
         if x1 <= x0 or y1 <= y0:
             raise ValueError(f"DeriveCrop 裁剪区域无效: ({x}, {y}, {w}, {h})")
         crop = self.bgr[y0:y1, x0:x1]
-        return ImageRegion(
+        return type(self)(
             self.ctx, crop, self.dx + x0, self.dy + y0,
             reference_search_allowed=False,
         )
@@ -1523,6 +2575,10 @@ class ImageRegion(Region):
 
     srcMat = property(lambda self: self.src_mat)
     SrcMat = property(lambda self: self.src_mat)
+    cacheGreyMat = property(lambda self: self.cache_grey_mat)
+    CacheGreyMat = property(lambda self: self.cache_grey_mat)
+    cacheImage = property(lambda self: self.cache_image)
+    CacheImage = property(lambda self: self.cache_image)
     Find = find
     findMulti = find_multi
     FindMulti = find_multi
@@ -1532,3 +2588,36 @@ class ImageRegion(Region):
     DeriveTo1080P = derive_to_1080p
     ocrText = ocr_text
     OcrText = ocr_text
+
+
+class GameCaptureRegion(ImageRegion):
+    """ImageRegion with BetterGI's game-coordinate drawable helpers."""
+
+    def convert_to_rect_drawable(self, x: float, y: float, width: float,
+                                 height: float, pen=None,
+                                 name: str = "rect") -> _Drawable:
+        return _Drawable(
+            "rect", name, pen,
+            x=self.x + float(x), y=self.y + float(y),
+            width=float(width), height=float(height),
+        )
+
+    def convert_to_line_drawable(self, x1: float, y1: float, x2: float, y2: float,
+                                 pen=None, name: str = "line") -> _Drawable:
+        return _Drawable(
+            "line", name, pen,
+            x1=self.x + float(x1), y1=self.y + float(y1),
+            x2=self.x + float(x2), y2=self.y + float(y2),
+        )
+
+    def derive_to_1080p(self) -> "ImageRegion":
+        # All script-visible coordinates are already normalized to BetterGI's
+        # 1920x1080 reference canvas by ScreenTransform.
+        return self
+
+    convertToRectDrawable = convert_to_rect_drawable
+    ConvertToRectDrawable = convert_to_rect_drawable
+    convertToLineDrawable = convert_to_line_drawable
+    ConvertToLineDrawable = convert_to_line_drawable
+    deriveTo1080P = derive_to_1080p
+    DeriveTo1080P = derive_to_1080p

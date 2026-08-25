@@ -7,7 +7,8 @@
 - 未提供时，teleport/寻路会抛出明确的 NotImplementedError，但文件解析、
   校验与 action 执行（战斗 DSL 等）可用。
 
-相机朝向检测（小地图视野扇形）已实现简化版，供转向闭环使用。
+相机朝向检测使用 BetterGI 的极坐标边缘算法，并在低置信度时回退到
+兼容的亮度扇区估计，供转向闭环使用。
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import time
 from pathlib import Path
 from typing import Callable, Optional, Protocol
 
-import cv2
 import numpy as np
 
 from ..engine.context import GameContext
@@ -28,6 +28,7 @@ from .farming import (
     FarmingStatsRecorder,
 )
 from .model import PathingTask, Waypoint
+from .camera import crop_minimap_for_orientation, orientation_with_confidence
 
 
 class Positioner(Protocol):
@@ -39,35 +40,14 @@ class Positioner(Protocol):
 def camera_orientation_deg(ctx: GameContext, bgr: np.ndarray) -> Optional[float]:
     """从小地图视野扇形估计相机朝向（度，地图北为 0，顺时针）。
 
-    简化版：取小地图圆环区域，找亮度显著高于环境的扇形并取角平分线。
-    小地图位置来自布局 profile 的 minimap 配置。
+    使用 BetterGI 的极坐标边缘峰值算法；弱纹理帧自动回退到兼容的
+    圆环亮度估计。小地图位置来自布局 profile 的 minimap 配置。
     """
-    mm = getattr(ctx.layout, "buttons", {}).get("minimapCenter")
-    if mm is None:
+    crop = crop_minimap_for_orientation(ctx, bgr)
+    if crop is None:
         return None
-    cx, cy = mm[0] * ctx.transform.device_width, mm[1] * ctx.transform.device_height
-    r = 0.06 * ctx.transform.device_width
-    x0, y0 = int(cx - r), int(cy - r)
-    size = int(2 * r)
-    if x0 < 0 or y0 < 0 or y0 + size > bgr.shape[0] or x0 + size > bgr.shape[1]:
-        return None
-    crop = cv2.cvtColor(bgr[y0:y0 + size, x0:x0 + size], cv2.COLOR_BGR2GRAY).astype(np.float32)
-    angles = np.linspace(0, 2 * math.pi, 360, endpoint=False)
-    ring_r = size * 0.42
-    xs = (size / 2 + ring_r * np.cos(angles)).astype(int).clip(0, size - 1)
-    ys = (size / 2 + ring_r * np.sin(angles)).astype(int).clip(0, size - 1)
-    profile = crop[ys, xs]
-    profile = profile - profile.mean()
-    # 视野扇形约 90°：与宽度 90 的窗口做圆周相关，峰值即扇形中心
-    kernel = np.zeros(360, np.float32)
-    kernel[:90] = 1
-    kernel -= kernel.mean()
-    corr = np.real(np.fft.ifft(np.fft.fft(profile) * np.conj(np.fft.fft(kernel))))
-    center_idx = (int(np.argmax(corr)) + 45) % 360
-    if corr.max() < profile.std() * 30:  # 峰值不显著则认为检测失败
-        return None
-    # 图像坐标角 → 地图方位角（北=0，顺时针）
-    return (center_idx + 90) % 360
+    angle, _confidence = orientation_with_confidence(crop)
+    return angle
 
 
 class PathingExecutor:
