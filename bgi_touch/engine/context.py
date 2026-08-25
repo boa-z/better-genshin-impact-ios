@@ -30,6 +30,7 @@ class GameContext:
         self._frame_lock = threading.Lock()
         self._last_frame: np.ndarray | None = None
         self._last_frame_at = 0.0
+        self._frame_generation = 0
         self.devicehub_config = DeviceHubConfig.load(devicehub_config_path)
         self.device = DeviceClient(
             mcp_url or self.devicehub_config.mcp_url,
@@ -195,6 +196,7 @@ class GameContext:
         with self._frame_lock:
             self._last_frame = img
             self._last_frame_at = time.monotonic()
+            self._frame_generation += 1
         return img
 
     def capture_bgr_after_frame(self, after_version: int | None = None,
@@ -213,6 +215,13 @@ class GameContext:
                 return None, float("inf")
             age = max(0.0, time.monotonic() - self._last_frame_at)
             return self._last_frame.copy(), age
+
+    @property
+    def frame_generation(self) -> int:
+        """Monotonic token for the cached frame used by WebUI response caches."""
+
+        with self._frame_lock:
+            return int(getattr(self, "_frame_generation", 0))
 
     def capture_region(self) -> ImageRegion:
         return ImageRegion(self, self.capture_bgr())

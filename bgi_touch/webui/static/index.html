@@ -234,30 +234,55 @@ img.addEventListener('contextmenu', e => e.preventDefault());
 // ---- 截图轮询 ----
 let shotTimer = null;
 let deviceConnected = false;
+let shotInFlight = false;
+let shotPending = false;
+let shotEtag = '';
 async function refreshShot() {
+  clearTimeout(shotTimer);
+  if (shotInFlight) { shotPending = true; return; }
   if (!deviceConnected) {
     $('#shotinfo').textContent = '设备未连接（预览已暂停）';
     schedule(); return;
   }
+  if (document.hidden) { $('#shotinfo').textContent = '页面后台（预览已暂停）'; return; }
+  shotInFlight = true;
   try {
     const t0 = performance.now();
-    const r = await fetch(`/api/screenshot?annotate=${$('#annotate').checked?1:0}&w=1408`, {cache:'no-store'});
+    const r = await fetch(`/api/screenshot?annotate=${$('#annotate').checked?1:0}&w=1024&q=60`, {
+      cache:'no-cache', headers: shotEtag ? {'If-None-Match': shotEtag} : {}
+    });
+    if (r.status === 304) {
+      $('#shotinfo').textContent = `${Math.round(performance.now()-t0)} ms · 未变化`;
+      return;
+    }
     if (!r.ok) throw new Error((await r.json()).error);
     const blob = await r.blob();
-    const old = img.src; img.src = URL.createObjectURL(blob);
-    if (old) URL.revokeObjectURL(old);
+    if (blob.size) {
+      const old = img.src; img.src = URL.createObjectURL(blob);
+      if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+    }
+    shotEtag = r.headers.get('etag') || shotEtag;
     const age = r.headers.get('x-screenshot-frame-age-ms');
     $('#shotinfo').textContent = `${Math.round(performance.now()-t0)} ms · ${(blob.size/1024)|0} KB` +
       (age ? ` · 帧龄 ${age} ms` : '');
-  } catch (e) { $('#shotinfo').textContent = `截图失败: ${e.message}`; }
-  schedule();
+  } catch (e) {
+    $('#shotinfo').textContent = `截图失败: ${e.message}`;
+  } finally {
+    shotInFlight = false;
+    if (shotPending) { shotPending = false; schedule(0); }
+    else schedule();
+  }
 }
-function schedule() {
+function schedule(delay = null) {
   clearTimeout(shotTimer);
   const iv = +$('#fps').value;
-  if (iv > 0) shotTimer = setTimeout(refreshShot, iv);
+  if (iv > 0 && !document.hidden) shotTimer = setTimeout(refreshShot, delay ?? iv);
 }
-$('#fps').onchange = () => { clearTimeout(shotTimer); refreshShot(); };
+$('#fps').onchange = () => { shotPending = false; clearTimeout(shotTimer); refreshShot(); };
+document.addEventListener('visibilitychange', () => {
+  clearTimeout(shotTimer);
+  if (!document.hidden) refreshShot();
+});
 refreshShot();
 
 // ---- 状态/任务 ----
@@ -278,7 +303,8 @@ async function connectDevice() {
   const response = await post('/api/connect');
   if (response.ok) {
     deviceConnected = true;
-    await refreshStatus(); refreshShot();
+    await refreshStatus();
+    shotPending = false; clearTimeout(shotTimer); refreshShot();
   }
 }
 

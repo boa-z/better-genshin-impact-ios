@@ -39,6 +39,55 @@ def test_game_context_cached_frame_returns_copy_without_device_access():
     assert not ctx._last_frame[0, 0].any()
 
 
+def test_webui_screenshot_reuses_cached_jpeg_and_supports_conditional_requests(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.webui import server
+
+    frame = np.zeros((8, 12, 3), dtype=np.uint8)
+    ctx = SimpleNamespace(
+        cached_frame=Mock(return_value=(frame.copy(), 0.05)),
+        frame_generation=7,
+    )
+    monkeypatch.setattr(server, "_ctx", ctx)
+    server._preview_jpeg_cache.clear()
+    try:
+        first = server.api_screenshot(w=6, q=60, if_none_match=None)
+        assert first.status_code == 200
+        assert first.headers["etag"]
+        assert first.headers["cache-control"] == "private, max-age=0, must-revalidate"
+
+        def unexpected_encode(*_args, **_kwargs):
+            raise AssertionError("同一缓存帧不应重复 JPEG 编码")
+
+        monkeypatch.setattr(server.cv2, "imencode", unexpected_encode)
+        repeated = server.api_screenshot(w=6, q=60, if_none_match=None)
+        assert repeated.status_code == 200
+        assert repeated.body == first.body
+
+        unchanged = server.api_screenshot(
+            w=6, q=60, if_none_match=first.headers["etag"]
+        )
+        assert unchanged.status_code == 304
+        assert unchanged.body in (b"", None)
+    finally:
+        server._preview_jpeg_cache.clear()
+
+
+def test_webui_preview_polling_is_single_flight_and_pauses_in_background():
+    from pathlib import Path
+
+    page = (Path(__file__).parents[1] / "bgi_touch" / "webui" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    assert "let shotInFlight = false" in page
+    assert "if (shotInFlight) { shotPending = true; return; }" in page
+    assert "document.hidden" in page
+    assert "cache:'no-cache'" in page
+    assert "w=1024&q=60" in page
+
+
 def test_main_ui_uses_paimon_hud_marker_instead_of_minimap_circle():
     from bgi_touch.engine.recognition import ImageRegion
     from bgi_touch.vision.coordinate import ScreenTransform

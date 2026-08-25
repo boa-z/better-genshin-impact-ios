@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import cv2
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..converter.convert import convert_any
@@ -53,7 +53,10 @@ _devicehub_config_path: str | Path | None = None
 _device_id: str | None = None
 _preview_refresh_lock = threading.Lock()
 _preview_refresh_thread: threading.Thread | None = None
+_preview_encode_lock = threading.Lock()
+_preview_jpeg_cache: dict[tuple[object, ...], bytes] = {}
 _PREVIEW_STALE_S = 1.25
+_PREVIEW_JPEG_CACHE_MAX = 12
 
 
 def get_ctx() -> GameContext:
@@ -81,6 +84,8 @@ def _shutdown_context() -> None:
         _ctx = None
     if ctx is not None:
         ctx.close()
+    with _preview_encode_lock:
+        _preview_jpeg_cache.clear()
 
 
 # ---- 后台任务（同时只跑一个）----
@@ -235,6 +240,54 @@ def _preview_frame(ctx: GameContext) -> tuple[object, float]:
     return frame, age
 
 
+def _preview_frame_generation(ctx: GameContext) -> object | None:
+    """Return a stable cache token without asking DeviceHub for a frame."""
+
+    value = getattr(ctx, "frame_generation", None)
+    if isinstance(value, int):
+        return value
+    # Test doubles and older contexts may not expose the public token. The
+    # timestamp is still safe as a best-effort token for those callers.
+    value = getattr(ctx, "_last_frame_at", None)
+    return value if isinstance(value, (int, float)) and value > 0 else None
+
+
+def _preview_jpeg(ctx: GameContext, img, frame_generation: object | None,
+                  annotate: int, width: int, quality: int) -> tuple[bytes, str | None]:
+    """Encode a preview once per cached frame/variant.
+
+    The image is already detached from GameContext by ``cached_frame``. This
+    lock only serializes the inexpensive JPEG cache, never DeviceHub I/O.
+    """
+
+    normalized_quality = max(30, min(95, int(quality)))
+    key = (id(ctx), frame_generation, int(bool(annotate)), int(width), normalized_quality)
+    etag = None if frame_generation is None else '"bgi-preview-' + '-'.join(
+        str(part).replace('"', '') for part in key
+    ) + '"'
+    with _preview_encode_lock:
+        encoded = _preview_jpeg_cache.get(key) if frame_generation is not None else None
+        if encoded is None:
+            if annotate:
+                _draw_layout(ctx, img)
+            if 0 < width < img.shape[1]:
+                height = int(img.shape[0] * width / img.shape[1])
+                img = cv2.resize(img, (width, height))
+            ok, buf = cv2.imencode(
+                ".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, normalized_quality]
+            )
+            if not ok:
+                raise RuntimeError("JPEG 编码失败")
+            encoded = buf.tobytes()
+            if frame_generation is not None:
+                _preview_jpeg_cache[key] = encoded
+                if len(_preview_jpeg_cache) > _PREVIEW_JPEG_CACHE_MAX:
+                    # Keep the newest variant and discard old frame generations.
+                    for old_key in list(_preview_jpeg_cache)[:-_PREVIEW_JPEG_CACHE_MAX]:
+                        _preview_jpeg_cache.pop(old_key, None)
+    return encoded, etag
+
+
 # ---- 页面与状态 ----
 
 @app.get("/")
@@ -267,26 +320,39 @@ def api_status():
 
 
 @app.get("/api/screenshot")
-def api_screenshot(annotate: int = 0, w: int = 1408, q: int = 70):
+def api_screenshot(annotate: int = 0, w: int = 1408, q: int = 70,
+                   if_none_match: str | None = Header(default=None, alias="If-None-Match")):
     if _ctx is None:
         return _err(RuntimeError("设备尚未连接，请先点击“连接设备”"), 409)
     try:
         ctx = _ctx
         img, frame_age = _preview_frame(ctx)
-        if annotate:
-            _draw_layout(ctx, img)
-        if 0 < w < img.shape[1]:
-            h = int(img.shape[0] * w / img.shape[1])
-            img = cv2.resize(img, (w, h))
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, max(30, min(95, q))])
-        if not ok:
-            raise RuntimeError("JPEG 编码失败")
-        return Response(buf.tobytes(), media_type="image/jpeg",
-                        headers={
-                            "Cache-Control": "no-store",
-                            "X-Screenshot-Frame-Age-Ms": str(round(frame_age * 1000)),
-                            "X-Screenshot-Cached": "1",
-                        })
+        frame_generation = _preview_frame_generation(ctx)
+        normalized_quality = max(30, min(95, int(q)))
+        etag = None if frame_generation is None else '"bgi-preview-' + '-'.join(
+            str(part).replace('"', '') for part in (
+                id(ctx), frame_generation, int(bool(annotate)), int(w), normalized_quality
+            )
+        ) + '"'
+        common_headers = {
+            "Cache-Control": "private, max-age=0, must-revalidate",
+            "X-Screenshot-Frame-Age-Ms": str(round(frame_age * 1000)),
+            "X-Screenshot-Cached": "1",
+        }
+        if not isinstance(if_none_match, str):
+            # Calling the endpoint function directly in offline tests leaves
+            # FastAPI's Header marker as the default value.
+            if_none_match = None
+        if etag:
+            common_headers["ETag"] = etag
+            if if_none_match and if_none_match.strip() == etag:
+                return Response(status_code=304, headers=common_headers)
+        encoded, etag = _preview_jpeg(
+            ctx, img, frame_generation, annotate, int(w), normalized_quality
+        )
+        if etag:
+            common_headers["ETag"] = etag
+        return Response(encoded, media_type="image/jpeg", headers=common_headers)
     except Exception as e:
         return _err(e)
 
