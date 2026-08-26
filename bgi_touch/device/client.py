@@ -32,6 +32,12 @@ from .config import DEFAULT_MCP_URL, HeadlessConfig
 
 DEFAULT_URL = DEFAULT_MCP_URL
 CALL_TIMEOUT_S = 120
+# DeviceHub status endpoints are substantially slower than local frame-cache
+# reads on an iPhone/Wi-Fi session.  Keep a short cache for observers such as
+# the WebUI and orientation watcher; explicit reconnect/connection paths use
+# ``force=True`` below.  Screenshot and input tools are never cached here.
+STATUS_CACHE_TTL_S = 8.0
+APP_STATUS_CACHE_TTL_S = 8.0
 
 
 @dataclass
@@ -54,6 +60,10 @@ class DeviceClient:
         self._close_event: asyncio.Event | None = None
         self._session_task = None
         self._lock = threading.Lock()
+        self._status_cache_lock = threading.RLock()
+        self._status_cache: dict | None = None
+        self._status_cache_at = 0.0
+        self._app_status_cache: dict[str, tuple[dict, float]] = {}
         self._mapper = None
         self._last_image_size: tuple[int, int] | None = None
         self._last_frame_version: int | None = None
@@ -185,8 +195,34 @@ class DeviceClient:
     def _reconnect(self) -> None:
         """会话被服务器终止后重建（Streamable HTTP 会话可能因闲置被回收）。"""
         self._game_session_id = None
+        # Frame cursors belong to the selected DeviceHub video session.  Do
+        # not carry a cursor from the dead session into ``observe_game`` after
+        # reconnecting: a newly-created stream may start at a lower value and
+        # would otherwise wait forever for a frame version that can no longer
+        # be produced.
+        self._last_frame_version = None
+        self._last_image_size = None
+        self._invalidate_status_cache()
         self._end_session()
         self._start_session()
+
+    def _ensure_status_cache(self) -> None:
+        """为旧实例和轻量测试 double 补齐状态缓存字段。"""
+        if not hasattr(self, "_status_cache_lock"):
+            self._status_cache_lock = threading.RLock()
+        if not hasattr(self, "_status_cache"):
+            self._status_cache = None
+        if not hasattr(self, "_status_cache_at"):
+            self._status_cache_at = 0.0
+        if not hasattr(self, "_app_status_cache"):
+            self._app_status_cache = {}
+
+    def _invalidate_status_cache(self) -> None:
+        self._ensure_status_cache()
+        with self._status_cache_lock:
+            self._status_cache = None
+            self._status_cache_at = 0.0
+            self._app_status_cache.clear()
 
     # 这些关键字意味着请求未被处理（会话死亡/连接断开），重连后重试是安全的；
     # 工具级业务错误（isError 结果、设备侧超时）不在此列，不做自动重试。
@@ -223,10 +259,40 @@ class DeviceClient:
         if result.isError:
             raise DeviceError(f"{tool_name} 失败: {text or '未知错误'}")
         if isinstance(parsed, dict):
-            version = parsed.get("frame_version")
-            if isinstance(version, int) and version >= 0:
-                self._last_frame_version = version
+            self._record_frame_version(parsed)
         return ToolResult(json=parsed, image=image, text=text)
+
+    def _record_frame_version(self, payload: dict[str, Any]) -> None:
+        """Remember the newest cursor returned by any DeviceHub tool.
+
+        Low-latency actions return ``frame_version_before`` and
+        ``frame_version_after``.  Older code only consumed ``frame_version``
+        and consequently seeded the next observation with the frame from
+        before a swipe.  Prefer the ``*_after`` value, accept the camelCase
+        spelling used by lightweight proxies, and never move the local cursor
+        backwards when a delayed screenshot response arrives.
+        """
+        version = None
+        for key in (
+            "frame_version_after",
+            "frameVersionAfter",
+            "frame_version",
+            "frameVersion",
+        ):
+            if key not in payload:
+                continue
+            try:
+                candidate = int(payload[key])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if candidate >= 0:
+                version = candidate
+                break
+        if version is None:
+            return
+        current = getattr(self, "_last_frame_version", None)
+        if not isinstance(current, int) or version >= current:
+            self._last_frame_version = version
 
     # ---- 坐标映射（横屏逻辑空间 → 设备截图空间）----
     # 游戏横屏运行时截图流仍是竖屏帧（内容旋转 90°），tap 坐标空间跟随截图。
@@ -246,11 +312,23 @@ class DeviceClient:
 
     # ---- typed wrappers ----
 
-    def status(self) -> dict:
+    def status(self, *, force: bool = False) -> dict:
+        self._ensure_status_cache()
+        now = time.monotonic()
+        with self._status_cache_lock:
+            if (
+                not force
+                and self._status_cache is not None
+                and now - self._status_cache_at < STATUS_CACHE_TTL_S
+            ):
+                return dict(self._status_cache)
         payload = self.call("status").json
         if not isinstance(payload, dict):
             raise DeviceError("status 未返回 JSON 对象")
-        return payload
+        with self._status_cache_lock:
+            self._status_cache = dict(payload)
+            self._status_cache_at = time.monotonic()
+        return dict(payload)
 
     def list_devices(self) -> dict:
         payload = self.call("list_devices").json
@@ -261,7 +339,7 @@ class DeviceClient:
     def connect_device(self, selection_id: str | None = None) -> dict:
         """为当前 MCP 会话建立 active device session。"""
         if selection_id is None:
-            status = self.status()
+            status = self.status(force=True)
             selection_id = status.get("device_id") or status.get("active_udid")
         if not selection_id:
             devices = self.list_devices().get("devices", [])
@@ -281,7 +359,14 @@ class DeviceClient:
                     selection_id = available[0].get("id") or available[0].get("udid")
         if not selection_id:
             raise DeviceError("status 未返回可连接的设备 ID")
+        # A device connection starts a fresh frame stream, even when the MCP
+        # session itself remains alive.  Clear the old stream cursor before
+        # the connect response is parsed so its first ``frame_version_after``
+        # becomes the new baseline.
+        self._last_frame_version = None
+        self._last_image_size = None
         result = self.call("connect_device", udid=selection_id)
+        self._invalidate_status_cache()
         if isinstance(result.json, dict):
             return result.json
         return {"message": result.text or "设备连接请求已发送", "selection_id": selection_id}
@@ -428,9 +513,11 @@ class DeviceClient:
 
     def launch_app(self, bundle_id: str, wait: bool = True) -> None:
         self.call("launch_app", bundle_id=bundle_id, wait_for_settle=wait)
+        self._invalidate_status_cache()
 
     def stop_app(self, bundle_id: str) -> None:
         self.call("stop_app", bundle_id=bundle_id)
+        self._invalidate_status_cache()
 
     def background_current_app(self) -> str:
         """将当前 App 移出前台；WDA 不可用时使用 Home 按钮。"""
@@ -441,12 +528,20 @@ class DeviceClient:
             self.press_button("home")
             return "backgrounded-home"
 
-    def app_status(self, bundle_id: str) -> dict:
+    def app_status(self, bundle_id: str, *, force: bool = False) -> dict:
+        self._ensure_status_cache()
+        now = time.monotonic()
+        with self._status_cache_lock:
+            cached = self._app_status_cache.get(bundle_id)
+            if not force and cached is not None and now - cached[1] < APP_STATUS_CACHE_TTL_S:
+                return dict(cached[0])
         result = self.call("app_status", bundle_id=bundle_id)
         payload = result.json
         if not isinstance(payload, dict):
             raise DeviceError(f"app_status 未返回 JSON: {result.text or '未知错误'}")
-        return payload
+        with self._status_cache_lock:
+            self._app_status_cache[bundle_id] = (dict(payload), time.monotonic())
+        return dict(payload)
 
     def wait_for_app(self, bundle_id: str, state: str, *, timeout_ms: int = 5000) -> dict:
         payload = self.call(
@@ -559,10 +654,11 @@ class DeviceClient:
         实测：前台应用切换（游戏冷启动/切回）后 HID 注入可能整体失效，
         重连设备通道可恢复——门界面点按只在 reconnect 后生效过。
         """
-        st = self.status()
+        st = self.status(force=True)
         udid = st.get("device_id") or st.get("active_udid")
         if udid:
             self.call("reconnect_device", udid=udid)
+            self._invalidate_status_cache()
 
     # ---- WDA semantic helpers (optional; HID remains the primary path) ----
 

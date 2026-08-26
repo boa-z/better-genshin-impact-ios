@@ -573,9 +573,13 @@ class GenshinApi:
         reset_tp_session_state(self.ctx)
         self._tp_tasks = {}
         self._tp_task = None
-        self.ctx.device.stop_app(GENSHIN_BUNDLE_ID)
+        self.ctx.device.stop_app(
+            getattr(self.ctx, "game_bundle_id", GENSHIN_BUNDLE_ID)
+        )
         self.ctx.sleep(3000)
-        self.ctx.device.launch_app(GENSHIN_BUNDLE_ID)
+        self.ctx.device.launch_app(
+            getattr(self.ctx, "game_bundle_id", GENSHIN_BUNDLE_ID)
+        )
         self.ctx.sleep(30000)
         self.ctx.input.click_ref(960, 540)  # 点击进入
         self.ctx.sleep(15000)

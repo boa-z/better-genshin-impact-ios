@@ -50,6 +50,10 @@ DeviceHub MCP 与 headless 配置在 `config/devicehub.json`。将
 `headless.executable` 改为 `devicehub-headless` 的绝对路径后，MCP 不可用时程序会
 按配置自动启动 headless；可同时设置 `workingDirectory`、`args`、启动超时和
 `shutdownOnExit`。相对路径以该配置文件所在目录为基准。
+原神 Bundle ID 默认兼容 `com.miHoYo.Yuanshen`；若 DeviceHub profile 的
+`bundleIdentifiers` 声明了目标包（例如 `com.miHoYo.GenshinImpact`），会自动采用该值。
+也可在配置中设置 `gameBundleId`，或使用 `--game-bundle-id` / `BGI_GAME_BUNDLE_ID` 覆盖；
+启动、停止、重登、WebUI 状态和 profile game session 会共用同一值。
 多设备环境可在同一配置中设置 `"deviceId": "UDID::wifi"`，也可使用
 `--device-id` 或 `BGI_DEVICE_ID`，避免自动化误连其他 iPhone/iPad。
 

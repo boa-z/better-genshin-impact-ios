@@ -21,6 +21,7 @@ def _context(args):
         keymap_profile_path=args.keymap_profile_file,
         devicehub_config_path=args.devicehub_config,
         device_id=args.device_id,
+        game_bundle_id=getattr(args, "game_bundle_id", None),
     )
 
 
@@ -32,11 +33,10 @@ def _load_party() -> dict[str, int]:
 
 
 def cmd_status(args) -> int:
-    from .engine.context import GENSHIN_BUNDLE_ID
     ctx = _context(args)
     st = ctx.device.status()
     try:
-        app = ctx.device.app_status(GENSHIN_BUNDLE_ID)
+        app = ctx.device.app_status(ctx.game_bundle_id)
     except Exception as e:  # 设备侧查询偶发超时，不影响主要状态
         app = {"error": str(e)}
     print(json.dumps({"device": st, "genshin": app,
@@ -66,10 +66,9 @@ def cmd_launch(args) -> int:
 
 
 def cmd_close_game(args) -> int:
-    from .engine.context import GENSHIN_BUNDLE_ID
     ctx = _context(args)
     try:
-        ctx.device.stop_app(GENSHIN_BUNDLE_ID)
+        ctx.device.stop_app(ctx.game_bundle_id)
         print("原神已停止")
     except Exception as e:
         mode = ctx.device.background_current_app()
@@ -441,6 +440,12 @@ def main() -> int:
                         help="DeviceHub 配置文件（默认 config/devicehub.json）")
     parser.add_argument("--device-id", default=os.environ.get("BGI_DEVICE_ID"),
                         help="精确设备选择 ID/UDID（多设备环境推荐）")
+    parser.add_argument(
+        "--game-bundle-id",
+        default=os.environ.get("BGI_GAME_BUNDLE_ID")
+        or os.environ.get("BGI_GENSHIN_BUNDLE_ID"),
+        help="原神 iOS Bundle ID（优先于配置与 DeviceHub profile）",
+    )
     parser.add_argument("--notification-config", default=os.environ.get("BGI_NOTIFICATION_CONFIG"),
                         help="通知配置文件（默认 config/notification.json）")
     parser.add_argument("--layout", default=os.environ.get("BGI_LAYOUT_PATH"),

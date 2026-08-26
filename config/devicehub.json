@@ -1,8 +1,10 @@
 {
   "$comment": "配置 devicehub-mask MCP 与 headless。路径可使用绝对路径，或相对于本文件。",
   "mcpUrl": "http://127.0.0.1:8009/mcp",
+  "gameBundleId": "",
+  "disableInputMonitor": false,
   "headless": {
-    "executable": "",
+    "executable": "/Applications/DeviceHub Mask.app/Contents/MacOS/devicehub-mask",
     "autoStart": true,
     "workingDirectory": "",
     "args": [],

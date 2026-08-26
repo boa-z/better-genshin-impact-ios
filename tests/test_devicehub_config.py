@@ -48,6 +48,7 @@ def test_devicehub_config_loads_device_id_and_environment_overrides_it(
     config_path = tmp_path / "devicehub.json"
     config_path.write_text(json.dumps({
         "deviceId": "iphone-from-config::wifi",
+        "disableInputMonitor": True,
     }), encoding="utf-8")
 
     monkeypatch.delenv("BGI_DEVICE_ID", raising=False)
@@ -57,12 +58,44 @@ def test_devicehub_config_loads_device_id_and_environment_overrides_it(
     assert DeviceHubConfig.load(config_path).device_id == "iphone-from-env::usb"
 
 
+def test_devicehub_config_loads_game_bundle_id_and_environment_override(
+        tmp_path: Path, monkeypatch):
+    from bgi_touch.device.config import DeviceHubConfig
+
+    config_path = tmp_path / "devicehub.json"
+    config_path.write_text(json.dumps({
+        "gameBundleId": "com.example.genshin",
+    }), encoding="utf-8")
+
+    monkeypatch.delenv("BGI_GAME_BUNDLE_ID", raising=False)
+    monkeypatch.delenv("BGI_GENSHIN_BUNDLE_ID", raising=False)
+    assert DeviceHubConfig.load(config_path).game_bundle_id == "com.example.genshin"
+
+    monkeypatch.setenv("BGI_GAME_BUNDLE_ID", "com.example.from-env")
+    assert DeviceHubConfig.load(config_path).game_bundle_id == "com.example.from-env"
+
+
+def test_devicehub_config_loads_disable_input_monitor_and_environment_override(
+        tmp_path: Path, monkeypatch):
+    from bgi_touch.device.config import DeviceHubConfig
+
+    config_path = tmp_path / "devicehub.json"
+    config_path.write_text(json.dumps({"disableInputMonitor": True}), encoding="utf-8")
+
+    monkeypatch.delenv("BGI_DISABLE_INPUT_MONITOR", raising=False)
+    assert DeviceHubConfig.load(config_path).disable_input_monitor is True
+
+    monkeypatch.setenv("BGI_DISABLE_INPUT_MONITOR", "false")
+    assert DeviceHubConfig.load(config_path).disable_input_monitor is False
+
+
 def test_game_context_passes_exact_device_id_to_devicehub(tmp_path: Path):
     from bgi_touch.engine.context import GameContext
 
     config_path = tmp_path / "devicehub.json"
     config_path.write_text(json.dumps({
         "deviceId": "iphone-from-config::wifi",
+        "disableInputMonitor": True,
     }), encoding="utf-8")
     device = Mock()
     device.status.return_value = {
@@ -80,7 +113,74 @@ def test_game_context_passes_exact_device_id_to_devicehub(tmp_path: Path):
         )
 
     assert context.device_id == "iphone-from-cli::wifi"
+    assert context.disable_input_monitor is True
     device.connect_device.assert_called_once_with("iphone-from-cli::wifi")
+
+
+def test_game_context_prefers_profile_bundle_id_for_lifecycle_and_game_session(
+        tmp_path: Path):
+    from bgi_touch.engine.context import GameContext
+
+    profile_path = tmp_path / "Genshin.json"
+    profile_path.write_text(json.dumps({
+        "version": 2,
+        "name": "Genshin",
+        "bundleIdentifiers": ["com.miHoYo.GenshinImpact"],
+        "mappings": [],
+    }), encoding="utf-8")
+    device = Mock()
+    device.status.return_value = {
+        "status": "connected",
+        "screen_size": [2778, 1284],
+    }
+
+    with patch("bgi_touch.engine.context.DeviceClient", return_value=device), \
+            patch.object(GameContext, "capture_bgr", return_value=None), \
+            patch.object(GameContext, "_start_orientation_watch"):
+        context = GameContext(
+            keymap_profile=None,
+            keymap_profile_path=profile_path,
+        )
+
+    assert context.game_bundle_id == "com.miHoYo.GenshinImpact"
+    context.sleep = Mock()
+    context.launch_game(auto_enter=False)
+    device.launch_app.assert_called_once_with(
+        "com.miHoYo.GenshinImpact", wait=True,
+    )
+    context.input._ensure_profile_session()
+    assert device.start_game_session.call_args.kwargs["bundle_id"] == (
+        "com.miHoYo.GenshinImpact"
+    )
+    context.input.release_all()
+
+
+def test_explicit_game_bundle_id_overrides_profile(tmp_path: Path):
+    from bgi_touch.engine.context import GameContext
+
+    profile_path = tmp_path / "Genshin.json"
+    profile_path.write_text(json.dumps({
+        "version": 2,
+        "name": "Genshin",
+        "bundleIdentifiers": ["com.miHoYo.GenshinImpact"],
+        "mappings": [],
+    }), encoding="utf-8")
+    device = Mock()
+    device.status.return_value = {
+        "status": "connected",
+        "screen_size": [2778, 1284],
+    }
+
+    with patch("bgi_touch.engine.context.DeviceClient", return_value=device), \
+            patch.object(GameContext, "capture_bgr", return_value=None), \
+            patch.object(GameContext, "_start_orientation_watch"):
+        context = GameContext(
+            keymap_profile=None,
+            keymap_profile_path=profile_path,
+            game_bundle_id="com.example.custom-genshin",
+        )
+
+    assert context.game_bundle_id == "com.example.custom-genshin"
 
 
 def test_headless_start_uses_configured_executable_and_working_directory(tmp_path: Path):
@@ -134,6 +234,46 @@ def test_device_client_uses_exact_selection_id_and_tracks_frame_versions():
     assert client.connect_device() == {"connected": True}
     assert calls[1] == ("connect_device", {"udid": "udid::usb"})
     assert client.wait_for_frame(after_version=41, timeout_ms=500)["frame_version"] == 42
+
+
+def test_device_client_prefers_action_after_cursor_and_never_rolls_back():
+    import threading
+    from types import SimpleNamespace
+
+    from bgi_touch.device.client import DeviceClient
+
+    client = DeviceClient.__new__(DeviceClient)
+    client._lock = threading.Lock()
+    client._session = SimpleNamespace()
+    client._session.call_tool = Mock()
+    client._reconnect = Mock(side_effect=AssertionError("不应重连"))
+    client._last_frame_version = None
+
+    def response(payload):
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=json.dumps(payload))],
+            isError=False,
+        )
+
+    client._session.call_tool.side_effect = [
+        object(), object(), object(),
+    ]
+    client._run = Mock(side_effect=[
+        response({
+            "frame_version_before": 41,
+            "frame_version_after": 44,
+        }),
+        response({"frame_version": 42}),
+        response({"frameVersionAfter": "47"}),
+    ])
+
+    client.call("swipe")
+    assert client.last_frame_version == 44
+    # A delayed screenshot response must not move an observation cursor back.
+    client.call("screenshot")
+    assert client.last_frame_version == 44
+    client.call("tap")
+    assert client.last_frame_version == 47
 
 
 def test_device_client_portrait_mapper_preserves_landscape_dimensions():

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Callable, Protocol
 
 from ..engine.context import GameContext
@@ -168,12 +168,15 @@ class TriggerLoop:
         task.  The lock is deliberately re-entrant because a task may call a
         nested helper that also protects its own interaction flow.
         """
-        with self._exclusive_lock:
-            state = self.pause()
-            try:
-                yield
-            finally:
-                self.resume(state)
+        gate = getattr(self.ctx, "exclusive_input", None)
+        input_scope = gate() if callable(gate) else nullcontext()
+        with input_scope:
+            with self._exclusive_lock:
+                state = self.pause()
+                try:
+                    yield
+                finally:
+                    self.resume(state)
 
     def _run(self) -> None:
         self.log(f"[trigger] 帧循环启动（{1/self.interval:.1f} fps）")
@@ -189,6 +192,13 @@ class TriggerLoop:
                         # flight. Do not let that already captured frame send input.
                         if self._stop.is_set():
                             break
+                        if bool(getattr(self.ctx, "input_exclusive", False)):
+                            # The owner will stop/pause this loop shortly. Do
+                            # not busy-spin or permanently terminate a loop
+                            # merely because the ownership hand-off won a
+                            # race with capture_region().
+                            self._stop.wait(min(self.interval, 0.05))
+                            continue
                         exclusive = next(
                             (
                                 tr for tr in triggers
@@ -199,7 +209,9 @@ class TriggerLoop:
                         )
                         active_triggers = [exclusive] if exclusive is not None else triggers
                         for tr in active_triggers:
-                            if self._stop.is_set():
+                            if self._stop.is_set() or bool(
+                                getattr(self.ctx, "input_exclusive", False)
+                            ):
                                 break
                             if getattr(tr, "enabled", True):
                                 tr.on_frame(region)

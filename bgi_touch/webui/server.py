@@ -59,6 +59,11 @@ _preview_encode_lock = threading.Lock()
 _preview_jpeg_cache: dict[tuple[object, ...], bytes] = {}
 _PREVIEW_STALE_S = 1.25
 _PREVIEW_JPEG_CACHE_MAX = 12
+_status_cache_lock = threading.RLock()
+_status_cache_ctx: GameContext | None = None
+_status_cache: dict = {}
+_status_refresh_thread: threading.Thread | None = None
+_STATUS_REFRESH_MIN_INTERVAL_S = 15.0
 
 
 def get_ctx() -> GameContext:
@@ -90,7 +95,7 @@ def _err(e: Exception, code: int = 503) -> JSONResponse:
 
 def _shutdown_context() -> None:
     """Release automation input, the MCP session, and owned headless process."""
-    global _ctx, _notification_service
+    global _ctx, _notification_service, _status_cache_ctx, _status_cache
     runner.stop()
     with _ctx_lock:
         ctx = _ctx
@@ -103,6 +108,9 @@ def _shutdown_context() -> None:
         service.close()
     with _preview_encode_lock:
         _preview_jpeg_cache.clear()
+    with _status_cache_lock:
+        _status_cache_ctx = None
+        _status_cache = {}
 
 
 # ---- 后台任务（同时只跑一个）----
@@ -153,6 +161,23 @@ class TaskRunner:
         if runtime is None:
             return False
         return bool(runtime.enqueue_key_mouse_event(event))
+
+    def key_mouse_hook_active(self) -> bool:
+        """Return whether the current JS task has registered a live Hook.
+
+        The browser preview is also the iOS replacement for BetterGI's global
+        keyboard monitor.  Exposing this read-only bit lets the page avoid
+        creating a fetch request for every pointer move/key event when no
+        script can consume it; it never touches the device or screenshot
+        stream.
+        """
+        runtime = self._js_runtime
+        if runtime is None:
+            return False
+        try:
+            return bool(runtime.has_key_mouse_hooks())
+        except (AttributeError, RuntimeError):
+            return False
 
     def _party(self) -> dict[str, int]:
         p = PROJECT_ROOT / "config" / "party.json"
@@ -310,6 +335,87 @@ def _preview_jpeg(ctx: GameContext, img, frame_generation: object | None,
     return encoded, etag
 
 
+def _status_snapshot(ctx: GameContext) -> tuple[dict, dict]:
+    """Read the last known device/app state without doing MCP I/O.
+
+    ``/api/status`` is polled independently of the preview.  Calling the
+    DeviceHub status tools inline made a slow 3-second status request hold the
+    serialized MCP channel in front of the next screenshot.  The context's
+    orientation watcher already owns the latest device status; app status is
+    refreshed by the bounded background worker below.
+    """
+    global _status_cache_ctx, _status_cache
+    with _status_cache_lock:
+        if _status_cache_ctx is not ctx:
+            cached_device = getattr(ctx, "cached_device_status", None)
+            if callable(cached_device):
+                device = cached_device()
+            else:
+                device = {}
+            _status_cache_ctx = ctx
+            _status_cache = {
+                "device": dict(device) if isinstance(device, dict) else {},
+                "game": {"status": "unknown"},
+                "last_attempt": 0.0,
+            }
+        device = _status_cache.get("device", {})
+        game = _status_cache.get("game", {"status": "unknown"})
+        return dict(device), dict(game)
+
+
+def _refresh_status_in_background(ctx: GameContext) -> None:
+    global _status_refresh_thread, _status_cache
+    try:
+        # A running task/trigger owns the capture channel.  The next status
+        # poll can retry after the minimum interval instead of competing with
+        # its frame producer.
+        if _capture_is_busy(ctx):
+            return
+        try:
+            device = ctx.device.status(force=True)
+        except TypeError:  # lightweight test/older client doubles
+            device = ctx.device.status()
+        try:
+            bundle_id = getattr(ctx, "game_bundle_id", GENSHIN_BUNDLE_ID)
+            game = ctx.device.app_status(bundle_id, force=True)
+        except TypeError:  # lightweight test/older client doubles
+            game = ctx.device.app_status(bundle_id)
+        remember = getattr(ctx, "_remember_device_status", None)
+        if callable(remember):
+            remember(device)
+        with _status_cache_lock:
+            if _status_cache_ctx is ctx:
+                _status_cache["device"] = dict(device) if isinstance(device, dict) else {}
+                _status_cache["game"] = dict(game) if isinstance(game, dict) else {}
+    except Exception as error:
+        # Keep the last useful status.  A transient status failure must not
+        # surface as a slow/erroring HTTP request or disturb preview polling.
+        weblog(f"[web] 状态刷新失败（保留缓存）：{error}")
+    finally:
+        with _status_cache_lock:
+            _status_refresh_thread = None
+
+
+def _schedule_status_refresh(ctx: GameContext, *, force: bool = False) -> None:
+    global _status_refresh_thread, _status_cache
+    now = time.monotonic()
+    with _status_cache_lock:
+        _status_snapshot(ctx)
+        if _status_refresh_thread and _status_refresh_thread.is_alive():
+            return
+        last_attempt = float(_status_cache.get("last_attempt", 0.0) or 0.0)
+        if not force and now - last_attempt < _STATUS_REFRESH_MIN_INTERVAL_S:
+            return
+        _status_cache["last_attempt"] = now
+        _status_refresh_thread = threading.Thread(
+            target=_refresh_status_in_background,
+            args=(ctx,),
+            daemon=True,
+            name="web-status-refresh",
+        )
+        _status_refresh_thread.start()
+
+
 # ---- 页面与状态 ----
 
 @app.get("/")
@@ -325,16 +431,14 @@ def api_status():
             "device": {"status": "disconnected", "orientation": "unknown"},
             "game": {"status": "unknown"},
             "task": runner.status(),
+            "keyMouseHookActive": runner.key_mouse_hook_active(),
             "transform": {"w": 0, "h": 0, "scale": 0},
         }
     try:
         ctx = _ctx
-        st = ctx.device.status()
-        try:
-            game = ctx.device.app_status(GENSHIN_BUNDLE_ID)
-        except Exception as e:
-            game = {"error": str(e)}
+        st, game = _status_snapshot(ctx)
         return {"connected": True, "device": st, "game": game, "task": runner.status(),
+                "keyMouseHookActive": runner.key_mouse_hook_active(),
                 "transform": {"w": ctx.transform.device_width, "h": ctx.transform.device_height,
                               "scale": round(ctx.transform.scale, 4)}}
     except Exception as e:
@@ -397,6 +501,7 @@ def _draw_layout(ctx: GameContext, img) -> None:
 def api_connect():
     try:
         ctx = get_ctx()
+        _schedule_status_refresh(ctx, force=True)
         return {
             "ok": True,
             "w": ctx.transform.device_width,
@@ -487,7 +592,9 @@ def api_camera(body: dict):
 @app.post("/api/launch")
 def api_launch():
     try:
-        get_ctx().launch_game()
+        ctx = get_ctx()
+        ctx.launch_game()
+        _schedule_status_refresh(ctx, force=True)
         weblog("[web] 已启动原神")
         return {"ok": True}
     except Exception as e:

@@ -77,6 +77,11 @@ export BGI_MCP_URL=http://127.0.0.1:8009/mcp          # 环境变量
 `--device-id` / 环境变量 `BGI_DEVICE_ID`。CLI 参数优先于配置文件，可避免自动选择时
 误连同一 DeviceHub 中的其他 iPhone/iPad。
 
+如果不需要社区脚本的 `KeyMouseHook`，可在同一配置中设置
+`"disableInputMonitor": true`，或设置环境变量 `BGI_DISABLE_INPUT_MONITOR=1`。
+iOS 端这会关闭 WebUI 键鼠事件入队，不会停止截图器或普通设备触控；修改后重新启动
+脚本运行时生效。
+
 ### 1.5 DeviceHub 键位 profile
 
 默认读取 DeviceHub Mask 的 `Genshin-Impact-fixed-16by9` profile。程序启动时会先建立
@@ -151,6 +156,12 @@ bgi-touch close-game
 
 App Store 版原神可能拒绝 MCP 的 `stop_app`，命令会退回 Home 将其移出前台并挂起；
 此时 `app_status` 仍可能显示 running，但进程应不再占用游戏渲染资源。
+
+如果设备安装的是国际包或自定义包，优先在 `config/devicehub.json` 设置
+`gameBundleId`。未设置时，程序会读取所选 DeviceHub profile 的
+`bundleIdentifiers`；命令行也可使用 `--game-bundle-id` 或环境变量
+`BGI_GAME_BUNDLE_ID` 覆盖。该值会同时用于启动、停止、重登、状态查询和原生键位
+game session，避免 profile 与生命周期操作指向不同 App。
 
 ---
 
@@ -294,6 +305,10 @@ AutoSkip 只对实际选中的选项做一次本地 OCR；命中“探索/派遣
 屏幕预览区的按下/释放/移动/滚轮事件会进入当前 JS 脚本。回调在脚本线程的 `sleep`
 检查点执行，不会跨线程访问 PythonMonkey；按住 Alt 等修饰键点击预览只触发脚本钩子，
 不会同时点按设备，因而可兼容社区 OCR 选区与快捷键脚本。
+AutoPick 会先确认真实的拾取键提示，再检查聊天气泡、设置图标和特殊 `L` 提示，
+因此大地图地名不会触发交互；名单兼容 BetterGI 的 `User/pick_*.txt`。可通过
+环境变量 `BGI_USER_DIR`、`GameContext.user_dir`，或 `RealtimeTimer` 配置中的 `userDir`
+指定名单根目录；需要兼容旧宿主时可显式设置 `requirePickPrompt: false`。
 `getVersion()` 返回当前对齐的 BetterGI 兼容版本；`RecognitionObject`、`Mat`、
 `Point2f`、`Region`、`ImageRegion` 与 `GameCaptureRegion` 均支持 HostType 构造语义。
 `ImageRegion.Find(Ocr/OcrMatch)` 与原版一样返回整个 ROI 的去空白合并文本，跨 OCR

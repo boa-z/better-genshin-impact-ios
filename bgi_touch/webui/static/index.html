@@ -169,9 +169,16 @@ async function post(url, body) {
 const key = k => post('/api/key', {key:k, action:'press'});
 const party = s => post('/api/party', {slot:s});
 const cam = (dx,dy) => post('/api/camera', {dx, dy});
-const hookEvent = event => fetch('/api/key-mouse-hook/event', {
-  method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(event)
-}).catch(() => {});
+let keyMouseHookEnabled = false;
+const hookEvent = event => {
+  // A preview can receive hundreds of pointermove events per second.  Do not
+  // even create a network request until a running JS script has registered a
+  // KeyMouseHook; the status bit is read-only and does not touch DeviceHub.
+  if (!keyMouseHookEnabled) return;
+  fetch('/api/key-mouse-hook/event', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(event)
+  }).catch(() => {});
+};
 
 // WebUI 是 iOS 端的 KeyMouseHook 控制面；事件只进入脚本队列，不发送给游戏。
 function hookKey(type, event) {
@@ -293,6 +300,7 @@ async function refreshStatus() {
     if (s.error) throw new Error(s.error);
     const d = s.device, tag = $('#taskTag'), t = s.task || {state:'idle'};
     deviceConnected = !!s.connected;
+    keyMouseHookEnabled = s.keyMouseHookActive === true;
     $('#statline').textContent =
       `${d.status} · ${d.orientation} · ${s.transform.w}x${s.transform.h} (scale ${s.transform.scale})` +
       (t.kind ? ` · 任务: ${t.kind}` : '');

@@ -79,6 +79,8 @@ class HeadlessConfig:
 class DeviceHubConfig:
     mcp_url: str = DEFAULT_MCP_URL
     device_id: str | None = None
+    game_bundle_id: str | None = None
+    disable_input_monitor: bool = False
     headless: HeadlessConfig = HeadlessConfig()
     path: Path | None = None
 
@@ -91,6 +93,14 @@ class DeviceHubConfig:
             return cls(
                 mcp_url=os.environ.get("BGI_MCP_URL", DEFAULT_MCP_URL),
                 device_id=os.environ.get("BGI_DEVICE_ID") or None,
+                game_bundle_id=(
+                    os.environ.get("BGI_GAME_BUNDLE_ID")
+                    or os.environ.get("BGI_GENSHIN_BUNDLE_ID")
+                    or None
+                ),
+                disable_input_monitor=_as_bool(
+                    os.environ.get("BGI_DISABLE_INPUT_MONITOR"), False,
+                ),
                 path=config_path,
             )
 
@@ -106,6 +116,28 @@ class DeviceHubConfig:
         configured_device = _first(raw, "device_id", "deviceId", "udid", "device")
         device_id = os.environ.get("BGI_DEVICE_ID") or (
             str(configured_device).strip() if configured_device else None
+        )
+        configured_game_bundle = _first(
+            raw,
+            "game_bundle_id",
+            "gameBundleId",
+            "genshin_bundle_id",
+            "genshinBundleId",
+        )
+        game_bundle_id = (
+            os.environ.get("BGI_GAME_BUNDLE_ID")
+            or os.environ.get("BGI_GENSHIN_BUNDLE_ID")
+            or (str(configured_game_bundle).strip() if configured_game_bundle else None)
+        )
+        configured_disable_input_monitor = _first(
+            raw, "disable_input_monitor", "disableInputMonitor",
+        )
+        disable_input_monitor = _as_bool(
+            os.environ.get(
+                "BGI_DISABLE_INPUT_MONITOR",
+                configured_disable_input_monitor,
+            ),
+            False,
         )
         nested = _first(raw, "headless", "devicehub_headless", "devicehubHeadless", default={})
         if isinstance(nested, str):
@@ -153,6 +185,8 @@ class DeviceHubConfig:
         return cls(
             mcp_url=mcp_url,
             device_id=device_id,
+            game_bundle_id=game_bundle_id,
+            disable_input_monitor=disable_input_monitor,
             headless=HeadlessConfig(
                 executable=executable,
                 working_directory=working_directory,

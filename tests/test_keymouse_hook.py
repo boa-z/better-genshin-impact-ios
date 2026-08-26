@@ -39,6 +39,20 @@ def test_key_mouse_hook_dispatches_bettergi_names_and_lifecycle():
     assert not manager.enqueue({"type": "keyDown", "code": "KeyN"})
 
 
+def test_key_mouse_hook_manager_can_disable_webui_event_monitoring():
+    from bgi_touch.engine.keymouse_hook import KeyMouseHookManager
+
+    manager = KeyMouseHookManager(log=lambda _message: None, enabled=False)
+    hook = manager.create()
+    events = []
+    hook.OnKeyDown(lambda value: events.append(value))
+
+    assert not manager.has_hooks()
+    assert not manager.enqueue({"type": "keyDown", "code": "KeyN"})
+    assert manager.drain() == 0
+    assert events == []
+
+
 def test_js_runtime_key_mouse_hook_uses_script_thread_checkpoints(tmp_path):
     import pytest
 
@@ -103,6 +117,28 @@ def test_key_mouse_hook_web_endpoint_never_connects_device(monkeypatch):
     assert server.api_key_mouse_hook_event(event) == {"ok": True, "accepted": True}
     fake_runner.enqueue_key_mouse_event.assert_called_once_with(event)
     connect.assert_not_called()
+
+
+def test_task_runner_reports_hook_activity_without_touching_context():
+    from bgi_touch.webui.server import TaskRunner
+
+    runner = TaskRunner()
+    assert not runner.key_mouse_hook_active()
+
+    runtime = SimpleNamespace(has_key_mouse_hooks=Mock(return_value=True))
+    runner._js_runtime = runtime
+    assert runner.key_mouse_hook_active()
+    runtime.has_key_mouse_hooks.assert_called_once_with()
+
+
+def test_webui_does_not_post_hook_events_until_a_script_registers_one():
+    from bgi_touch.webui.server import STATIC_DIR, _mask_bridge
+
+    page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert "let keyMouseHookEnabled = false" in page
+    assert "if (!keyMouseHookEnabled) return" in page
+    assert "s.keyMouseHookActive === true" in page
+    assert "bgi-key-mouse-hook" in _mask_bridge("test-mask")
 
 
 def test_webui_forwards_preview_and_mask_keyboard_to_key_mouse_hook():

@@ -92,7 +92,13 @@ def test_webui_preview_polling_is_single_flight_and_pauses_in_background():
 def test_main_ui_uses_paimon_hud_marker_instead_of_minimap_circle():
     from bgi_touch.engine.recognition import ImageRegion
     from bgi_touch.vision.coordinate import ScreenTransform
-    from bgi_touch.vision.game_ui import MAP_CLOSE, PAIMON_HUD, is_main_ui
+    from bgi_touch.vision.game_ui import (
+        MAP_CLOSE,
+        MAP_FALLBACK_MARKERS,
+        PAIMON_HUD,
+        is_big_map_ui,
+        is_main_ui,
+    )
 
     template = PAIMON_HUD.template.bgr
     gameplay = np.zeros((1080, 1920, 3), dtype=np.uint8)
@@ -122,6 +128,17 @@ def test_main_ui_uses_paimon_hud_marker_instead_of_minimap_circle():
     map_h, map_w = map_template.shape[:2]
     big_map[40:40 + map_h, 1740:1740 + map_w] = map_template
     assert not trigger._is_gameplay_frame(ImageRegion(ctx, big_map))
+    assert not is_main_ui(ctx, big_map)
+
+    # A resampled close button may miss while another fixed map control still
+    # matches.  The fallback markers must classify that frame consistently.
+    if MAP_FALLBACK_MARKERS:
+        fallback = gameplay.copy()
+        marker = MAP_FALLBACK_MARKERS[0].template.bgr
+        marker_h, marker_w = marker.shape[:2]
+        fallback[24:24 + marker_h, 1500:1500 + marker_w] = marker
+        assert is_big_map_ui(ctx, fallback)
+        assert not is_main_ui(ctx, fallback)
 
 
 def test_trigger_loop_pause_waits_for_frame_and_resume_restores_trigger():
@@ -284,6 +301,36 @@ def test_trigger_loop_runs_only_the_exclusive_trigger():
     loop.stop()
     assert calls
     assert set(calls) == {"AutoFish"}
+
+
+def test_trigger_loop_honors_context_input_gate_at_frame_boundary():
+    from bgi_touch.triggers.loop import TriggerLoop
+
+    calls = []
+
+    class Context:
+        input_exclusive = False
+
+        def capture_region(self):
+            # Simulate a task acquiring ownership immediately after the frame
+            # was decoded but before any trigger callback can emit input.
+            self.input_exclusive = True
+            return object()
+
+    class Trigger:
+        name = "AutoPick"
+        enabled = True
+
+        def on_frame(self, _region):
+            calls.append("input")
+
+    ctx = Context()
+    loop = TriggerLoop(ctx, interval_s=0.01, log=lambda _: None)
+    loop.add(Trigger())
+    loop.start()
+    time.sleep(0.05)
+    loop.stop()
+    assert calls == []
 
 
 def test_autofishing_trigger_controls_bar_and_releases_on_scene_exit(monkeypatch):
@@ -471,6 +518,142 @@ def test_autopick_uses_upstream_default_lists_and_mode_specific_overrides():
     assert not blacklist._should_pick("自定义机关")
     assert not blacklist._should_pick("退出秘境")
     assert blacklist._should_pick("进入")
+
+
+def test_autopick_reads_bettergi_user_pick_lists(tmp_path):
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+
+    (tmp_path / "pick_black_lists.txt").write_text("自定义黑名单\n# 注释\n", encoding="utf-8")
+    (tmp_path / "pick_fuzzy_black_lists.txt").write_text("危险区域\n", encoding="utf-8")
+    (tmp_path / "pick_white_lists.txt").write_text("黑名单模式拾取\n", encoding="utf-8")
+
+    trigger = AutoPickTrigger(
+        object(),
+        mode="Blacklist",
+        blacklist_mode_pick_enabled=True,
+        user_dir=tmp_path,
+    )
+
+    assert not trigger._should_pick("自定义黑名单")
+    assert not trigger._should_pick("危险区域掉落")
+    assert trigger._should_pick("黑名单模式拾取")
+
+
+def test_autopick_requires_interaction_prompt_before_scanning_real_regions():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+
+    class Region:
+        def find(self, _recognition):
+            return SimpleNamespace(is_exist=lambda: False)
+
+        find_multi = Mock(side_effect=AssertionError("OCR must wait for prompt"))
+
+    trigger = AutoPickTrigger(SimpleNamespace(), mode="Blacklist")
+    trigger._is_gameplay_frame = lambda _region: True
+    trigger.on_frame(Region())
+    trigger.log = Mock()
+    trigger.log.assert_not_called()
+
+
+def test_autopick_scrolls_hidden_interaction_list_from_shared_frame():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    for x, y, color in AutoPickTrigger._SCROLL_ICON_SAMPLES:
+        frame[y, x] = color
+
+    vertical_scroll = Mock()
+    ctx = SimpleNamespace(
+        input=SimpleNamespace(vertical_scroll=vertical_scroll),
+        transform=ScreenTransform(1920, 1080),
+        input_exclusive=False,
+    )
+    region = SimpleNamespace(bgr=frame)
+    trigger = AutoPickTrigger.__new__(AutoPickTrigger)
+    trigger.ctx = ctx
+    trigger.enabled = True
+    trigger.require_pick_prompt = True
+    trigger._last_scroll_at = float("-inf")
+    trigger._is_gameplay_frame = lambda _region: True
+    trigger._find_pick_prompt = lambda _region: None
+    trigger.log = Mock()
+
+    trigger.on_frame(region)
+
+    vertical_scroll.assert_called_once_with(2)
+    trigger.log.assert_called_once_with("[AutoPick] 滚动交互列表")
+
+
+def test_autopick_scroll_marker_requires_all_samples_and_is_throttled():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    for x, y, color in AutoPickTrigger._SCROLL_ICON_SAMPLES[:-1]:
+        frame[y, x] = color
+    scroll = Mock()
+    ctx = SimpleNamespace(
+        input=SimpleNamespace(vertical_scroll=scroll),
+        transform=ScreenTransform(1920, 1080),
+        input_exclusive=False,
+    )
+    trigger = AutoPickTrigger.__new__(AutoPickTrigger)
+    trigger.ctx = ctx
+    trigger.require_pick_prompt = True
+    trigger._last_scroll_at = float("-inf")
+    trigger._is_gameplay_frame = lambda _region: True
+    trigger._find_pick_prompt = lambda _region: None
+    trigger.log = Mock()
+    region = SimpleNamespace(bgr=frame)
+
+    trigger.on_frame(region)
+    scroll.assert_not_called()
+
+    for x, y, color in AutoPickTrigger._SCROLL_ICON_SAMPLES:
+        frame[y, x] = color
+    trigger.on_frame(region)
+    trigger.on_frame(region)
+    scroll.assert_called_once_with(2)
+
+
+def test_autopick_rejects_chat_or_settings_icon_before_ocr():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.triggers.autopick import AutoPickTrigger
+
+    prompt = SimpleNamespace(x=1090, y=420, height=32, is_exist=lambda: True)
+    icon = SimpleNamespace(is_exist=lambda: True)
+
+    class IconRegion:
+        def find(self, _recognition):
+            return icon
+
+    class Region:
+        def __init__(self):
+            self.find_calls = 0
+            self.find_multi = Mock(side_effect=AssertionError("excluded icon must stop OCR"))
+
+        def find(self, _recognition):
+            self.find_calls += 1
+            return prompt
+
+        def derive_crop(self, *_args):
+            return IconRegion()
+
+    trigger = AutoPickTrigger(SimpleNamespace(), mode="Blacklist")
+    trigger._is_gameplay_frame = lambda _region: True
+    trigger.on_frame(Region())
 
 
 def test_autopick_processes_ocr_edge_noise_like_bettergi():

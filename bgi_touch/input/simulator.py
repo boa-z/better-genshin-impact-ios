@@ -32,10 +32,17 @@ PROFILE_REFRESH_INTERVAL_S = 1.0
 
 
 class InputSimulator:
-    def __init__(self, device: DeviceClient, layout: ControlLayout, transform: ScreenTransform):
+    def __init__(
+        self,
+        device: DeviceClient,
+        layout: ControlLayout,
+        transform: ScreenTransform,
+        bundle_id: str | None = None,
+    ):
         self.device = device
         self.layout = layout
         self.t = transform
+        self.bundle_id = bundle_id
         self._held: dict[str, dict] = {}
         # Some native profile buttons (notably attack) intentionally have no
         # BetterGI keyboard binding. Keep their raw profile code alongside the
@@ -85,6 +92,7 @@ class InputSimulator:
             try:
                 self._profile_session_id = self.device.start_game_session(
                     profile.name,
+                    bundle_id=self.bundle_id,
                     lease_ms=PROFILE_LEASE_MS,
                     require_resolution_match=False,
                 )

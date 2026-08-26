@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import cv2
@@ -18,6 +19,10 @@ from ..vision.coordinate import ScreenTransform
 from .recognition import ImageRegion
 
 GENSHIN_BUNDLE_ID = "com.miHoYo.Yuanshen"
+GENSHIN_BUNDLE_ID_ALIASES = (
+    "com.miHoYo.Yuanshen",
+    "com.miHoYo.GenshinImpact",
+)
 DEFAULT_KEYMAP_PROFILE = os.environ.get("BGI_KEYMAP_PROFILE", "Genshin-Impact-fixed-16by9")
 
 
@@ -26,12 +31,31 @@ class GameContext:
                  keymap_profile: str | None = DEFAULT_KEYMAP_PROFILE,
                  keymap_profile_path: str | Path | None = None,
                  devicehub_config_path: str | Path | None = None,
-                 device_id: str | None = None):
+                 device_id: str | None = None,
+                 game_bundle_id: str | None = None):
         self._frame_lock = threading.Lock()
         self._last_frame: np.ndarray | None = None
         self._last_frame_at = 0.0
         self._frame_generation = 0
+        # A realtime trigger can already own a decoded frame when a task starts
+        # a menu/map gesture.  The TriggerLoop pause waits for that frame, but a
+        # small context-level gate is still needed for the boundary between its
+        # final scene check and the actual input edge.  Keep this state on the
+        # context so nested task helpers and lightweight trigger doubles share
+        # the same ownership contract without touching DeviceHub screenshots.
+        self._input_exclusive_lock = threading.RLock()
+        self._input_exclusive_depth = 0
         self.devicehub_config = DeviceHubConfig.load(devicehub_config_path)
+        self._configured_game_bundle_id = (
+            str(game_bundle_id).strip()
+            if game_bundle_id is not None and str(game_bundle_id).strip()
+            else self.devicehub_config.game_bundle_id
+        )
+        # iOS has no desktop-wide listener.  The WebUI KeyMouseHook bridge is
+        # the equivalent event source, so carry the upstream setting on the
+        # caller-owned context for every JS entry point (CLI/WebUI/ScriptGroup)
+        # without adding another configuration channel.
+        self.disable_input_monitor = self.devicehub_config.disable_input_monitor
         self.device = DeviceClient(
             mcp_url or self.devicehub_config.mcp_url,
             headless=self.devicehub_config.headless,
@@ -41,6 +65,7 @@ class GameContext:
         status = self.device.status()
         if status.get("status") != "connected":
             raise RuntimeError(f"设备未连接（status={status.get('status')}），请检查 DeviceHub Mask")
+        self._device_status_snapshot = dict(status)
         screen_size = status.get("screen_size")
         if isinstance(screen_size, (list, tuple)) and len(screen_size) == 2:
             w, h = screen_size
@@ -55,9 +80,18 @@ class GameContext:
         self.transform = ScreenTransform(int(w), int(h))
         profile = self._load_keymap_profile(keymap_profile, keymap_profile_path)
         self.keymap_profile_name = profile.name if profile else None
+        self.game_bundle_id = self._resolve_game_bundle_id(
+            self._configured_game_bundle_id,
+            profile,
+        )
         self.layout = ControlLayout.load(layout_path, devicehub_profile=profile)
         self.refresh_orientation(status)
-        self.input = InputSimulator(self.device, self.layout, self.transform)
+        self.input = InputSimulator(
+            self.device,
+            self.layout,
+            self.transform,
+            bundle_id=self.game_bundle_id,
+        )
         # status.screen_size may be a low-resolution stream size. A native frame
         # is the authoritative coordinate space for tap/swipe and profile matching.
         try:
@@ -106,6 +140,27 @@ class GameContext:
             # the local profile remains usable by the touch fallback.
             print(f"[context] DeviceHub profile 未同步（继续使用本地副本）：{error}")
 
+    @staticmethod
+    def _resolve_game_bundle_id(
+        configured: str | None,
+        profile: DeviceHubProfile | None,
+    ) -> str:
+        """Resolve the app ID shared by lifecycle calls and game input sessions.
+
+        DeviceHub's stock profile differs between the Chinese and global iOS
+        packages.  A profile is the most reliable local source because its
+        ``bundleIdentifiers`` field is the exact app the mapping targets; an
+        explicit config/CLI value remains authoritative for custom builds.
+        """
+        if configured is not None and str(configured).strip():
+            return str(configured).strip()
+        if profile is not None:
+            for value in profile.bundle_identifiers:
+                candidate = str(value).strip()
+                if candidate:
+                    return candidate
+        return GENSHIN_BUNDLE_ID
+
     def _start_orientation_watch(self) -> None:
         """朝向看门狗：应用切换（游戏↔其他 App/重登）会改变服务器 tap 坐标空间，
         且感知有延迟——静态映射会在切换窗口内失效，因此持续轮询并热更新。"""
@@ -117,6 +172,7 @@ class GameContext:
                 time.sleep(2.5)
                 try:
                     st = self.device.status()
+                    self._remember_device_status(st)
                     ori = str(st.get("orientation", ""))
                     if ori != last:
                         if last is not None:
@@ -127,6 +183,36 @@ class GameContext:
                     pass  # 设备暂不可用时静默重试
 
         threading.Thread(target=watch, daemon=True, name="orientation-watch").start()
+
+    @contextmanager
+    def exclusive_input(self):
+        """Temporarily prevent realtime triggers from emitting input edges.
+
+        This is deliberately separate from the TriggerLoop lock.  It protects
+        the last few instructions of a trigger callback even when a callback
+        was already holding a decoded frame while a task began a map/menu
+        operation.  The scope is re-entrant for nested teleport and task jobs.
+        """
+        with self._input_exclusive_lock:
+            self._input_exclusive_depth += 1
+        try:
+            yield
+        finally:
+            with self._input_exclusive_lock:
+                self._input_exclusive_depth = max(0, self._input_exclusive_depth - 1)
+
+    @property
+    def input_exclusive(self) -> bool:
+        with self._input_exclusive_lock:
+            return self._input_exclusive_depth > 0
+
+    def _remember_device_status(self, status: dict | None) -> None:
+        if isinstance(status, dict):
+            self._device_status_snapshot = dict(status)
+
+    def cached_device_status(self) -> dict:
+        """Return the latest status observed by the context without MCP I/O."""
+        return dict(getattr(self, "_device_status_snapshot", {}))
 
     def refresh_orientation(self, status: dict | None = None) -> None:
         """按服务器当前朝向决定 tap 坐标映射。
@@ -139,7 +225,8 @@ class GameContext:
         - 截图流的帧朝向独立于此（capture_bgr 按帧宽高自适应旋转）。
         游戏启动/切前台后服务器朝向可能变化，此时应再调用本方法。
         """
-        status = status or self.device.status()
+        status = status if status is not None else self.device.status()
+        self._remember_device_status(status)
         screen_size = status.get("screen_size")
         # DeviceHub may briefly report a connected device with no frame size
         # while a foreground app is being relaunched or the stream is rebuilt.
@@ -227,7 +314,7 @@ class GameContext:
         return ImageRegion(self, self.capture_bgr())
 
     def launch_game(self, *, auto_enter: bool = True) -> None:
-        self.device.launch_app(GENSHIN_BUNDLE_ID, wait=True)
+        self.device.launch_app(self.game_bundle_id, wait=True)
         self.sleep(3000)
         # 前台切换后 HID 注入通道可能失效（实测门界面点按只在重连后生效），
         # 启动游戏后主动重建设备通道再刷新朝向映射。

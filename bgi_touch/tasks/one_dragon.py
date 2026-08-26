@@ -509,7 +509,9 @@ class OneDragonFlowTask:
             self.log(f"[OneDragon] 已跳过完成动作：{action}")
             return
         try:
-            self.ctx.device.stop_app(GENSHIN_BUNDLE_ID)
+            self.ctx.device.stop_app(
+                getattr(self.ctx, "game_bundle_id", GENSHIN_BUNDLE_ID)
+            )
             self.log("[OneDragon] 完成动作：已关闭原神")
         except Exception as error:
             mode = self.ctx.device.background_current_app()

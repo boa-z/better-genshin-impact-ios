@@ -59,8 +59,9 @@ def _key_data(event: dict[str, Any]) -> str:
 class KeyMouseHookManager:
     """Per-runtime hook registry and bounded cross-thread event queue."""
 
-    def __init__(self, log: Callable[[str], None] = print):
+    def __init__(self, log: Callable[[str], None] = print, *, enabled: bool = True):
         self.log = log
+        self.enabled = bool(enabled)
         self._lock = threading.RLock()
         self._hooks: list[KeyMouseHookHost] = []
         self._events: deque[dict[str, Any]] = deque(maxlen=2048)
@@ -68,8 +69,9 @@ class KeyMouseHookManager:
 
     def create(self) -> "KeyMouseHookHost":
         hook = KeyMouseHookHost(self)
-        with self._lock:
-            self._hooks.append(hook)
+        if self.enabled:
+            with self._lock:
+                self._hooks.append(hook)
         return hook
 
     def unregister(self, hook: "KeyMouseHookHost") -> None:
@@ -78,6 +80,8 @@ class KeyMouseHookManager:
                 self._hooks.remove(hook)
 
     def has_hooks(self) -> bool:
+        if not self.enabled:
+            return False
         with self._lock:
             return any(not hook.disposed for hook in self._hooks)
 
@@ -87,6 +91,8 @@ class KeyMouseHookManager:
             "keyDown", "keyUp", "mouseDown", "mouseUp", "mouseMove", "mouseWheel",
         }:
             raise ValueError(f"不支持的 KeyMouseHook 事件: {kind}")
+        if not self.enabled:
+            return False
         with self._lock:
             if not any(not hook.disposed for hook in self._hooks):
                 return False
