@@ -9,7 +9,7 @@
 
 动作：e/skill[(hold)], q/burst, attack(秒), charge(秒), dash(秒), jump,
 w/a/s/d(秒), walk(方向,秒), wait(秒), aim, keydown/keyup/keypress(键),
-click(left|middle|right), moveby(x,y), ready, check。
+click(left|middle|right), moveby(x,y), ready, check, round(回合[,范围])。
 """
 
 from __future__ import annotations
@@ -68,14 +68,16 @@ class CombatLine:
     commands: list[CombatCommand]
 
 
-def _split_commands(body: str) -> list[str]:
+def _split_top_level(body: str, delimiters: set[str]) -> list[str]:
+    """Split a DSL expression without treating delimiters in parentheses as separators."""
+
     parts, depth, cur = [], 0, ""
     for ch in body:
         if ch == "(":
             depth += 1
         elif ch == ")":
             depth = max(0, depth - 1)
-        if ch in ",，、;" and depth == 0:
+        if ch in delimiters and depth == 0:
             parts.append(cur)
             cur = ""
         else:
@@ -84,10 +86,95 @@ def _split_commands(body: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def parse_combat_script(text: str) -> list[CombatLine]:
+def _split_commands(body: str) -> list[str]:
+    return _split_top_level(body, {",", "，", "、", ";"})
+
+
+def parse_round_command(params: list[str]) -> tuple[int, ...]:
+    """Parse BetterGI's ``round(1,3-5)`` marker into sorted round numbers."""
+
+    if not params:
+        raise ValueError(
+            "round 必须指定执行轮次，例如 round(1,3-5)"
+        )
+
+    rounds: set[int] = set()
+    for raw in params:
+        value = str(raw).strip()
+        if not value:
+            raise ValueError(
+                "round 方法的入参格式错误，例如 round(1,3-5)"
+            )
+        if "-" in value:
+            pieces = [part.strip() for part in value.split("-")]
+            if len(pieces) != 2:
+                raise ValueError(
+                    f"round 方法的入参格式错误：{raw}，例如 round(1-3)"
+                )
+            try:
+                start, end = (int(part) for part in pieces)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"round 方法的入参格式错误：{raw}，例如 round(1-3)"
+                ) from error
+            if start <= 0 or start > end:
+                raise ValueError(
+                    f"round 范围无效：{raw}，起始回合必须大于 0 且不超过结束回合"
+                )
+            rounds.update(range(start, end + 1))
+            continue
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"round 方法的入参格式错误：{raw}，例如 round(1)"
+            ) from error
+        if number <= 0:
+            raise ValueError(f"round 轮次必须大于 0：{raw}")
+        rounds.add(number)
+    return tuple(sorted(rounds))
+
+
+def command_active_for_round(command: CombatCommand, round_number: int) -> bool:
+    """Return whether a parsed command participates in the current strategy round."""
+
+    activating_rounds = getattr(command, "activating_rounds", ())
+    return not activating_rounds or int(round_number) in activating_rounds
+
+
+def canonical_character_name(value: object) -> str:
+    """Normalize BetterGI combat aliases while preserving unknown host names."""
+
+    text = str(value or "").strip()
+    if not text:
+        return text
+    try:
+        from ..engine.party_hud import canonical_avatar_name
+
+        return canonical_avatar_name(text) or text
+    except (ImportError, OSError, TypeError, ValueError):
+        # Custom/test teams may intentionally use names outside the fixed
+        # BetterGI avatar asset; those names remain valid for OCR/party_slots.
+        return text
+
+
+def parse_combat_script(
+    text: str,
+    default_avatar: str | None = None,
+) -> list[CombatLine]:
     lines: list[CombatLine] = []
+    default_character = canonical_character_name(default_avatar)
+    statements: list[str] = []
     for raw in text.splitlines():
-        line = re.sub(r"(//|#).*$", "", raw).strip()
+        raw = re.sub(r"(//|#).*$", "", raw)
+        statements.extend(_split_top_level(raw, {";", "；"}))
+    for raw in statements:
+        line = (
+            raw.replace("（", "(")
+            .replace("）", ")")
+            .replace("，", ",")
+            .strip()
+        )
         if not line:
             continue
         character: Optional[str] = None
@@ -98,13 +185,31 @@ def parse_combat_script(text: str) -> list[CombatLine]:
                 re.sub(r"\(.*", "", head).rstrip(",，、;")
             )
             if head_action not in KNOWN_ACTIONS:
-                character, body = head.strip(), rest
+                character, body = canonical_character_name(head), rest
         commands = []
-        for part in _split_commands(body):
-            m = _CMD_RE.match(part)
-            if m:
-                params = [p.strip() for p in re.split(r"[,，]", m.group(2))] if m.group(2) else []
-                commands.append(CombatCommand(canonical_action(m.group(1)), params))
+        for clause in _split_top_level(body, {"|"}):
+            clause_commands = []
+            for part in _split_commands(clause):
+                m = _CMD_RE.match(part)
+                if m:
+                    params = (
+                        [p.strip() for p in re.split(r"[,，]", m.group(2))]
+                        if m.group(2)
+                        else []
+                    )
+                    clause_commands.append(
+                        CombatCommand(canonical_action(m.group(1)), params)
+                    )
+            if clause_commands and clause_commands[0].action == "round":
+                activating_rounds = parse_round_command(
+                    clause_commands[0].params
+                )
+                clause_commands = clause_commands[1:]
+                for command in clause_commands:
+                    command.activating_rounds = activating_rounds
+            commands.extend(clause_commands)
+        if character is None and default_character and commands:
+            character = default_character
         if commands or character:
             lines.append(CombatLine(character, commands))
     return lines
@@ -147,13 +252,40 @@ class CombatExecutor:
                    hud_ready=lambda: is_party_hud_ready(ctx),
                    check_combat_end=lambda: not enemies_nearby(ctx))
 
-    def run(self, script: str | list[CombatLine], loop_until_end: bool = False) -> None:
-        lines = parse_combat_script(script) if isinstance(script, str) else script
+    def run(
+        self,
+        script: str | list[CombatLine],
+        loop_until_end: bool = False,
+        default_avatar: str | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        lines = (
+            parse_combat_script(script, default_avatar=default_avatar)
+            if isinstance(script, str)
+            else script
+        )
+        round_number = 1
         while True:
+            if cancelled and cancelled():
+                self.input.release_all()
+                return
             for line in lines:
+                if cancelled and cancelled():
+                    self.input.release_all()
+                    return
+                commands = [
+                    command
+                    for command in line.commands
+                    if command_active_for_round(command, round_number)
+                ]
+                if not commands:
+                    continue
                 if line.character:
                     self.switch_to(line.character)
-                for cmd in line.commands:
+                for cmd in commands:
+                    if cancelled and cancelled():
+                        self.input.release_all()
+                        return
                     self.exec(cmd)
                     # BetterGI executes ``check`` first and probes the battle
                     # state afterwards.  This matters for scripts that finish
@@ -169,10 +301,17 @@ class CombatExecutor:
                 break
             if self.check_combat_end and self.check_combat_end():
                 break
+            round_number += 1
         self.input.release_all()
 
     def switch_to(self, character: str) -> None:
         slot = self.party_slots.get(character)
+        if slot is None:
+            canonical = canonical_character_name(character)
+            for configured_name, configured_slot in self.party_slots.items():
+                if canonical_character_name(configured_name) == canonical:
+                    slot = configured_slot
+                    break
         if slot:
             self.input.key_press(str(slot))
             self.sleep(600)

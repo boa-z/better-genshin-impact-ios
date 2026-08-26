@@ -120,7 +120,171 @@ PARTIAL = {
     "dispatcher.runCountInventoryItemTask": "遍历 iOS 背包网格，通过详情名称和数量区域 OCR 返回单项或多项计数",
     "dispatcher.runGridIconsAccuracyTestTask": "使用 ItemV2 模型逐格对比图标名称/稀有度与详情 OCR，返回结构化准确率报告；模型缺失时需先下载 assets/models",
 }
-UNSUPPORTED = {}
+# Keep the scanner conservative.  A community script may use arbitrary
+# ``settings.*`` keys and ordinary local objects named ``file``/``log``; those
+# must not be treated as host API calls.  The roots below are the objects that
+# BetterGI exposes as fixed host surfaces, so a misspelt member is actionable
+# instead of silently becoming ``undefined`` in PythonMonkey.
+_HOST_MEMBER_SURFACE = {
+    "genshin": {
+        "width", "height", "scaleTo1080PRatio", "screenDpiScale",
+        "lazyNavigationInstance", "tp", "moveMapTo", "clickMapPoint",
+        "moveIndependentMapTo", "getBigMapZoomLevel", "setBigMapZoomLevel",
+        "tpToStatueOfTheSeven", "teleportToStatue", "getPositionFromBigMap",
+        "getPositionFromMap", "getPositionFromMapWithMatchingMethod",
+        "getCameraOrientation", "switchParty", "switchCharacter",
+        "clearPartyCache", "blessingOfTheWelkinMoon", "chooseTalkOption",
+        "claimBattlePassRewards", "claimEncounterPointsRewards",
+        "claimMailRewards", "goToAdventurersGuild", "goToCraftingBench",
+        "goCraftResin", "craftMaterial", "returnMainUi", "autoFishing",
+        "relogin", "wonderlandCycle", "setTime", "uid",
+    },
+    "dispatcher": {
+        "addTimer", "addTrigger", "clearAllTriggers", "runTask",
+        "getLinkedCancellationTokenSource", "getLinkedCancellationToken",
+        "runAutoDomainTask", "runOneDragonTask", "runCheckRewardsTask",
+        "runWalkToFTask", "runScanPickTask", "runLowerHeadThenWalkToTask",
+        "runBlessingOfTheWelkinMoonTask", "runClaimBattlePassRewardsTask",
+        "runClaimEncounterPointsRewardsTask", "runClaimMailRewardsTask",
+        "runGoToAdventurersGuildTask", "runGoToCraftingBenchTask",
+        "runGoCraftResinTask", "runCraftMaterialTask", "runSetTimeTask",
+        "runWonderlandCycleTask", "runReloginTask", "runChooseTalkOptionTask",
+        "runLinneaMiningTask", "runAutoFightTask", "runAutoWoodTask",
+        "runAutoCookTask", "runAutoFishingTask", "runAutoOpenChestTask",
+        "runAutoEatTask", "runAutoMusicGameTask", "runAutoAlbumTask",
+        "runAutoGeniusInvokationTask", "runAutoStygianOnslaughtTask",
+        "runAutoBossTask", "runAutoLeyLineTask", "runAutoLeyLineOutcropTask",
+        "runQuickSereniteaPotTask", "runSereniteaPotRewardsTask",
+        "runGoToSereniteaPotTask", "runQuickClaimRewardTask",
+        "runOneKeyExpeditionTask", "runAutoTrackTask", "runQuickBuyTask",
+        "runUseRedemptionCodeTask", "runAutoArtifactSalvageTask",
+        "runCountInventoryItemTask", "runGetGridIconsTask",
+        "runInventoryCountComparisonTask", "runGridIconsAccuracyTestTask",
+        "runCharacterDevelopmentTask", "runScriptGroupTask", "runMusicPlayerTask",
+        "runShellTask", "runCombatScript",
+    },
+    "pathingScript": {"run", "runFile", "runFileFromUser"},
+    "keyMouseScript": {"run", "runFile"},
+    "notification": {"send", "error"},
+    "htmlMask": {
+        "show", "close", "closeAll", "getWindowIds", "exists",
+        "setClickThrough", "getClickThrough", "toggleClickThrough", "send",
+        "respond", "request", "receive", "poll", "pollAll",
+    },
+    "http": {"request"},
+    "strategyFile": {"readPathSync", "isFolder", "isFile", "isExists"},
+    "RecognitionObject": {"templateMatch", "ocr", "ocrMatch", "ocrThis"},
+    "Mat": {"fromArray", "fromPixelData", "imDecode", "fromImageData",
+            "diag", "zeros", "ones", "eye"},
+    "ServerTime": {"getServerTimeZoneOffset"},
+}
+
+# Keep the human-readable compatibility catalogue and the runtime host table
+# in lockstep.  ``SUPPORTED`` predates the member-aware scanner and contains
+# many short aliases (for example ``ocr`` and ``BvPage``), so replacing it
+# with a generated set would make reports less useful.  Extending it here
+# preserves that stable catalogue while ensuring a direct call such as
+# ``dispatcher.runAutoFightTask(...)`` is advertised whenever its member is
+# actually registered by ``JsScriptRuntime``.
+for _host_root, _host_members in _HOST_MEMBER_SURFACE.items():
+    for _host_member in _host_members:
+        _host_entry = f"{_host_root}.{_host_member}"
+        if _host_entry not in SUPPORTED:
+            SUPPORTED.append(_host_entry)
+del _host_root, _host_members, _host_member, _host_entry
+
+# These members exist in BetterGI's type surface but intentionally have no
+# iOS equivalent.  They are kept separate from unknown calls so COMPAT.md can
+# tell a script author whether a migration is possible or requires a rewrite.
+UNSUPPORTED = {
+    "Mat.fromNativePointer": "iOS 不暴露可跨运行时共享的原生 OpenCV 指针",
+    "Mat.fromStream": "iOS 脚本沙箱不提供 .NET Stream 宿主对象",
+    "Mat.getUMat": "iOS 识别层没有 UMat/GPU 宿主对象",
+    "Mat.indexer": "iOS Mat 仅提供受限的数组/像素访问接口",
+    "Mat.unsafeIndexer": "iOS Mat 不允许脚本访问不安全原生索引器",
+    "Mat.toMemoryStream": "iOS 脚本沙箱不导出 .NET MemoryStream",
+    "Mat.writeToStream": "iOS 脚本沙箱不导出 .NET Stream 写入接口",
+}
+
+_UNKNOWN_HOST_ROOTS = tuple(_HOST_MEMBER_SURFACE)
+
+
+def _host_member_is_supported(root: str, member: str) -> bool:
+    values = _HOST_MEMBER_SURFACE.get(root.casefold())
+    if values is None:
+        return True
+    member_folded = member.casefold()
+    return any(value.casefold() == member_folded for value in values)
+
+
+def _known_unsupported(root: str, member: str) -> str | None:
+    target = f"{root}.{member}".casefold()
+    for pattern, reason in UNSUPPORTED.items():
+        if pattern.casefold() == target:
+            return reason
+    return None
+
+
+def _strip_js_comments(text: str) -> str:
+    """Mask JavaScript comments while preserving string length and newlines.
+
+    Compatibility findings should point at executable code.  A number of
+    community packages include historical API names in comments and bundled
+    documentation; treating those as calls makes the conversion verdict
+    unusably noisy.  This small scanner deliberately preserves quoted strings
+    and template literals, so URLs and text examples remain unchanged.
+    """
+    chars = list(text)
+    state = "code"
+    quote = ""
+    escaped = False
+    index = 0
+    while index < len(chars):
+        char = chars[index]
+        nxt = chars[index + 1] if index + 1 < len(chars) else ""
+        if state == "code":
+            if char == "/" and nxt == "/":
+                chars[index] = chars[index + 1] = " "
+                state = "line"
+                index += 2
+                continue
+            if char == "/" and nxt == "*":
+                chars[index] = chars[index + 1] = " "
+                state = "block"
+                index += 2
+                continue
+            if char in {"'", '"', "`"}:
+                quote = char
+                escaped = False
+                state = "string"
+            index += 1
+            continue
+        if state == "line":
+            if char == "\n":
+                state = "code"
+            elif char != "\r":
+                chars[index] = " "
+            index += 1
+            continue
+        if state == "block":
+            if char == "*" and nxt == "/":
+                chars[index] = chars[index + 1] = " "
+                state = "code"
+                index += 2
+                continue
+            if char not in {"\n", "\r"}:
+                chars[index] = " "
+            index += 1
+            continue
+        # JavaScript string/template literal.
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == quote:
+            state = "code"
+        index += 1
+    return "".join(chars)
 
 
 def detect_kind(path: Path) -> str:
@@ -183,13 +347,43 @@ def scan_js_compat(pkg_dir: Path) -> dict:
     findings: dict[str, list[str]] = {"partial": [], "unsupported": []}
     for js in pkg_dir.rglob("*.js"):
         text = js.read_text(encoding="utf-8", errors="replace")
+        scan_text = _strip_js_comments(text)
         rel = str(js.relative_to(pkg_dir))
         for pattern, why in PARTIAL.items():
-            if re.search(re.escape(pattern), text, re.IGNORECASE):
+            if re.search(re.escape(pattern), scan_text, re.IGNORECASE):
                 findings["partial"].append(f"`{rel}` 使用 `{pattern}` — {why}")
         for pattern, why in UNSUPPORTED.items():
-            if re.search(re.escape(pattern), text, re.IGNORECASE):
+            if re.search(re.escape(pattern), scan_text, re.IGNORECASE):
                 findings["unsupported"].append(f"`{rel}` 使用 `{pattern}` — {why}")
+
+        # Report only fixed host roots.  In particular, ``file`` and ``log``
+        # are deliberately excluded: community scripts commonly use those
+        # names for callback variables, while ``genshin``/``dispatcher`` and
+        # the other roots above are stable BetterGI globals.  One-based line
+        # numbers make the report useful without requiring a second scan.
+        host_pattern = re.compile(
+            r"\b(" + "|".join(map(re.escape, _UNKNOWN_HOST_ROOTS)) +
+            r")\s*\.\s*([A-Za-z_$][\w$]*)",
+            re.IGNORECASE,
+        )
+        seen_unknown: set[tuple[str, str]] = set()
+        for match in host_pattern.finditer(scan_text):
+            root, member = match.group(1), match.group(2)
+            if _host_member_is_supported(root, member):
+                continue
+            reason = _known_unsupported(root, member)
+            if reason is not None:
+                # The explicit table above already generated a stable entry.
+                continue
+            key = (root.casefold(), member.casefold())
+            if key in seen_unknown:
+                continue
+            seen_unknown.add(key)
+            line = scan_text.count("\n", 0, match.start()) + 1
+            findings["unsupported"].append(
+                f"`{rel}:{line}` 使用未知宿主 API `{root}.{member}` — "
+                "当前 iOS 运行时未注册该成员，请先确认上游 API 或提供兼容实现"
+            )
     return findings
 
 

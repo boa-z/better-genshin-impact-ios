@@ -609,7 +609,8 @@ def test_new_quick_tasks_are_declared_and_validate_redeem_codes():
     from bgi_touch.tasks.dispatcher import TaskDispatcher
 
     assert TaskDispatcher.IMPLEMENTED >= {
-        "QuickSereniteaPot", "QuickClaimReward", "QuickBuy", "UseRedemptionCode"
+        "QuickSereniteaPot", "QuickClaimReward", "OneKeyClaimReward",
+        "QuickBuy", "UseRedemptionCode"
     }
     with pytest.raises(ValueError, match="至少一个"):
         TaskDispatcher(object()).run_use_redemption_code_task({"codes": []})
@@ -756,11 +757,13 @@ await file.ReadText("input.txt", (error, data) => {
   if (error) throw new Error(error);
   readCallback = data;
 });
+const readPromise = await file.ReadText("input.txt").then(value => value);
 let writeCallback = false;
 await file.WriteText("callback.txt", "ok", (error, success) => {
   if (error) throw new Error(error);
   writeCallback = success;
 });
+const writePromise = await file.WriteText("promise.txt", "ok").then(value => value);
 const created = file.CreateDirectory("record/nested");
 const mkdirAlias = file.mkdir("alias-dir");
 file.WriteTextSync("record/old.txt", "rename me");
@@ -798,7 +801,9 @@ return JSON.stringify({
   linkedCancelled: linked.isCancellationRequested,
   callbackCount,
   readCallback,
+  readPromise,
   writeCallback,
+  writePromise,
   created,
   mkdirAlias,
   renamed,
@@ -842,7 +847,9 @@ return JSON.stringify({
     assert result["linkedCancelled"] is True
     assert result["callbackCount"] == 1
     assert result["readCallback"] == "兼容文本"
+    assert result["readPromise"] == "兼容文本"
     assert result["writeCallback"] is True
+    assert result["writePromise"] is True
     assert result["created"] is True
     assert result["mkdirAlias"] is True
     assert result["renamed"] is True
@@ -1623,6 +1630,36 @@ def test_one_dragon_maps_daily_leyline_config():
     }
 
 
+def test_one_dragon_passes_cancellation_to_builtin_dispatcher_jobs():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.tasks.one_dragon import OneDragonFlowTask, OneDragonItem
+
+    cancelled = Mock(return_value=False)
+
+    class Dispatcher:
+        def run_auto_domain_task(self, config, token):
+            self.call = (config, token)
+            return True
+
+    dispatcher = Dispatcher()
+    flow = OneDragonFlowTask(
+        SimpleNamespace(),
+        {"taskConfigs": {"domain": {"domainRoundNum": 2}}},
+        dispatcher,
+        log=lambda _message: None,
+    )
+
+    assert flow._run_builtin(
+        OneDragonItem("domain", "自动秘境", True),
+        cancelled=cancelled,
+    ) is True
+    assert dispatcher.call[0]["domainRoundNum"] == 2
+    assert dispatcher.call[1] is cancelled
+    cancelled.assert_called_once_with()
+
+
 def test_tcg_strategy_parser_matches_bettergi_format():
     from bgi_touch.tasks.auto_tcg import parse_tcg_strategy
     from bgi_touch.tasks.tcg_state import TcgElement
@@ -1889,6 +1926,71 @@ def test_pathing_model_preserves_bettergi_extensions():
     assert point.enable_monster_loot_split
     assert point.misidentification.types == ["unrecognized", "pathTooFar"]
     assert point.misidentification.arrival_time == 1200
+
+
+@pytest.mark.parametrize(
+    "info_key", ["enable_monster_loot_split", "enableMonsterLootSplit"]
+)
+def test_pathing_info_monster_loot_split_is_inherited_by_waypoints(info_key):
+    from bgi_touch.pathing.model import PathingTask
+
+    task = PathingTask.parse({
+        "info": {info_key: "true"},
+        "positions": [
+            {"id": 1, "x": 0, "y": 0},
+            {"id": 2, "x": 1, "y": 1, "pointExtParams": {}},
+        ],
+    })
+
+    assert [point.enable_monster_loot_split for point in task.positions] == [
+        True,
+        True,
+    ]
+
+
+def test_pathing_waypoint_monster_loot_split_overrides_route_default():
+    from bgi_touch.pathing.model import PathingTask
+
+    task = PathingTask.parse({
+        "info": {"enable_monster_loot_split": True},
+        "positions": [
+            {
+                "id": 1,
+                "x": 0,
+                "y": 0,
+                "pointExtParams": {"enable_monster_loot_split": False},
+            },
+            {
+                "id": 2,
+                "x": 1,
+                "y": 1,
+                "pointExtParams": {"enableMonsterLootSplit": True},
+            },
+            {"id": 3, "x": 2, "y": 2},
+        ],
+    })
+
+    assert [point.enable_monster_loot_split for point in task.positions] == [
+        False,
+        True,
+        True,
+    ]
+
+
+def test_pathing_config_preserves_nested_autofight_options():
+    from bgi_touch.pathing.party_config import PathingPartyConfig
+
+    config = PathingPartyConfig.from_mapping({
+        "autoFightConfig": {
+            "onlyPickEliteDropsMode": "DisableAutoPickupForNonElite",
+            "timeout": 300,
+        },
+    })
+
+    assert config.auto_fight_config == {
+        "onlyPickEliteDropsMode": "DisableAutoPickupForNonElite",
+        "timeout": 300,
+    }
 
 
 def test_minimap_stable_position_rejects_jump_after_global_retry():

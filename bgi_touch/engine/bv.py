@@ -11,6 +11,14 @@ from typing import Any, Callable
 from .recognition import ImageRegion, Mat, RecognitionObject, Region
 
 
+# A realtime trigger owns the DeviceHub screenshot producer while it is active.
+# Bv scripts should consume that producer's latest frame when it is recent
+# enough, but must fall back to a direct capture when no trigger is running or
+# the cache has gone stale.  The bound is deliberately longer than the default
+# trigger interval (700ms) and shorter than a typical locator retry interval.
+_VISION_CACHE_MAX_AGE_S = 1.5
+
+
 @dataclass
 class Rect:
     x: float = 0
@@ -29,9 +37,56 @@ class Rect:
         lambda self, value: setattr(self, "height", float(value)),
     )
 
+    # BetterGI exposes these helpers as OpenCvSharp Rect extension methods.
+    # Keep the returned coordinates in the same (1920x1080 reference) space
+    # as the source rectangle; ImageRegion performs the device scaling later.
+    def cut_left(self, ratio: float) -> "Rect":
+        ratio = float(ratio)
+        return Rect(self.x, self.y, self.width * ratio, self.height)
+
+    def cut_right(self, ratio: float) -> "Rect":
+        ratio = float(ratio)
+        width = self.width * ratio
+        return Rect(self.x + self.width - width, self.y, width, self.height)
+
+    def cut_top(self, ratio: float) -> "Rect":
+        ratio = float(ratio)
+        return Rect(self.x, self.y, self.width, self.height * ratio)
+
+    def cut_bottom(self, ratio: float) -> "Rect":
+        ratio = float(ratio)
+        height = self.height * ratio
+        return Rect(self.x, self.y + self.height - height, self.width, height)
+
+    def cut_left_top(self, ratio_left: float, ratio_top: float) -> "Rect":
+        return self.cut_left(ratio_left).cut_top(ratio_top)
+
+    def cut_right_top(self, ratio_right: float, ratio_top: float) -> "Rect":
+        return self.cut_right(ratio_right).cut_top(ratio_top)
+
+    def cut_left_bottom(self, ratio_left: float, ratio_bottom: float) -> "Rect":
+        return self.cut_left(ratio_left).cut_bottom(ratio_bottom)
+
+    def cut_right_bottom(self, ratio_right: float, ratio_bottom: float) -> "Rect":
+        return self.cut_right(ratio_right).cut_bottom(ratio_bottom)
+
+    CutLeft = cut_left
+    CutRight = cut_right
+    CutTop = cut_top
+    CutBottom = cut_bottom
+    CutLeftTop = cut_left_top
+    CutRightTop = cut_right_top
+    CutLeftBottom = cut_left_bottom
+    CutRightBottom = cut_right_bottom
+
 
 def _unwrap(value: Any) -> Any:
-    return getattr(value, "__wrapped__", value)
+    # PythonMonkey's native JS arrays expose ``__wrapped__`` as ``None``;
+    # treating that sentinel as the wrapped value would turn every array into
+    # Python ``None`` and break variadic host overloads such as
+    # Keyboard.ModifiedKeyStroke([modifier], [key]).
+    wrapped = getattr(value, "__wrapped__", None)
+    return value if wrapped is None else wrapped
 
 
 def _rect(value: Any) -> tuple[float, float, float, float] | None:
@@ -55,6 +110,28 @@ def _rect(value: Any) -> tuple[float, float, float, float] | None:
         )
     result = tuple(float(part) for part in parts)
     return None if result == (0.0, 0.0, 0.0, 0.0) else result
+
+
+def _capture_vision_frame(ctx, *, max_age_s: float = _VISION_CACHE_MAX_AGE_S):
+    """Return one frame without creating a competing capture producer.
+
+    TriggerLoop is intentionally checked through the private instance stored
+    on GameContext instead of the ``triggers`` property: looking up that
+    property would lazily create a loop for otherwise ordinary JS scripts.
+    Lightweight test contexts and older callers do not have the instance, so
+    they retain the original direct-capture behavior.
+    """
+    trigger_loop = getattr(ctx, "_trigger_loop", None)
+    if trigger_loop is not None and getattr(trigger_loop, "active", False):
+        cached_frame = getattr(ctx, "cached_frame", None)
+        if callable(cached_frame):
+            try:
+                frame, age = cached_frame()
+            except Exception:
+                frame, age = None, float("inf")
+            if frame is not None and float(age) <= float(max_age_s):
+                return frame
+    return ctx.capture_bgr()
 
 
 class BvImage:
@@ -112,7 +189,7 @@ class BvLocator:
 
     def _find_all(self) -> list[Region]:
         self.check_cancel()
-        screen = ImageRegion(self.ctx, self.ctx.capture_bgr())
+        screen = ImageRegion(self.ctx, _capture_vision_frame(self.ctx))
         return self._find_all_in(screen)
 
     def _find_all_in(self, screen: ImageRegion) -> list[Region]:
@@ -217,6 +294,13 @@ class BvLocator:
         return region
 
     def with_roi(self, rect: Any) -> "BvLocator":
+        # The desktop host also accepts WithRoi(Func<Rect, Rect>).  A JS
+        # callback arrives as a Python-callable PythonMonkey value, and the
+        # callback must receive the reference capture rectangle rather than a
+        # device-pixel rectangle.  Recognition's ROI converter will apply the
+        # current iOS screen transform when the frame is searched.
+        if callable(rect):
+            rect = rect(Rect(0, 0, 1920, 1080))
         self.recognition_object.roi = _rect(rect)
         return self
 
@@ -555,7 +639,7 @@ class BvFlow:
 
     def _find_targets(self, targets: tuple[BvLocator, ...], condition: str,
                       context: _FlowContext) -> bool:
-        screen = ImageRegion(self.page.ctx, self.page.ctx.capture_bgr())
+        screen = ImageRegion(self.page.ctx, _capture_vision_frame(self.page.ctx))
         for locator in targets:
             values = locator._find_all_in(screen)
             if condition == self.ANY_APPEAR and values:
@@ -824,6 +908,19 @@ class BvPage:
         self.check_cancel = check_cancel
         self.default_timeout = 10000
         self.default_retry_interval = 1000
+        self._keyboard = _BvKeyboard(ctx)
+        self._mouse = self._keyboard.mouse
+
+    @property
+    def keyboard(self) -> "_BvKeyboard":
+        return self._keyboard
+
+    @property
+    def mouse(self) -> "_BvMouse":
+        return self._mouse
+
+    Keyboard = property(lambda self: self.keyboard)
+    Mouse = property(lambda self: self.mouse)
 
     defaultTimeout = property(
         lambda self: self.default_timeout,
@@ -838,7 +935,7 @@ class BvPage:
 
     def screenshot(self) -> ImageRegion:
         self.check_cancel()
-        return ImageRegion(self.ctx, self.ctx.capture_bgr())
+        return ImageRegion(self.ctx, _capture_vision_frame(self.ctx))
 
     def wait(self, milliseconds: int) -> "BvPage":
         self.check_cancel()
@@ -893,6 +990,9 @@ class BvPage:
         locator.retry_interval = self.default_retry_interval
         return locator
 
+    def get_by_image(self, image: BvImage) -> BvLocator:
+        return self.locator(image)
+
     def ocr(self, rect: Any = None):
         return self.get_by_text("", rect).find_all()
 
@@ -907,5 +1007,221 @@ class BvPage:
     GetByText = get_by_text
     getByAnyText = get_by_any_text
     GetByAnyText = get_by_any_text
+    getByImage = get_by_image
+    GetByImage = get_by_image
     Ocr = ocr
     Click = click
+
+
+def _key_name(value: Any) -> str:
+    """Normalize a JS string/enum-like key for the touch input simulator."""
+    value = _unwrap(value)
+    if isinstance(value, str):
+        return value
+    for name in ("name", "Name", "value", "Value"):
+        try:
+            candidate = getattr(value, name)
+        except (AttributeError, TypeError):
+            continue
+        if isinstance(candidate, str):
+            return candidate
+    return str(value)
+
+
+def _keys(values: tuple[Any, ...]) -> list[str]:
+    """Flatten the array and variadic forms accepted by input host methods."""
+    if len(values) == 1 and isinstance(_unwrap(values[0]), (list, tuple)):
+        values = tuple(_unwrap(values[0]))
+    return [_key_name(value) for value in values]
+
+
+class _BvKeyboard:
+    """Small chainable replacement for BetterGI's IKeyboardSimulator."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.input = ctx.input
+        self.mouse = _BvMouse(ctx, self)
+
+    @property
+    def Mouse(self) -> "_BvMouse":
+        return self.mouse
+
+    def key_down(self, *keys: Any) -> "_BvKeyboard":
+        for key in _keys(keys):
+            self.input.key_down(key)
+        return self
+
+    def key_up(self, *keys: Any) -> "_BvKeyboard":
+        for key in _keys(keys):
+            self.input.key_up(key)
+        return self
+
+    def key_press(self, *keys: Any) -> "_BvKeyboard":
+        for key in _keys(keys):
+            self.input.key_press(key)
+        return self
+
+    def modified_key_stroke(self, modifiers: Any, keys: Any = None) -> "_BvKeyboard":
+        modifier_values = _keys((modifiers,))
+        key_values = _keys((keys,)) if keys is not None else []
+        self.key_down(*modifier_values)
+        try:
+            self.key_press(*key_values)
+        finally:
+            self.key_up(*reversed(modifier_values))
+        return self
+
+    def text_entry(self, value: Any) -> "_BvKeyboard":
+        text = str(_unwrap(value))
+        if text:
+            self.ctx.device.paste_text(text)
+        return self
+
+    def sleep(self, milliseconds: Any) -> "_BvKeyboard":
+        self.ctx.sleep(int(milliseconds))
+        return self
+
+    KeyDown = key_down
+    KeyUp = key_up
+    KeyPress = key_press
+    ModifiedKeyStroke = modified_key_stroke
+    TextEntry = text_entry
+    Sleep = sleep
+
+
+class _BvMouse:
+    """Chainable mouse simulator mapped to the existing touch pointer."""
+
+    def __init__(self, ctx, keyboard: _BvKeyboard):
+        self.ctx = ctx
+        self.input = ctx.input
+        self.keyboard = keyboard
+
+    @property
+    def Keyboard(self) -> _BvKeyboard:
+        return self.keyboard
+
+    @property
+    def pointer(self):
+        return getattr(self.ctx, "_script_pointer", None)
+
+    def move_mouse_by(self, dx: Any, dy: Any) -> "_BvMouse":
+        pointer = self.pointer
+        if pointer is not None:
+            pointer.move_by(float(dx), float(dy))
+        else:
+            self.input.move_camera_by(float(dx), float(dy))
+        return self
+
+    def move_mouse_to(self, x: Any, y: Any) -> "_BvMouse":
+        pointer = self.pointer
+        if pointer is not None:
+            pointer.move_to(float(x), float(y))
+        else:
+            self.input.click_ref(float(x), float(y))
+        return self
+
+    MoveMouseBy = move_mouse_by
+    MoveMouseTo = move_mouse_to
+    MoveMouseToPositionOnVirtualDesktop = move_mouse_to
+
+    def left_button_down(self) -> "_BvMouse":
+        pointer = self.pointer
+        if pointer is not None:
+            pointer.left_down()
+        else:
+            self.input.attack_down()
+        return self
+
+    def left_button_up(self) -> "_BvMouse":
+        pointer = self.pointer
+        if pointer is not None:
+            pointer.left_up()
+        else:
+            self.input.attack_up()
+        return self
+
+    def left_button_click(self) -> "_BvMouse":
+        pointer = self.pointer
+        if pointer is not None:
+            pointer.left_click()
+        else:
+            self.input.attack()
+        return self
+
+    def left_button_double_click(self) -> "_BvMouse":
+        self.left_button_click()
+        self.sleep(60)
+        return self.left_button_click()
+
+    def _button_down(self, name: str) -> "_BvMouse":
+        self.input.button_down(name)
+        return self
+
+    def _button_up(self, name: str) -> "_BvMouse":
+        self.input.button_up(name)
+        return self
+
+    def _button_click(self, name: str) -> "_BvMouse":
+        self.input.tap_button(name)
+        return self
+
+    def middle_button_down(self) -> "_BvMouse":
+        return self._button_down("elementalSight")
+
+    def middle_button_up(self) -> "_BvMouse":
+        return self._button_up("elementalSight")
+
+    def middle_button_click(self) -> "_BvMouse":
+        return self._button_click("elementalSight")
+
+    def middle_button_double_click(self) -> "_BvMouse":
+        self.middle_button_click()
+        self.sleep(60)
+        return self.middle_button_click()
+
+    def right_button_down(self) -> "_BvMouse":
+        return self._button_down("sprint")
+
+    def right_button_up(self) -> "_BvMouse":
+        return self._button_up("sprint")
+
+    def right_button_click(self) -> "_BvMouse":
+        self.input.key_press("LSHIFT")
+        return self
+
+    def right_button_double_click(self) -> "_BvMouse":
+        self.right_button_click()
+        self.sleep(60)
+        return self.right_button_click()
+
+    def vertical_scroll(self, amount: Any) -> "_BvMouse":
+        self.input.vertical_scroll(float(amount))
+        return self
+
+    def horizontal_scroll(self, amount: Any) -> "_BvMouse":
+        # There is no horizontal wheel on iOS.  Preserve the desktop relative
+        # movement semantics through the same gesture channel used by the
+        # global moveMouseBy API.
+        return self.move_mouse_by(float(amount), 0)
+
+    def sleep(self, milliseconds: Any) -> "_BvMouse":
+        self.ctx.sleep(int(milliseconds))
+        return self
+
+    LeftButtonDown = left_button_down
+    LeftButtonUp = left_button_up
+    LeftButtonClick = left_button_click
+    LeftButtonDoubleClick = left_button_double_click
+    MiddleButtonDown = middle_button_down
+    MiddleButtonUp = middle_button_up
+    MiddleButtonClick = middle_button_click
+    MiddleButtonDoubleClick = middle_button_double_click
+    RightButtonDown = right_button_down
+    RightButtonUp = right_button_up
+    RightButtonClick = right_button_click
+    RightButtonDoubleClick = right_button_double_click
+    VerticalScroll = vertical_scroll
+    HorizontalScroll = horizontal_scroll
+    Sleep = sleep

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -174,7 +175,8 @@ class JsScriptRuntime:
                  pathing_config: dict | None = None,
                  notification_config_path: str | Path | None = None,
                  allow_js_notification: bool | None = None,
-                 allow_js_http_hash: str | None = None):
+                 allow_js_http_hash: str | None = None,
+                 disable_input_monitor: bool | None = None):
         import pythonmonkey as pm
 
         self.pm = pm
@@ -203,6 +205,16 @@ class JsScriptRuntime:
         self.allow_js_http_hash = (
             None if allow_js_http_hash is None else str(allow_js_http_hash)
         )
+        configured_disable_input_monitor = disable_input_monitor
+        if configured_disable_input_monitor is None:
+            configured_disable_input_monitor = getattr(
+                ctx,
+                "disable_input_monitor",
+                os.environ.get("BGI_DISABLE_INPUT_MONITOR"),
+            )
+        self.disable_input_monitor = as_bool(
+            configured_disable_input_monitor, False,
+        )
         self.manifest = self._load_manifest()
         self.settings = self._load_settings(settings or {})
         if party_slots is not None:
@@ -225,7 +237,10 @@ class JsScriptRuntime:
         self._notification_service = NotificationService.load(
             notification_config_path, log=log,
         )
-        self._key_mouse_hooks = KeyMouseHookManager(log=log)
+        self._key_mouse_hooks = KeyMouseHookManager(
+            log=log,
+            enabled=not self.disable_input_monitor,
+        )
         self._install_globals()
 
     # ---- manifest / settings ----
@@ -774,6 +789,7 @@ class JsScriptRuntime:
 
         # file（沙箱）
         rt = self
+        promise_result = pm.eval("value => Promise.resolve(value)")
 
         class _File:
             def readTextSync(self, p): return rt._resolve(p).read_text(encoding="utf-8")
@@ -783,11 +799,11 @@ class JsScriptRuntime:
                 except Exception as error:
                     if cb:
                         cb(str(error), None)
-                        return None
+                        return promise_result(None)
                     raise
                 if cb:
                     cb(None, text)
-                return text
+                return promise_result(text)
             def writeTextSync(self, p, content, append=False):
                 f = rt._resolve(p)
                 f.parent.mkdir(parents=True, exist_ok=True)
@@ -803,11 +819,11 @@ class JsScriptRuntime:
                 except Exception as error:
                     if callback:
                         callback(str(error), None)
-                        return False
+                        return promise_result(False)
                     raise
                 if callback:
                     callback(None, result)
-                return result
+                return promise_result(result)
             def readImageMatSync(self, p): return wrap(Mat.from_file(str(rt._resolve(p))))
             def readImageMatWithResizeSync(self, p, w, h, interp=1):
                 import cv2 as _cv2
@@ -886,7 +902,38 @@ class JsScriptRuntime:
         # http
         class _Http:
             def request(self, method, url, body=None, headers_json=""):
-                return rt._http_request(str(method), str(url), body, str(headers_json or ""))
+                """Run HTTP I/O off the SpiderMonkey thread.
+
+                BetterGI exposes ``Http.Request`` as ``Task<HttpResponse>``.
+                The previous direct call performed ``urlopen`` on the JS
+                thread, which made a slow endpoint stall script timers and
+                the WebUI event loop.  Snapshot the JS arguments before
+                submitting the request so the worker never touches a
+                thread-affine PythonMonkey proxy.
+                """
+                frozen_method = str(method)
+                frozen_url = str(url)
+                if body is None or isinstance(body, (str, bytes)):
+                    frozen_body = body
+                else:
+                    frozen_body = rt._snapshot_js_value(body)
+                frozen_headers = str(headers_json or "")
+                cancellation, probe = rt._task_cancellation(None)
+
+                def execute():
+                    cancellation.throwIfCancellationRequested()
+                    return rt._http_request(
+                        frozen_method,
+                        frozen_url,
+                        frozen_body,
+                        frozen_headers,
+                    )
+
+                return rt._task_promise(execute, cancellation_probe=probe)
+
+            # PythonMonkey does not synthesize ClearScript's PascalCase alias
+            # for a raw host object exposed with ``proxy=False``.
+            Request = request
         expose("http", wrap(_Http()), proxy=False)
 
         class _ServerTime:
@@ -1319,7 +1366,6 @@ class JsScriptRuntime:
         # scripts can await/catch them without blocking SpiderMonkey's event
         # loop while a mobile screenshot or gesture is in flight.
         genshin_async_methods = frozenset({
-            "uid",
             "tp",
             "moveMapTo",
             "clickMapPoint",
@@ -1343,6 +1389,7 @@ class JsScriptRuntime:
             "relogin",
             "wonderlandCycle",
             "setTime",
+            "uid",
         })
 
         def _genshin_task(member: Callable, *args: Any):
@@ -1480,6 +1527,48 @@ class JsScriptRuntime:
         )
         expose("oneKeyFight", wrap(self._one_key_fight), proxy=False)
 
+        # BetterGI's reward hotkey is a separate global state machine.  Keep
+        # it separate from ``QuickClaimReward`` (which is a finite task) so
+        # iOS scripts can bind WebUI/KeyMouseHook key edges to the same
+        # click-once / hold-to-scroll behavior as the desktop hotkey.
+        from ..tasks.quick_claim import (
+            CLICK_ONCE_MODE,
+            OneKeyClaimRewardTask,
+        )
+        claim_mode = str(
+            self.settings.get("oneKeyClaimRewardHotkeyMode", CLICK_ONCE_MODE)
+            or CLICK_ONCE_MODE
+        )
+        self._one_key_claim_reward = OneKeyClaimRewardTask(
+            ctx,
+            mode=claim_mode,
+            scroll_down_enabled=as_bool(
+                self.settings.get("oneKeyClaimRewardScrollDownEnabled", False),
+                False,
+            ),
+            scroll_down_amount=int(
+                self.settings.get("oneKeyClaimRewardScrollDownAmount", 2) or 2
+            ),
+            max_clicks=int(
+                self.settings.get("oneKeyClaimRewardMaxClicks", 30) or 30
+            ),
+            max_scrolls=int(
+                self.settings.get("oneKeyClaimRewardMaxScrolls", 3) or 3
+            ),
+            timeout_s=float(
+                self.settings.get("oneKeyClaimRewardTimeoutSeconds", 30) or 30
+            ),
+            enabled=as_bool(
+                self.settings.get("oneKeyClaimRewardEnabled", True), True
+            ),
+            log=log,
+        )
+        expose(
+            "oneKeyClaimReward",
+            wrap(self._one_key_claim_reward),
+            proxy=False,
+        )
+
         from ..macro.hotkeys import HotkeyMacroHost
         self._hotkey_macros = HotkeyMacroHost(
             ctx,
@@ -1506,8 +1595,12 @@ class JsScriptRuntime:
         player = MacroPlayer(ctx.input, sleep=ctx.sleep, log=log)
 
         class _KeyMouse:
-            def run(self, j): player.play(json.loads(str(j)))
-            def runFile(self, p): player.play(load_keymouse(rt._resolve(p)))
+            def run(self, j):
+                player.play(json.loads(str(j)))
+                return promise_result(None)
+            def runFile(self, p):
+                player.play(load_keymouse(rt._resolve(p)))
+                return promise_result(None)
         expose("keyMouseScript", wrap(_KeyMouse()), proxy=False)
 
         pathing_exec = PathingExecutor(
@@ -1518,10 +1611,15 @@ class JsScriptRuntime:
         )
 
         class _Pathing:
-            def run(self, j): pathing_exec.run(PathingTask.parse(json.loads(str(j))))
-            def runFile(self, p): pathing_exec.run(PathingTask.load(rt._resolve(p)))
+            def run(self, j):
+                pathing_exec.run(PathingTask.parse(json.loads(str(j))))
+                return promise_result(None)
+            def runFile(self, p):
+                pathing_exec.run(PathingTask.load(rt._resolve(p)))
+                return promise_result(None)
             def runFileFromUser(self, p):
-                return pathing_exec.run(PathingTask.load(rt._resolve_pathing(p)))
+                pathing_exec.run(PathingTask.load(rt._resolve_pathing(p)))
+                return promise_result(None)
             def isExists(self, p):
                 try:
                     return rt._resolve_pathing(p).exists()
@@ -2305,6 +2403,9 @@ class JsScriptRuntime:
             one_key_fight = getattr(self, "_one_key_fight", None)
             if one_key_fight is not None:
                 one_key_fight.stop()
+            one_key_claim_reward = getattr(self, "_one_key_claim_reward", None)
+            if one_key_claim_reward is not None:
+                one_key_claim_reward.stop()
             hotkey_macros = getattr(self, "_hotkey_macros", None)
             if hotkey_macros is not None:
                 hotkey_macros.stop()

@@ -14,7 +14,13 @@ from typing import Any, Callable
 import cv2
 import numpy as np
 
-from ..combat.dsl import CombatCommand, CombatExecutor, CombatLine, parse_combat_script
+from ..combat.dsl import (
+    CombatCommand,
+    CombatExecutor,
+    CombatLine,
+    command_active_for_round,
+    parse_combat_script,
+)
 from ..combat.experience import ExperienceDetector, ExperienceDetectorConfig
 from ..combat.finish import FightFinishConfig, FightFinishDetector
 from ..combat.hud import enemies_nearby, is_skill_ready
@@ -179,12 +185,23 @@ class AutoFightTask:
         self.log(f"[AutoFight] 开始（超时 {self.timeout_s:.0f}s）")
         self._start_battle()
         current_character = None
+        round_number = 1
         try:
             while time.monotonic() < deadline:
                 if cancelled and cancelled():
                     self.log("[AutoFight] 已取消")
                     return False
                 for line in self.lines:
+                    commands = [
+                        command
+                        for command in line.commands
+                        if command_active_for_round(command, round_number)
+                    ]
+                    # A round marker can disable the whole line.  Match the
+                    # desktop executor by skipping its character switch and
+                    # finish checks as well when no command is active.
+                    if not commands:
+                        continue
                     previous_character = current_character
                     if (
                         self.finish_detect_enabled
@@ -210,7 +227,7 @@ class AutoFightTask:
                     ):
                         self.log("[AutoFight] 切人后确认战斗结束")
                         return self._finish_fight(cancelled)
-                    for command in line.commands:
+                    for command in commands:
                         if cancelled and cancelled():
                             self.log("[AutoFight] 已取消")
                             return False
@@ -244,6 +261,7 @@ class AutoFightTask:
                     if clear_streak >= 2:
                         self.log("[AutoFight] 战斗结束")
                         return self._finish_fight(cancelled)
+                round_number += 1
             self.log("[AutoFight] 超时退出")
             return False
         finally:

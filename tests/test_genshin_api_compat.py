@@ -615,6 +615,110 @@ return JSON.stringify({isPromise, result, ticks});
     assert calls[0][3].startswith("bgi-js-task")
 
 
+def test_js_runtime_exposes_genshin_uid_as_an_async_upstream_task(tmp_path, monkeypatch):
+    """Genshin.Uid returns Task<int> in the upstream host contract."""
+    pytest.importorskip("pythonmonkey")
+
+    from bgi_touch.engine.genshin_api import GenshinApi
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    def fake_uid(self):
+        time.sleep(0.08)
+        return 123456789
+
+    monkeypatch.setattr(GenshinApi, "uid", fake_uid)
+    (tmp_path / "main.js").write_text(
+        """
+const task = genshin.uid();
+const isPromise = task instanceof Promise;
+let ticks = 0;
+const timer = setInterval(() => ticks++, 5);
+const value = await task;
+clearInterval(timer);
+return JSON.stringify({isPromise, value, ticks});
+""",
+        encoding="utf-8",
+    )
+    input_simulator = SimpleNamespace(
+        key_down=lambda *_args: None, key_up=lambda *_args: None,
+        key_press=lambda *_args: None, move_camera_by=lambda *_args: None,
+        attack=lambda *_args: None, attack_down=lambda *_args: None,
+        attack_up=lambda *_args: None, button_down=lambda *_args: None,
+        button_up=lambda *_args: None, release_all=lambda *_args: None,
+        tap_button=lambda *_args: None,
+    )
+    ctx = SimpleNamespace(
+        input=input_simulator,
+        device=SimpleNamespace(paste_text=lambda *_args: None, tap=lambda *_args: None),
+        transform=ScreenTransform(2778, 1284),
+        sleep=lambda _ms: None,
+    )
+
+    result = json.loads(JsScriptRuntime(ctx, tmp_path).run())
+
+    assert result["isPromise"] is True
+    assert result["value"] == 123456789
+    assert result["ticks"] >= 3
+
+
+def test_js_runtime_runs_http_request_off_the_js_thread(tmp_path, monkeypatch):
+    """Http.Request must preserve the upstream Promise contract without blocking timers."""
+    pytest.importorskip("pythonmonkey")
+
+    from bgi_touch.engine.js_runtime import JsScriptRuntime
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    calls = []
+
+    def fake_http(self, method, url, body=None, headers_json=""):
+        calls.append((method, url, body, headers_json, threading.current_thread().name))
+        time.sleep(0.08)
+        return {"status_code": 200, "headers": {}, "body": "ok"}
+
+    monkeypatch.setattr(JsScriptRuntime, "_http_request", fake_http)
+    (tmp_path / "manifest.json").write_text(
+        '{"http_allowed_urls":["https://example.test/*"]}',
+        encoding="utf-8",
+    )
+    (tmp_path / "main.js").write_text(
+        """
+const task = http.Request('GET', 'https://example.test/data', null, '{}');
+const isPromise = task instanceof Promise;
+let ticks = 0;
+const timer = setInterval(() => ticks++, 5);
+const response = await task;
+clearInterval(timer);
+return JSON.stringify({isPromise, response, ticks});
+""",
+        encoding="utf-8",
+    )
+    input_simulator = SimpleNamespace(
+        key_down=lambda *_args: None, key_up=lambda *_args: None,
+        key_press=lambda *_args: None, move_camera_by=lambda *_args: None,
+        attack=lambda *_args: None, attack_down=lambda *_args: None,
+        attack_up=lambda *_args: None, button_down=lambda *_args: None,
+        button_up=lambda *_args: None, release_all=lambda *_args: None,
+        tap_button=lambda *_args: None,
+    )
+    ctx = SimpleNamespace(
+        input=input_simulator,
+        device=SimpleNamespace(paste_text=lambda *_args: None, tap=lambda *_args: None),
+        transform=ScreenTransform(2778, 1284),
+        sleep=lambda _ms: None,
+    )
+
+    result = json.loads(JsScriptRuntime(ctx, tmp_path).run())
+
+    assert result["isPromise"] is True
+    assert result["response"] == {
+        "status_code": 200, "headers": {}, "body": "ok",
+    }
+    assert result["ticks"] >= 3
+    assert calls and calls[0][0:2] == ("GET", "https://example.test/data")
+    assert calls[0][4].startswith("bgi-js-task")
+
+
 def test_js_runtime_catches_genshin_action_rejection(tmp_path, monkeypatch):
     pytest.importorskip("pythonmonkey")
 

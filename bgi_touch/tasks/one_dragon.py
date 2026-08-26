@@ -129,9 +129,31 @@ class OneDragonFlowTask:
         value = configs.get(item.id, configs.get(item.name, {}))
         return dict(value) if isinstance(value, Mapping) else {}
 
-    def _run_builtin(self, item: OneDragonItem) -> Any:
+    def _run_builtin(
+        self,
+        item: OneDragonItem,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Any:
+        """Run one of BetterGI's built-in OneDragon jobs.
+
+        The desktop flow passes its linked cancellation token into every
+        built-in task.  Keep the direct ``GenshinApi`` calls for the
+        cancellation-free compatibility path used by older callers, but
+        route cancellable runs through the dispatcher's task methods so a
+        stop request reaches the actual state machine instead of only being
+        observed between OneDragon items.
+        """
+        if cancelled is not None and cancelled():
+            raise RuntimeError("一条龙任务已取消")
         task_config = self._task_config(item)
         if item.name == "领取邮件":
+            if cancelled is not None:
+                return self._run_dispatcher(
+                    self.dispatcher,
+                    "run_claim_mail_rewards_task",
+                    task_config,
+                    cancelled,
+                )
             return self.genshin.claimMailRewards()
         if item.name == "合成树脂":
             country = _get(
@@ -154,12 +176,29 @@ class OneDragonFlowTask:
             )
             if timeout is not None:
                 options["timeout_s"] = float(timeout)
+            if cancelled is not None:
+                task_config.setdefault("country", country)
+                if min_keep is not None:
+                    task_config.setdefault("minResinToKeep", min_keep)
+                if timeout is not None:
+                    task_config.setdefault("timeoutSeconds", timeout)
+                return self._run_dispatcher(
+                    self.dispatcher,
+                    "run_go_craft_resin_task",
+                    task_config,
+                    cancelled,
+                )
             return self.genshin.goCraftResin(country, **options)
         if item.name == "自动秘境":
             task_config.setdefault("domainRoundNum", 1)
             task_config.setdefault("partyName", _get(self.config, "partyName", ""))
             task_config.setdefault("domainName", _get(self.config, "domainName", ""))
-            return self.dispatcher.run_auto_domain_task(task_config)
+            return self._run_dispatcher(
+                self.dispatcher,
+                "run_auto_domain_task",
+                task_config,
+                cancelled,
+            )
         if item.name == "自动首领讨伐":
             task_config.setdefault("bossName", _get(self.config, "autoBossName", ""))
             task_config.setdefault(
@@ -188,9 +227,19 @@ class OneDragonFlowTask:
                 _bool(_get(self.config, "autoBossRewardRecognitionEnabled", False)),
             )
             task_config.setdefault("timeout", _get(self.config, "autoBossTimeout", 240))
-            return self.dispatcher.run_auto_boss_task(task_config)
+            return self._run_dispatcher(
+                self.dispatcher,
+                "run_auto_boss_task",
+                task_config,
+                cancelled,
+            )
         if item.name == "自动幽境危战":
-            return self.dispatcher.run_auto_stygian_onslaught_task(task_config)
+            return self._run_dispatcher(
+                self.dispatcher,
+                "run_auto_stygian_onslaught_task",
+                task_config,
+                cancelled,
+            )
         if item.name == "领取每日奖励":
             country = _get(
                 task_config,
@@ -215,8 +264,27 @@ class OneDragonFlowTask:
                     only_do_once,
                     False,
                 )
-            guild = self.genshin.goToAdventurersGuild(country, **guild_options)
-            battle_pass = self.genshin.claimBattlePassRewards()
+            if cancelled is not None:
+                if party_name:
+                    task_config.setdefault("dailyRewardPartyName", party_name)
+                if only_do_once is not None:
+                    task_config.setdefault("onlyDoOnce", only_do_once)
+                task_config.setdefault("country", country)
+                guild = self._run_dispatcher(
+                    self.dispatcher,
+                    "run_go_to_adventurers_guild_task",
+                    task_config,
+                    cancelled,
+                )
+                battle_pass = self._run_dispatcher(
+                    self.dispatcher,
+                    "run_claim_battle_pass_rewards_task",
+                    {},
+                    cancelled,
+                )
+            else:
+                guild = self.genshin.goToAdventurersGuild(country, **guild_options)
+                battle_pass = self.genshin.claimBattlePassRewards()
             return guild and battle_pass
         if item.name == "领取尘歌壶奖励":
             # QuickSereniteaPot only deploys the gadget and enters/leaves the
@@ -227,7 +295,12 @@ class OneDragonFlowTask:
             )
             if not callable(reward_task):
                 raise RuntimeError("dispatcher 未提供尘歌壶奖励任务")
-            return reward_task(task_config)
+            return self._run_dispatcher(
+                self.dispatcher,
+                "run_serenitea_pot_rewards_task",
+                task_config,
+                cancelled,
+            ) if cancelled is not None else reward_task(task_config)
         if item.name == "自动地脉花":
             day_name = (
                 datetime.now().astimezone() - timedelta(hours=4)
@@ -256,7 +329,12 @@ class OneDragonFlowTask:
             task_config.setdefault(
                 "oneDragonMode", _bool(_get(self.config, "leyLineOneDragonMode", False))
             )
-            return self.dispatcher.run_auto_leyline_task(task_config)
+            return self._run_dispatcher(
+                self.dispatcher,
+                "run_auto_leyline_task",
+                task_config,
+                cancelled,
+            )
         raise KeyError(item.name)
 
     def _path_candidates(self, value: Any) -> list[Path]:
@@ -398,7 +476,7 @@ class OneDragonFlowTask:
         cancelled: Callable[[], bool] | None = None,
     ) -> Any:
         if item.name in self.BUILTIN_NAMES:
-            return self._run_builtin(item)
+            return self._run_builtin(item, cancelled=cancelled)
         config = self._task_config(item)
         task_name = str(_get(config, "taskName", default=item.name) or item.name)
         config.pop("taskName", None)

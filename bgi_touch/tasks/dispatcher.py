@@ -90,7 +90,7 @@ class TaskDispatcher:
         "AutoBoss", "AutoLeyLine", "AutoLeyLineOutcrop", "AutoEat", "AutoMusicGame", "AutoAlbum",
         "AutoGeniusInvokation", "AutoStygianOnslaught", "QuickSereniteaPot",
         "SereniteaPotRewards", "GoToSereniteaPot", "GoToSereniteaPotTask",
-        "QuickClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
+        "QuickClaimReward", "OneKeyClaimReward", "QuickBuy", "UseRedemptionCode", "AutoArtifactSalvage",
         "CountInventoryItem", "GetGridIcons", "InventoryCountComparison",
         "GridIconsAccuracyTest",
         "CharacterDevelopment", "OneDragon", "ScriptGroup", "MusicPlayer", "Shell",
