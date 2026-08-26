@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -22,8 +22,9 @@ import numpy as np
 
 from ..engine.context import GameContext
 from ..engine.recognition import ImageRegion, Mat, RecognitionObject
-from ..vision.game_ui import is_big_map_ui, is_main_ui
+from ..vision.game_ui import MAP_SCALE_BUTTON, is_big_map_ui, is_main_ui
 from .feature_store import SiftFeatureStore
+from .cancellation import PathingCancelled
 from .map_locator import (
     ASSETS,
     MapConfig,
@@ -37,6 +38,7 @@ from .teleport_points import TeleportPoint, default_teleport_point_store
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "assets" / "templates" / "teleport"
 MAP_ICON_TEMPLATES = TEMPLATES.parent / "quick_teleport"
+_TP_SESSION_STATE_ATTR = "_bgi_tp_session_state"
 MIN_VIEW_PX_PER_FEATURE = 0.25
 MAX_VIEW_PX_PER_FEATURE = 20.0
 MAP_MOVE_MAX_ITERATIONS = 24
@@ -55,8 +57,33 @@ MAP_MOVE_PROGRESS_EPSILON = 1.5
 MAP_MOVE_DISTANCE_EPSILON = 4.0
 MAP_MOVE_DIRECTION_COS_EPSILON = 0.15
 MAP_MOVE_FRAME_TIMEOUT_MS = 1800
+MAP_FRAME_CURSOR_TIMEOUT_MS = 1200
 MAP_MOVE_SETTLE_MS = 700
 MAP_MOVE_STALE_RETRY_DELAY_MS = 250
+# DeviceHub's swipe endpoint is reliable for a short, central gesture, but a
+# single 700px+ gesture can be swallowed by the iOS map's edge controls or by
+# the HID channel while the map animation is still settling.  Split only long
+# moves into a small number of central gestures.  The reference values are in
+# the 1920x1080 script space and are scaled to the native screenshot below.
+MAP_DRAG_MAX_STEP_REF_PX = 256.0
+MAP_DRAG_MAX_STEPS = 8
+MAP_DRAG_SAFE_MARGIN_X_REF_PX = 128.0
+MAP_DRAG_SAFE_MARGIN_Y_REF_PX = 96.0
+MAP_DRAG_STEP_GAP_MS = 90
+MAP_DRAG_DURATION_MS = 280
+MAP_SCALE_START_Y = 468.0
+MAP_SCALE_END_Y = 612.0
+MAP_ZOOM_MIN_LEVEL = 1.0
+MAP_ZOOM_MAX_LEVEL = 6.0
+MAP_ZOOM_MEASURE_TOLERANCE = 0.08
+MAP_ZOOM_GESTURE_SETTLE_MS = 450
+MAP_ZOOM_MEASURE_TIMEOUT_MS = 1800
+MAP_ZOOM_INITIAL_GESTURE_DELTA = 0.5
+MAP_ZOOM_MIN_GESTURE_DELTA = 0.05
+MAP_ZOOM_MAX_GESTURE_DELTA = 1.5
+MAP_ZOOM_MAX_GESTURES = 16
+MAP_ZOOM_SPAN_RATIO = 0.14
+MAP_ZOOM_SPAN_DELTA_RATIO = 0.035
 TELEPORT_PANEL_TIMEOUT_S = 4.0
 TELEPORT_PANEL_INITIAL_DELAY_MS = 200
 TELEPORT_PANEL_SELECTION_SETTLE_MS = 600
@@ -66,12 +93,63 @@ TELEPORT_PANEL_SELECTION_SETTLE_MS = 600
 TELEPORT_PANEL_CANDIDATE_CLICK_RETRIES = 2
 TELEPORT_COMPLETION_MINIMUM_S = 1.0
 TELEPORT_COMPLETION_STABLE_CHECKS = 2
+TELEPORT_FINAL_ZOOM_DISTANCE_FACTOR = 36.0
+TELEPORT_FINAL_ZOOM_MIN_NEIGHBOR_SCREEN_DISTANCE = 96.0
+TELEPORT_FINAL_ZOOM_DEFAULT_DISPLAY_LEVEL = 4.4
+TELEPORT_FINAL_ZOOM_MOON_CANON_DISPLAY_LEVEL = 3.0
+TELEPORT_CLICKABLE_RETRY_LIMIT = 5
+TELEPORT_CLICKABLE_RETRY_DELAY_MS = 80
+TELEPORT_NEARBY_ICON_MIN_SEARCH_RADIUS = 120.0
+TELEPORT_NEARBY_ICON_MAX_SEARCH_RADIUS = 260.0
+TELEPORT_NEARBY_ICON_NEIGHBOR_DISTANCE_RATIO = 1.3
+MAP_GROUND_LAYER_SWITCH_TIMEOUT_MS = 3000
+MAP_GROUND_LAYER_POLL_INTERVAL_MS = 60
 ABSOLUTE_ICON_MAX_CORRECTION_REF = 60.0
 ABSOLUTE_ICON_INLIER_RADIUS_REF = 14.0
 ABSOLUTE_ICON_OFFSET_BUCKET_REF = 4.0
 ABSOLUTE_ICON_BASE_UNCERTAINTY_REF = 16.0
 ABSOLUTE_ICON_NEIGHBOR_ERROR_RATIO = 0.25
 ABSOLUTE_ICON_MAX_HYPOTHESES = 64
+
+
+def _get_tp_session_state(ctx) -> dict:
+    """Return the teleport state shared by all tasks using one game context.
+
+    ``GenshinApi``, ``PathingExecutor`` and ``AutoTrack`` may each construct a
+    short-lived :class:`TpTask`.  The desktop implementation keeps the last
+    successful map at task-session scope, so an independent map is not opened
+    again merely because a new helper object was created.  Store the small
+    amount of state on the caller-owned context instead of using process-wide
+    globals; two devices/contexts must never inherit each other's map state.
+    """
+    state = getattr(ctx, _TP_SESSION_STATE_ATTR, None)
+    if not isinstance(state, dict):
+        state = {
+            "selected_areas": {},
+            "last_successful_map_name": None,
+            "last_successful_area": None,
+        }
+        try:
+            setattr(ctx, _TP_SESSION_STATE_ATTR, state)
+        except Exception:
+            # Minimal immutable test doubles can still use the returned local
+            # state for the lifetime of this task.
+            pass
+    selected_areas = state.get("selected_areas")
+    if not isinstance(selected_areas, dict):
+        state["selected_areas"] = {}
+    return state
+
+
+def reset_tp_session_state(ctx) -> None:
+    """Forget map-selection state after a game/account session changes."""
+    state = _get_tp_session_state(ctx)
+    state.clear()
+    state.update({
+        "selected_areas": {},
+        "last_successful_map_name": None,
+        "last_successful_area": None,
+    })
 
 
 @dataclass(frozen=True)
@@ -94,6 +172,35 @@ class _MapIconAlignment:
     offset_y: float
     pair_count: int
     mean_error: float
+
+
+@dataclass(frozen=True)
+class _AbsoluteMapClickPlan:
+    """Decision made from one post-gesture map frame.
+
+    ``corrected_point`` is safe to try before the raw coordinate.  When the
+    alignment is plausible but the correction is too large compared with the
+    nearest neighbouring point, the raw point is safer; ``fallback_point``
+    retains the already computed correction for one bounded retry.  Keeping
+    this decision with the frame prevents a second screenshot from producing a
+    different correction halfway through one teleport attempt.
+    """
+
+    corrected_point: tuple[float, float] | None = None
+    raw_first: bool = False
+    fallback_point: tuple[float, float] | None = None
+
+
+@dataclass(frozen=True)
+class _TeleportClickView:
+    """One measured map frame prepared for a teleport-point click."""
+
+    view: tuple[float, float, float]
+    tap_x: float
+    tap_y: float
+    zoom_level: float | None
+    neighbor_screen_distance: float
+    required_visible_radius: float
 
 
 @dataclass
@@ -242,22 +349,42 @@ class BigMapLocator:
 
 class TpTask:
     def __init__(self, ctx: GameContext, log: Callable[[str], None] = print,
-                 map_name: str = "Teyvat"):
+                 map_name: str = "Teyvat",
+                 cancelled: Callable[[], bool] | None = None):
         self.ctx = ctx
         self.log = log
+        self._cancel_probe = cancelled or (lambda: False)
+        self._has_cancel_probe = cancelled is not None
         self.map_name = resolve_map_name(map_name)
         self.big = BigMapLocator(self.map_name)
         self.config = MapConfig.for_map(self.map_name)
         self._teleport_points = default_teleport_point_store()
-        # Touch zoom has no reliable semantic level from DeviceHub. Keep the
-        # BetterGI 1..6 scale in-process and use pinch gestures for changes.
-        self._zoom_level = 3.0
+        self._session_state = _get_tp_session_state(ctx)
+        # Keep the last measured BetterGI 1..6 scale as a fallback between
+        # gestures.  The authoritative value is read from MapScaleButton on
+        # the current map frame; a fixed initial value is not reliable after a
+        # user manually changes the map zoom or a task creates a new TpTask.
+        self._zoom_level: float | None = None
+        self._zoom_gesture_delta = MAP_ZOOM_INITIAL_GESTURE_DELTA
+        # A positive semantic zoom direction means a larger BetterGI level
+        # (map zoomed out).  Current iOS gestures use an inward pinch for that
+        # direction; reverse this once if a future DeviceHub profile reports
+        # the opposite touch convention and the measured frame proves it.
+        self._zoom_span_sign = -1.0
         # Once an independent map has been selected, the game keeps that
         # selection after closing/reopening the map.  Remember it locally so a
         # transient SIFT miss does not reopen the area selector and disturb a
         # gesture that is already in progress.
+        self._selected_area: str | None = self._session_state["selected_areas"].get(
+            self.map_name
+        )
+        # A cached area name is only a hint until the current map frame has
+        # confirmed it.  This prevents a manually changed game map from being
+        # mistaken for the previous task's area.
         self._area_ready = False
-        self._selected_area: str | None = None
+        # True only after the overlap/teleport panel has been observed.  A
+        # failed map click must not send ESC and close a still-useful map UI.
+        self._teleport_panel_open = False
         self._absolute_icon_templates: dict[str, tuple[RecognitionObject, ...]] | None = None
         self._panel_icon_templates: dict[str, tuple[RecognitionObject, ...]] | None = None
         self._go_teleport = RecognitionObject.template_match(
@@ -271,11 +398,122 @@ class TpTask:
             Mat.from_file(str(TEMPLATES / "MapCloseButton.png")), 1600, 0, 320, 140
         )
         self._map_close.threshold = 0.65
+        self._map_underground_switch = self._load_map_layer_template(
+            "MapUndergroundSwitchButton.png",
+        )
+        self._map_underground_to_ground = self._load_map_layer_template(
+            "MapUndergroundToGroundButton.png",
+        )
+        if MAP_SCALE_BUTTON is not None:
+            self._map_scale_button = MAP_SCALE_BUTTON.clone()
+        else:
+            self._map_scale_button = None
+
+    def _is_cancelled(self) -> bool:
+        probe = getattr(self, "_cancel_probe", None)
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            return True
+
+    def _check_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise PathingCancelled("地图追踪任务已取消")
+
+    def _sleep(self, milliseconds: float) -> None:
+        """Sleep in short slices so map gestures and waits remain cancellable."""
+        remaining = max(0.0, float(milliseconds))
+        if not getattr(self, "_has_cancel_probe", False):
+            self.ctx.sleep(remaining)
+            return
+        while remaining > 0:
+            self._check_cancelled()
+            step = min(100.0, remaining)
+            self.ctx.sleep(step)
+            remaining -= step
+        self._check_cancelled()
+
+    @staticmethod
+    def _load_map_layer_template(filename: str) -> RecognitionObject | None:
+        path = MAP_ICON_TEMPLATES / filename
+        if not path.is_file():
+            return None
+        try:
+            recognition = RecognitionObject.template_match(Mat.from_file(str(path)))
+            recognition.threshold = 0.68
+            return recognition
+        except (OSError, TypeError, ValueError, RuntimeError):
+            return None
+
+    def _remember_selected_area(self, area_name: str | None) -> None:
+        """Persist the selected selector entry for this device session."""
+        if not area_name:
+            return
+        self._selected_area = str(area_name)
+        state = getattr(self, "_session_state", None)
+        if not isinstance(state, dict):
+            state = _get_tp_session_state(self.ctx)
+            self._session_state = state
+        selected_areas = state.setdefault("selected_areas", {})
+        if isinstance(selected_areas, dict):
+            selected_areas[self.map_name] = self._selected_area
+
+    def _mark_teleport_success(self, area_name: str | None = None) -> None:
+        """Record the map/area reached by the last completed teleport."""
+        state = getattr(self, "_session_state", None)
+        if not isinstance(state, dict):
+            state = _get_tp_session_state(self.ctx)
+            self._session_state = state
+        state["last_successful_map_name"] = self.map_name
+        state["last_successful_area"] = area_name or self._selected_area
+        self._remember_selected_area(area_name or self._selected_area)
+
+    def _last_successful_map_name(self) -> str | None:
+        state = getattr(self, "_session_state", None)
+        if not isinstance(state, dict):
+            state = _get_tp_session_state(self.ctx)
+            self._session_state = state
+        value = state.get("last_successful_map_name")
+        return str(value) if value else None
+
+    def _view_matches_target_area(
+        self,
+        view: tuple[float, float, float],
+        target_area: str | None,
+    ) -> bool:
+        """Check whether a located map frame already represents ``target_area``."""
+        if target_area is None:
+            return True
+        if self.map_name != "Teyvat":
+            # An independent map has its own SIFT feature store.  A successful
+            # match therefore proves that the requested map is already open,
+            # even when this TpTask was freshly constructed.
+            return target_area == self.map_name
+        try:
+            center_x, center_y = self.big.feature_to_world(view[0], view[1])
+            return nearest_teyvat_country(center_x, center_y) == resolve_country_name(
+                target_area
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
 
     # ---- 步骤 ----
 
     @contextmanager
     def exclusive_triggers(self):
+        # Protect the input edge as well as the trigger thread.  This catches
+        # the hand-off window where a trigger already owns a decoded map frame
+        # and would otherwise press F after the pause request was issued.
+        gate = getattr(self.ctx, "exclusive_input", None)
+        input_scope = gate() if callable(gate) else nullcontext()
+        with input_scope:
+            with self._exclusive_trigger_loop():
+                yield
+
+    @contextmanager
+    def _exclusive_trigger_loop(self):
         """让地图手势独占设备输入，结束后恢复之前的实时触发器。"""
         loop = getattr(self.ctx, "_trigger_loop", None)
         if loop is None:
@@ -308,11 +546,13 @@ class TpTask:
         self.log(f"[tp] {reason}，重建设备输入通道后重试")
         try:
             self.ctx.device.reconnect_device()
-            self.ctx.sleep(2000)
+            self._sleep(2000)
             refresh = getattr(self.ctx, "refresh_orientation", None)
             if callable(refresh):
                 refresh()
             return True
+        except PathingCancelled:
+            raise
         except Exception as error:
             self.log(f"[tp] 设备输入通道重建失败：{error}")
             return False
@@ -332,6 +572,19 @@ class TpTask:
             return None
         return self.map_name
 
+    def _accept_target_view(
+        self,
+        view: tuple[float, float, float] | None,
+        target_area: str | None,
+    ) -> bool:
+        """Accept a visible map frame only when it matches the requested area."""
+        if view is None or not self._view_matches_target_area(view, target_area):
+            return False
+        if target_area is not None:
+            self._remember_selected_area(target_area)
+        self._area_ready = True
+        return True
+
     def open_map(
         self,
         *,
@@ -346,48 +599,70 @@ class TpTask:
         behavior used by zoom/statue helpers: recognize the currently visible
         map without opening the area selector.
         """
+        self._check_cancelled()
         target_area = self._target_area(wx, wy, area_name)
         recovered = False
         for attempt in range(3):
             frame = self.ctx.capture_bgr()
-            if self.big.locate_view(frame) is not None:
-                if target_area is None or self._selected_area == target_area:
-                    self._area_ready = True
-                    return True
+            view = self.big.locate_view(frame)
+            if self._accept_target_view(view, target_area):
+                return True
+            if view is not None:
                 if self._switch_area(target_area):
-                    return self._wait_for_target_map()
+                    return self._wait_for_target_map(target_area=target_area)
                 return False
             if self._is_map_ui():
+                if (
+                    target_area == self.map_name
+                    and self._last_successful_map_name() == self.map_name
+                    and self._wait_for_target_map(timeout_s=1.0)
+                ):
+                    return True
                 if target_area is not None and self._switch_area(target_area):
-                    return self._wait_for_target_map()
+                    return self._wait_for_target_map(target_area=target_area)
                 if target_area is None and self._area_ready and self._wait_for_target_map(timeout_s=1.0):
                     return True
                 return False
             self.ctx.input.tap_button("map")
-            self.ctx.sleep(900)
+            self._sleep(900)
             try:
                 frame = self.ctx.capture_bgr_after_frame(
                     self.ctx.device.last_frame_version, timeout_ms=1800
                 )
             except Exception:
                 frame = self.ctx.capture_bgr()
-            if self.big.locate_view(frame) is not None:
-                if target_area is None or self._selected_area == target_area:
-                    self._area_ready = True
-                    return True
+            view = self.big.locate_view(frame)
+            if self._accept_target_view(view, target_area):
+                return True
+            if view is not None:
                 if self._switch_area(target_area):
-                    return self._wait_for_target_map()
+                    return self._wait_for_target_map(target_area=target_area)
                 return False
-            if self._is_map_ui() and target_area is not None and self._switch_area(target_area):
-                return self._wait_for_target_map()
+            if self._is_map_ui():
+                if (
+                    target_area == self.map_name
+                    and self._last_successful_map_name() == self.map_name
+                    and self._wait_for_target_map(timeout_s=1.0)
+                ):
+                    return True
+                if target_area is not None and self._switch_area(target_area):
+                    return self._wait_for_target_map(target_area=target_area)
             if attempt == 0 and not recovered:
                 recovered = self._recover_device_channel("地图按键未生效")
         view = self.big.locate_view(self.ctx.capture_bgr())
-        return view is not None and (target_area is None or self._selected_area == target_area)
+        return self._accept_target_view(view, target_area)
 
     def _is_map_ui(self) -> bool:
         try:
-            return self.ctx.capture_region().find(self._map_close).is_exist()
+            region = self.ctx.capture_region()
+            if hasattr(region, "bgr"):
+                return is_big_map_ui(self.ctx, region.bgr, region=region)
+            if region.find(self._map_close).is_exist():
+                return True
+            return (
+                self._map_scale_button is not None
+                and region.find(self._map_scale_button).is_exist()
+            )
         except Exception:
             return False
 
@@ -420,10 +695,11 @@ class TpTask:
             wanted_values = (definition.name, *definition.aliases)
         wanted = [self._normalize_area_text(value) for value in wanted_values]
         self.ctx.input.click_ref(1760, 1020)
-        self.ctx.sleep(250)
+        self._sleep(250)
         deadline = time.monotonic() + timeout_s
         seen: list[str] = []
         while time.monotonic() < deadline:
+            self._check_cancelled()
             region = self.ctx.capture_region()
             hits = region.find_multi(
                 RecognitionObject.ocr(1280, 0, 640, 1080), limit=30,
@@ -439,64 +715,223 @@ class TpTask:
                 target = max(matches, key=lambda hit: hit.y)
                 self.log(f"[tp] 切换地图区域：{target.text.strip()}")
                 target.click()
-                self.ctx.sleep(700)
-                self._selected_area = selected_area
+                self._sleep(700)
+                self._remember_selected_area(selected_area)
                 self._area_ready = False
                 return True
-            self.ctx.sleep(150)
+            self._sleep(150)
         candidates = " / ".join(dict.fromkeys(seen[:12])) or "无"
         self.log(f"[tp] 切换地图区域失败：{selected_area}，OCR候选：{candidates}")
         return False
 
-    def _wait_for_target_map(self, timeout_s: float = 4.0) -> bool:
+    def _wait_for_target_map(
+        self,
+        timeout_s: float = 4.0,
+        *,
+        target_area: str | None = None,
+    ) -> bool:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self.big.locate_view(self.ctx.capture_bgr()) is not None:
-                self._area_ready = True
+            self._check_cancelled()
+            view = self.big.locate_view(self.ctx.capture_bgr())
+            if self._accept_target_view(view, target_area):
                 return True
-            self.ctx.sleep(250)
-        self.log(f"[tp] 已选择 {self.map_name}，但大地图特征匹配失败")
+            self._sleep(250)
+        area = target_area or self.map_name
+        self.log(f"[tp] 已选择 {area}，但大地图区域确认失败")
+        return False
+
+    def _switch_to_ground_map_layer_if_needed(self) -> bool:
+        """Normalize the map layer before a teleport click.
+
+        Layer buttons are only present on maps that support underground
+        floors.  When those templates are unavailable, there is no safe way
+        to infer the layer from OCR, so preserve the older behavior and let
+        SIFT/point recognition decide.  On supported maps the method waits
+        for the post-animation state instead of immediately dragging a map
+        frame that still belongs to the underground overlay.
+        """
+        switch_template = getattr(self, "_map_underground_switch", None)
+        ground_template = getattr(self, "_map_underground_to_ground", None)
+        if switch_template is None and ground_template is None:
+            return True
+
+        deadline = time.monotonic() + MAP_GROUND_LAYER_SWITCH_TIMEOUT_MS / 1000.0
+        layer_switch_clicked = False
+        ground_layer_clicked = False
+        while time.monotonic() < deadline:
+            self._check_cancelled()
+            try:
+                region = self.ctx.capture_region()
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                self._sleep(MAP_GROUND_LAYER_POLL_INTERVAL_MS)
+                continue
+
+            if not ground_layer_clicked and ground_template is not None:
+                try:
+                    ground = region.find(ground_template)
+                    if ground.is_exist():
+                        self.log("[tp] 当前为地下层，切回地表地图")
+                        ground.click()
+                        ground_layer_clicked = True
+                        self._sleep(MAP_GROUND_LAYER_POLL_INTERVAL_MS)
+                        continue
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    pass
+
+            underground = None
+            if switch_template is not None:
+                try:
+                    underground = region.find(switch_template)
+                except (AttributeError, RuntimeError, TypeError, ValueError):
+                    underground = None
+            try:
+                is_underground = bool(underground is not None and underground.is_exist())
+            except AttributeError:
+                is_underground = bool(underground)
+
+            if ground_layer_clicked:
+                if not is_underground:
+                    return True
+                self._sleep(MAP_GROUND_LAYER_POLL_INTERVAL_MS)
+                continue
+
+            if not is_underground:
+                # The layer switch is optional. If it has not appeared after
+                # two polls, this map is already on the ground layer.
+                if not layer_switch_clicked:
+                    return True
+                self._sleep(MAP_GROUND_LAYER_POLL_INTERVAL_MS)
+                continue
+
+            if not layer_switch_clicked and underground is not None:
+                self.log("[tp] 检测到地下地图图层，打开图层选择")
+                underground.click()
+                layer_switch_clicked = True
+                self._sleep(MAP_GROUND_LAYER_POLL_INTERVAL_MS)
+                continue
+            self._sleep(MAP_GROUND_LAYER_POLL_INTERVAL_MS)
+
+        self.log("[tp] 切换到地表地图图层超时")
         return False
 
     def _drag_map(self, dx: float, dy: float) -> np.ndarray | None:
         """Move map content and return the newest frame produced by the gesture."""
+        self._check_cancelled()
         t = self.ctx.transform
         W, H = t.device_width, t.device_height
-        max_step = 0.30 * W
+        distance = math.hypot(dx, dy)
+        reference_scale = max(W / 1920.0, H / 1080.0, 1e-6)
+        max_step = max(1.0, MAP_DRAG_MAX_STEP_REF_PX * reference_scale)
+        steps = min(MAP_DRAG_MAX_STEPS, max(1, math.ceil(distance / max_step)))
+        step_dx = dx / steps
+        step_dy = dy / steps
+        margin_x = min(
+            W * 0.22,
+            max(24.0, MAP_DRAG_SAFE_MARGIN_X_REF_PX * reference_scale),
+        )
+        margin_y = min(
+            H * 0.22,
+            max(24.0, MAP_DRAG_SAFE_MARGIN_Y_REF_PX * reference_scale),
+        )
         feedback = None
-        while abs(dx) > 1 or abs(dy) > 1:
-            sx = max(-max_step, min(max_step, dx))
-            sy = max(-max_step, min(max_step, dy))
-            # 起点选屏幕中央偏移，避开左上返回键与右下 UI
-            x0 = W * 0.5 - sx / 2
-            y0 = H * 0.5 - sy / 2
-            before = self.ctx.device.last_frame_version
-            self.ctx.device.swipe(x0, y0, x0 + sx, y0 + sy, duration_ms=650,
-                                  image_width=W, image_height=H)
-            self.ctx.sleep(MAP_MOVE_SETTLE_MS)  # 等惯性衰减
-            if before is not None:
-                try:
-                    feedback = self.ctx.capture_bgr_after_frame(
-                        before, timeout_ms=MAP_MOVE_FRAME_TIMEOUT_MS,
-                    )
-                except Exception:
-                    # Older headless builds do not expose frame cursors; the
-                    # next loop capture remains the compatibility fallback.
-                    feedback = None
-            if feedback is None:
-                # Old devicehub-mask builds do not expose a frame cursor on
-                # action responses.  Still consume one post-gesture screenshot
-                # instead of letting the next iteration repeatedly inspect a
-                # pre-swipe frame.
-                try:
-                    feedback = self.ctx.capture_bgr()
-                except Exception:
-                    feedback = None
-            dx -= sx
-            dy -= sy
+        # Older DeviceHub builds do not attach a cursor to ``screenshot`` or
+        # ``swipe`` responses. Seed one from the observation stream before the
+        # first gesture when possible; the post-gesture fallback can otherwise
+        # legally return the exact pre-swipe frame forever.
+        before = self._frame_cursor()
+        for index in range(steps):
+            self._check_cancelled()
+            sx = step_dx if index + 1 < steps else dx - step_dx * (steps - 1)
+            sy = step_dy if index + 1 < steps else dy - step_dy * (steps - 1)
+            # Keep both endpoints inside the central map canvas. This avoids
+            # the top-left back button, the right-side selector and the bottom
+            # map controls on 16:9 and 19.5:9 iPhone layouts.
+            min_x = max(margin_x, margin_x - sx)
+            max_x = min(W - margin_x, W - margin_x - sx)
+            min_y = max(margin_y, margin_y - sy)
+            max_y = min(H - margin_y, H - margin_y - sy)
+            # A very small custom screenshot can leave no fully safe interval;
+            # retain the central fallback for that compatibility case.
+            if min_x > max_x:
+                min_x = max_x = W * 0.5 - sx / 2
+            if min_y > max_y:
+                min_y = max_y = H * 0.5 - sy / 2
+            x0 = min(max(W * 0.5 - sx / 2, min_x), max_x)
+            y0 = min(max(H * 0.5 - sy / 2, min_y), max_y)
+            self.ctx.device.swipe(
+                x0,
+                y0,
+                x0 + sx,
+                y0 + sy,
+                duration_ms=MAP_DRAG_DURATION_MS,
+                image_width=W,
+                image_height=H,
+            )
+            if index + 1 < steps:
+                # Do not capture between segments: DeviceHub remains the sole
+                # frame producer and the final cursor wait observes the whole
+                # gesture sequence after the map has rendered it.
+                self._sleep(MAP_DRAG_STEP_GAP_MS)
+
+        self._sleep(MAP_MOVE_SETTLE_MS)  # 等最后一段惯性衰减
+        # DeviceHub 141 returns frame_version_after for each low-latency
+        # swipe.  Read the cursor after the complete gesture sequence so a
+        # long drag consumes a frame newer than the final swipe, rather than
+        # an intermediate frame produced by the first segment.  On older
+        # servers this remains equal to ``before`` and the compatibility path
+        # is unchanged.
+        device_cursor = getattr(getattr(self.ctx, "device", None), "last_frame_version", None)
+        after = device_cursor if isinstance(device_cursor, int) and device_cursor >= 0 else None
+        cursor = after if after is not None else before
+        if cursor is not None:
+            try:
+                feedback = self.ctx.capture_bgr_after_frame(
+                    cursor, timeout_ms=MAP_MOVE_FRAME_TIMEOUT_MS,
+                )
+            except Exception:
+                # Older headless builds do not expose frame cursors; the next
+                # loop capture remains the compatibility fallback.
+                feedback = None
+        if feedback is None:
+            # Old devicehub-mask builds do not expose a frame cursor on action
+            # responses. Consume one post-gesture screenshot instead of letting
+            # the next iteration repeatedly inspect a pre-swipe frame.
+            try:
+                feedback = self.ctx.capture_bgr()
+            except Exception:
+                feedback = None
         return feedback
 
-    def _capture_fresh_map_frame(self) -> np.ndarray | None:
+    def _frame_cursor(self) -> int | None:
+        """Return a DeviceHub frame cursor, seeding it when screenshots lack one."""
+        device = getattr(self.ctx, "device", None)
+        version = getattr(device, "last_frame_version", None)
+        if isinstance(version, int) and version >= 0:
+            return version
+        wait_for_frame = getattr(device, "wait_for_frame", None)
+        if not callable(wait_for_frame):
+            return None
+        try:
+            payload = wait_for_frame(
+                after_version=None,
+                timeout_ms=MAP_FRAME_CURSOR_TIMEOUT_MS,
+            )
+        except (AttributeError, TypeError, RuntimeError, ValueError, OSError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("frame_version", payload.get("frameVersion"))
+        try:
+            value = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return value if value >= 0 else None
+
+    def _capture_fresh_map_frame(
+        self,
+        before_version: int | None = None,
+    ) -> np.ndarray | None:
         """Wait for another observation when a map frame looks unchanged.
 
         A plain screenshot can legally be the last decoded video frame while
@@ -507,7 +942,7 @@ class TpTask:
         normal gestures.
         """
         capture_after = getattr(self.ctx, "capture_bgr_after_frame", None)
-        version = getattr(getattr(self.ctx, "device", None), "last_frame_version", None)
+        version = before_version if before_version is not None else self._frame_cursor()
         if version is not None and callable(capture_after):
             try:
                 return capture_after(version, timeout_ms=MAP_MOVE_FRAME_TIMEOUT_MS)
@@ -558,6 +993,7 @@ class TpTask:
         log_prefix: str,
         max_iterations: int,
         error_message: str,
+        ensure_ground_layer: bool = False,
     ) -> tuple[float, float, float]:
         """Move a target into the safe center and return its final map view.
 
@@ -567,8 +1003,11 @@ class TpTask:
         useful for older DeviceHub profiles and is harmless for the current
         fixed 16:9 profile.
         """
+        self._check_cancelled()
         if not self.open_map(wx=wx, wy=wy, area_name=area_name):
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
+        if ensure_ground_layer and not self._switch_to_ground_map_layer_if_needed():
+            raise RuntimeError("传送失败：无法切回地表地图图层")
         # The successful locator frame is also the safest frame for the final
         # map click. Clear it before the loop so a failed/recovered attempt
         # cannot leak an observation from a previous teleport.
@@ -586,6 +1025,7 @@ class TpTask:
         pan_sign = -1.0
         feedback_frame = None
         for it in range(max_iterations):
+            self._check_cancelled()
             if time.monotonic() > deadline:
                 break
             # Consume the frame obtained after the previous drag. Asking for
@@ -596,7 +1036,7 @@ class TpTask:
             view = self._locate_view_with_stale_frame_guard(frame, last_view)
             if view is None:
                 self.log("[tp] 大地图视野匹配失败，重试")
-                self.ctx.sleep(300)
+                self._sleep(300)
                 continue
             vx, vy, px_per_map = view
             dx_screen = (tx - vx) * px_per_map
@@ -692,7 +1132,7 @@ class TpTask:
                 # Let the rebuilt channel publish a fresh map frame before
                 # sending another gesture; otherwise the first retry can
                 # still be based on the stale pre-reconnect frame.
-                self.ctx.sleep(250)
+                self._sleep(250)
                 continue
 
             if stagnant_iterations:
@@ -702,7 +1142,7 @@ class TpTask:
                 # surface, and reaches the reconnect path above quickly when
                 # the input channel really did not move the map.
                 self.log("[tp] 拖动后地图视野未更新，等待新帧")
-                self.ctx.sleep(MAP_MOVE_STALE_RETRY_DELAY_MS)
+                self._sleep(MAP_MOVE_STALE_RETRY_DELAY_MS)
                 feedback_frame = None
                 continue
 
@@ -747,36 +1187,206 @@ class TpTask:
         )
         return True
 
-    def get_big_map_zoom_level(self) -> float:
-        return float(self._zoom_level)
+    @staticmethod
+    def _clamp_big_map_zoom_level(level: float) -> float:
+        return max(
+            MAP_ZOOM_MIN_LEVEL,
+            min(MAP_ZOOM_MAX_LEVEL, float(level)),
+        )
+
+    @classmethod
+    def _zoom_level_from_scale(cls, scale: float) -> float:
+        """Convert the upstream MapScaleButton travel ratio to level 1..6."""
+        scale = max(0.0, min(1.0, float(scale)))
+        return cls._clamp_big_map_zoom_level(-5.0 * scale + 6.0)
+
+    def _measure_big_map_zoom_level(self, region) -> float | None:
+        """Read the current zoom from one already captured map frame.
+
+        The marker is located in reference 1920x1080 coordinates, so Region's
+        coordinate adapter already removes the iPhone native-resolution scale
+        before the upstream 468..612 calculation is applied.
+        """
+        marker = getattr(self, "_map_scale_button", None)
+        if marker is None or region is None:
+            return None
+        try:
+            hit = region.find(marker)
+            exists = hit.is_exist()
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if not exists:
+            return None
+        try:
+            current_y = float(hit.y) + float(hit.height) / 2.0
+            scale = (MAP_SCALE_END_Y - current_y) / (
+                MAP_SCALE_END_Y - MAP_SCALE_START_Y
+            )
+            if not math.isfinite(scale):
+                return None
+        except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+            return None
+        return self._zoom_level_from_scale(scale)
+
+    def _measure_zoom_from_frame(self, frame) -> float | None:
+        if frame is None:
+            return None
+        try:
+            return self._measure_big_map_zoom_level(ImageRegion(self.ctx, frame))
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _read_cached_map_zoom_level(self) -> float | None:
+        """Measure cached/last task frame without creating a screenshot request."""
+        frame = getattr(self, "_last_located_frame", None)
+        measured = self._measure_zoom_from_frame(frame)
+        if measured is not None:
+            return measured
+        cached_frame = getattr(self.ctx, "cached_frame", None)
+        if not callable(cached_frame):
+            return None
+        try:
+            payload = cached_frame()
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+        frame = payload[0] if isinstance(payload, tuple) else payload
+        return self._measure_zoom_from_frame(frame)
+
+    def _read_map_zoom_level(self, *, capture_if_missing: bool = True) -> float | None:
+        measured = self._read_cached_map_zoom_level()
+        if measured is not None:
+            return measured
+        if not capture_if_missing:
+            return None
+        try:
+            return self._measure_big_map_zoom_level(self.ctx.capture_region())
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            return None
+
+    def get_big_map_zoom_level(self, region=None) -> float:
+        """Return the measured BetterGI 1..6 zoom level from the map slider."""
+        measured = (
+            self._measure_big_map_zoom_level(region)
+            if region is not None
+            else self._read_map_zoom_level()
+        )
+        if measured is None:
+            raise RuntimeError("当前未处于大地图界面，不能使用GetBigMapZoomLevel方法")
+        self._zoom_level = measured
+        return measured
 
     def set_big_map_zoom_level(self, level: float) -> float:
         with self.exclusive_triggers():
             return self._set_big_map_zoom_level(level)
 
+    def _capture_after_zoom_gesture(self, before_version: int | None):
+        capture_after = getattr(self.ctx, "capture_bgr_after_frame", None)
+        if before_version is not None and callable(capture_after):
+            try:
+                return capture_after(
+                    before_version,
+                    timeout_ms=MAP_ZOOM_MEASURE_TIMEOUT_MS,
+                )
+            except Exception:
+                pass
+        try:
+            return self.ctx.capture_bgr()
+        except Exception:
+            return None
+
+    def _pinch_map_zoom(self, zoom_direction: float, intensity: float) -> None:
+        """Send one relative pinch, where direction is the semantic level delta."""
+        transform = self.ctx.transform
+        width, height = transform.device_width, transform.device_height
+        short_side = min(width, height)
+        center_x, center_y = width / 2.0, height / 2.0
+        old_span = short_side * MAP_ZOOM_SPAN_RATIO
+        span_delta = (
+            self._zoom_span_sign
+            * float(zoom_direction)
+            * short_side
+            * MAP_ZOOM_SPAN_DELTA_RATIO
+            * max(0.15, min(1.5, float(intensity)))
+        )
+        new_span = max(short_side * 0.04, old_span + span_delta)
+        new_span = min(short_side * 0.32, new_span)
+        self.ctx.device.multi_touch([
+            {
+                "x1": center_x - old_span,
+                "y1": center_y,
+                "x2": center_x - new_span,
+                "y2": center_y,
+            },
+            {
+                "x1": center_x + old_span,
+                "y1": center_y,
+                "x2": center_x + new_span,
+                "y2": center_y,
+            },
+        ], duration_ms=350, image_width=width, image_height=height)
+        self._sleep(MAP_ZOOM_GESTURE_SETTLE_MS)
+
     def _set_big_map_zoom_level(self, level: float) -> float:
-        """Best-effort touch equivalent of BetterGI's 1.0..6.0 map zoom."""
-        target = max(1.0, min(6.0, float(level)))
+        """Adjust touch zoom using measured slider feedback after each pinch."""
+        self._check_cancelled()
+        target = self._clamp_big_map_zoom_level(float(level))
         if not self.open_map():
             raise RuntimeError("无法打开大地图，不能调整缩放")
-        delta = target - self._zoom_level
-        steps = min(8, max(0, int(round(abs(delta) * 2))))
-        if steps:
-            W, H = self.ctx.transform.device_width, self.ctx.transform.device_height
-            cx, cy = W / 2, H / 2
-            old_span = min(W, H) * 0.14
-            # BetterGI's level increases as the map zooms out. Pinch inward
-            # for a larger level and outward for a smaller one.
-            sign = -1 if delta > 0 else 1
-            for _ in range(steps):
-                span = old_span + sign * min(W, H) * 0.035
-                self.ctx.device.multi_touch([
-                    {"x1": cx - old_span, "y1": cy, "x2": cx - span, "y2": cy},
-                    {"x1": cx + old_span, "y1": cy, "x2": cx + span, "y2": cy},
-                ], duration_ms=350, image_width=W, image_height=H)
-                old_span = span
-                self.ctx.sleep(350)
-        self._zoom_level = target
+
+        current = self._read_map_zoom_level()
+        measured = current is not None
+        if current is None:
+            current = self._zoom_level
+        if current is None or not math.isfinite(current):
+            current = 3.0
+        current = self._clamp_big_map_zoom_level(current)
+        self._zoom_level = current
+        if not measured:
+            self.log(f"[tp] 地图缩放条识别失败，使用估计等级 {current:.2f}")
+
+        no_progress = 0
+        for _ in range(MAP_ZOOM_MAX_GESTURES):
+            self._check_cancelled()
+            remaining = target - current
+            if abs(remaining) <= MAP_ZOOM_MEASURE_TOLERANCE:
+                break
+            direction = 1.0 if remaining > 0 else -1.0
+            expected_step = max(
+                MAP_ZOOM_MIN_GESTURE_DELTA,
+                min(MAP_ZOOM_MAX_GESTURE_DELTA, self._zoom_gesture_delta),
+            )
+            intensity = min(1.5, max(0.15, abs(remaining) / expected_step))
+            before = current
+            before_version = self._frame_cursor()
+            self._pinch_map_zoom(direction, intensity)
+            frame = self._capture_after_zoom_gesture(before_version)
+            observed = self._measure_zoom_from_frame(frame)
+            if observed is None:
+                current = self._clamp_big_map_zoom_level(
+                    current + direction * expected_step
+                )
+                no_progress += 1
+            else:
+                actual_delta = observed - before
+                current = observed
+                if abs(actual_delta) >= MAP_ZOOM_MIN_GESTURE_DELTA:
+                    if actual_delta * direction < -MAP_ZOOM_MIN_GESTURE_DELTA / 2:
+                        self._zoom_span_sign *= -1.0
+                        self.log("[tp] 检测到 pinch 方向相反，已自动翻转缩放手势")
+                    self._zoom_gesture_delta = (
+                        self._zoom_gesture_delta * 0.7
+                        + abs(actual_delta) * 0.3
+                    )
+                if abs(target - current) >= abs(target - before) - MAP_ZOOM_MEASURE_TOLERANCE / 2:
+                    no_progress += 1
+                else:
+                    no_progress = 0
+            self._zoom_level = current
+            self.log(f"[tp] 缩放反馈：{before:.2f} → {current:.2f}，目标 {target:.2f}")
+            if no_progress >= 2:
+                break
+
+        self._zoom_level = self._clamp_big_map_zoom_level(current)
         return self._zoom_level
 
     def click_map_point(
@@ -788,6 +1398,7 @@ class TpTask:
     ) -> bool:
         """Center a world coordinate and click the nearest map point once."""
         with self.exclusive_triggers():
+            self._check_cancelled()
             if not self.open_map(wx=wx, wy=wy, area_name=force_country):
                 raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
             self._move_map_to(wx, wy, timeout_s, force_country=force_country)
@@ -815,7 +1426,7 @@ class TpTask:
                     image_width=t.device_width,
                     image_height=t.device_height,
                 )
-            self.ctx.sleep(1000)
+            self._sleep(1000)
             return True
 
     def move_independent_map_to(self, wx: float, wy: float, map_name: str,
@@ -823,14 +1434,24 @@ class TpTask:
                                 force_country: str | None = None) -> bool:
         """Move a named map when its local feature assets are available."""
         if resolve_map_name(map_name) != self.map_name:
-            return TpTask(self.ctx, self.log, map_name).move_map_to(
+            return TpTask(
+                self.ctx,
+                self.log,
+                map_name,
+                cancelled=self._cancel_probe,
+            ).move_map_to(
                 wx, wy, timeout_s, force_country=force_country,
             )
         return self.move_map_to(wx, wy, timeout_s, force_country=force_country)
 
     def tp_to_statue(self, timeout_s: float = 30) -> bool:
         with self.exclusive_triggers():
-            return self._tp_to_statue(timeout_s)
+            try:
+                self._check_cancelled()
+                return self._tp_to_statue(timeout_s)
+            except RuntimeError:
+                self._dismiss_teleport_panel()
+                raise
 
     def _tp_to_statue(self, timeout_s: float = 30) -> bool:
         """Teleport through a Statue of the Seven, including off-screen fallback.
@@ -840,6 +1461,7 @@ class TpTask:
         ``tp.json`` index and move the map to the nearest known statue instead
         of assuming that an off-screen icon exists.
         """
+        self._check_cancelled()
         if not self.open_map():
             raise RuntimeError("无法打开大地图（SIFT 未匹配到大地图视野）")
         tpl = Mat.from_file(str(TEMPLATES / "StatueOfTheSeven.png"))
@@ -871,10 +1493,11 @@ class TpTask:
         cx, cy = self.ctx.transform.device_width / 2, self.ctx.transform.device_height / 2
         target = min(hits, key=lambda h: math.hypot(h.dx + h.dw / 2 - cx, h.dy + h.dh / 2 - cy))
         target.click()
-        self.ctx.sleep(1000)
+        self._sleep(1000)
         if not self._find_and_tap_confirm():
             raise TeleportPanelNotOpenedError("七天神像已选中，但未找到传送确认")
         self._wait_for_teleport_completion(timeout_s=timeout_s)
+        self._mark_teleport_success(self._selected_area)
         return True
 
     # 候选列表里可点的传送目标类型（点位重叠时弹出）
@@ -1120,6 +1743,25 @@ class TpTask:
             row_y=float(getattr(hit, "y", 0.0)),
         )
 
+    def _map_ui_visible_in_region(self, region: ImageRegion) -> bool | None:
+        """Return the map-overlay state from the frame already being polled.
+
+        Selecting an overlap-list entry can close the map immediately on iOS,
+        without ever exposing the desktop ``GoTeleport`` button.  The upstream
+        state machine treats that transition as a successful teleport start.
+        Keep the check on the caller-owned frame so confirmation polling does
+        not create a second screenshot producer.  ``None`` preserves the
+        compatibility behavior for lightweight hosts that expose no image
+        buffer or no map markers.
+        """
+        frame = getattr(region, "bgr", None)
+        if frame is None:
+            return None
+        try:
+            return bool(is_big_map_ui(self.ctx, frame, region=region))
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            return None
+
     def _find_and_tap_confirm(
         self,
         timeout_s: float = TELEPORT_PANEL_TIMEOUT_S,
@@ -1128,19 +1770,31 @@ class TpTask:
     ) -> bool:
         """Wait for the panel, choose at most one candidate, then confirm."""
         if initial_delay_ms > 0:
-            self.ctx.sleep(initial_delay_ms)
+            self._sleep(initial_delay_ms)
         deadline = time.monotonic() + max(0.2, timeout_s)
         selected_entry = False
         candidate_click_attempts = 0
         selected_at = 0.0
         while time.monotonic() < deadline:
+            self._check_cancelled()
             region = self.ctx.capture_region()
+            # A mobile candidate row may start teleporting directly and close
+            # the map before a separate confirmation icon is rendered.  This
+            # is the same success transition recognized by BetterGI's
+            # WaitAndPressTeleportConfirm; do it before OCR so a stale map
+            # label cannot trigger another input edge.
+            map_visible = self._map_ui_visible_in_region(region)
+            if map_visible is False:
+                self._teleport_panel_open = False
+                self.log("[tp] 地图面板已关闭，传送已开始")
+                return True
             # The confirmation control is a stable icon and is faster/more
             # reliable than OCR on the small iOS panel.
             button = region.find(self._go_teleport)
             if button.is_exist():
                 self.log("[tp] 点击确认传送按钮")
                 button.click()
+                self._teleport_panel_open = False
                 return True
             hits = region.find_multi(RecognitionObject.ocr(900, 100, 1020, 980), limit=25)
             # 最终确认按钮：短文本「传送」
@@ -1152,6 +1806,7 @@ class TpTask:
                 ):
                     self.log(f"[tp] 点击确认「{h.text.strip()}」")
                     h.click()
+                    self._teleport_panel_open = False
                     return True
             # 候选列表条目。优先按列表图标识别，避免把地图地点名当作
             # 普通 OCR 文本丢弃；无图标时再对已知目标名称做唯一匹配回退。
@@ -1180,11 +1835,12 @@ class TpTask:
                 )
             if candidate is not None and not selected_entry:
                 self.log(f"[tp] 点击候选列表：「{candidate.text.strip()}」")
+                self._teleport_panel_open = True
                 candidate.click()
                 selected_entry = True
                 candidate_click_attempts = 1
                 selected_at = time.monotonic()
-                self.ctx.sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
+                self._sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
                 continue
             # A candidate row remaining after the settle delay means the tap
             # did not select it.  Returning here lets the caller use its one
@@ -1198,12 +1854,13 @@ class TpTask:
                         f"{candidate_click_attempts}/{TELEPORT_PANEL_CANDIDATE_CLICK_RETRIES}"
                     )
                     candidate.click()
+                    self._teleport_panel_open = True
                     selected_at = time.monotonic()
-                    self.ctx.sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
+                    self._sleep(TELEPORT_PANEL_SELECTION_SETTLE_MS)
                     continue
                 self.log("[tp] 传送候选列表仍在，判定本次点选未生效")
                 return False
-            self.ctx.sleep(250)
+            self._sleep(250)
         return False
 
     @staticmethod
@@ -1476,16 +2133,16 @@ class TpTask:
             0.0 if not best_pairs else best_error,
         )
 
-    def _absolute_map_click_point(
+    def _absolute_map_click_plan(
         self,
         region: ImageRegion,
         view: tuple[float, float, float],
         raw_x: float,
         raw_y: float,
-    ) -> tuple[float, float] | None:
+    ) -> _AbsoluteMapClickPlan:
         expected = self._expected_visible_map_icons(view)
         if not expected:
-            return None
+            return _AbsoluteMapClickPlan()
         allowed_types = set().union(*(item.icon_types for item in expected))
         observed = self._observed_visible_map_icons(region, allowed_types)
         alignment = self._estimate_map_icon_alignment(
@@ -1493,7 +2150,7 @@ class TpTask:
         )
         correction = math.hypot(alignment.offset_x, alignment.offset_y)
         if alignment.pair_count == 0 or correction < 1.0:
-            return None
+            return _AbsoluteMapClickPlan()
 
         nearby = sorted(
             math.hypot(item.x - raw_x, item.y - raw_y)
@@ -1511,23 +2168,41 @@ class TpTask:
             uncertainty = max(7 * scale, alignment.mean_error + 4 * scale)
         else:
             uncertainty = max(4 * scale, alignment.mean_error + 3 * scale)
-        if uncertainty > max_error or correction > max_error:
+        corrected = (raw_x + alignment.offset_x, raw_y + alignment.offset_y)
+        if not self._is_clickable_map_point(*corrected):
+            self.log("[tp] 地图图标校正后目标位于不可点击区域，保留原始点")
+            return _AbsoluteMapClickPlan()
+        if uncertainty > max_error:
             self.log(
                 f"[tp] 地图图标校正不安全：校正 {correction:.1f}px，"
                 f"误差 {uncertainty:.1f}px，上限 {max_error:.1f}px"
             )
-            return None
-
-        corrected = (raw_x + alignment.offset_x, raw_y + alignment.offset_y)
-        if not self._is_clickable_map_point(*corrected):
-            self.log("[tp] 地图图标校正后目标位于不可点击区域，保留原始点")
-            return None
+            return _AbsoluteMapClickPlan()
+        if correction > max_error:
+            # This is the upstream NeighborSafetyDistance case: the
+            # correction itself is too large to trust as the first click, but
+            # the aligned point is still useful as one bounded fallback.
+            self.log(
+                f"[tp] 地图校正量超过邻点安全距离：校正 {correction:.1f}px，"
+                f"上限 {max_error:.1f}px，先点原始坐标"
+            )
+            return _AbsoluteMapClickPlan(raw_first=True, fallback_point=corrected)
         self.log(
             f"[tp] 地图图标绝对校正：({raw_x:.1f},{raw_y:.1f}) -> "
             f"({corrected[0]:.1f},{corrected[1]:.1f})，"
             f"匹配 {alignment.pair_count} 个"
         )
-        return corrected
+        return _AbsoluteMapClickPlan(corrected_point=corrected)
+
+    def _absolute_map_click_point(
+        self,
+        region: ImageRegion,
+        view: tuple[float, float, float],
+        raw_x: float,
+        raw_y: float,
+    ) -> tuple[float, float] | None:
+        """Compatibility wrapper returning only a safe corrected point."""
+        return self._absolute_map_click_plan(region, view, raw_x, raw_y).corrected_point
 
     @classmethod
     def _is_anchor_entry_text(cls, value: str) -> bool:
@@ -1561,6 +2236,7 @@ class TpTask:
         y: float,
         max_distance: float,
         *,
+        allowed_types: set[str] | frozenset[str] | None = None,
         region: ImageRegion | None = None,
     ):
         """Return nearby teleport icons ordered by distance from the raw point."""
@@ -1572,21 +2248,28 @@ class TpTask:
         width = float(self.ctx.transform.device_width)
         height = float(self.ctx.transform.device_height)
         candidates = []
-        for name in ("TeleportWaypoint", "StatueOfTheSeven", "Domain"):
-            tpl = Mat.from_file(str(TEMPLATES / f"{name}.png"))
-            for h in region.find_multi(RecognitionObject.template_match(tpl), limit=5):
-                center_x = h.dx + h.dw / 2
-                center_y = h.dy + h.dh / 2
-                margin = max(35.0, 0.035 * min(width, height))
-                if (
-                    center_x < margin or center_y < margin
-                    or center_x > width - margin or center_y > height - margin
-                    or (center_x < 0.20 * width and center_y < 0.35 * height)
-                ):
+        names = tuple(sorted(allowed_types)) if allowed_types else (
+            "TeleportWaypoint", "StatueOfTheSeven", "Domain",
+        )
+        for name in names:
+            for filename in MAP_ICON_FILES.get(name, (f"{name}.png",)):
+                path = MAP_ICON_TEMPLATES / filename
+                if not path.is_file():
                     continue
-                d = math.hypot(center_x - x, center_y - y)
-                if d <= max_distance:
-                    candidates.append((d, h))
+                tpl = Mat.from_file(str(path))
+                for h in region.find_multi(RecognitionObject.template_match(tpl), limit=5):
+                    center_x = h.dx + h.dw / 2
+                    center_y = h.dy + h.dh / 2
+                    margin = max(35.0, 0.035 * min(width, height))
+                    if (
+                        center_x < margin or center_y < margin
+                        or center_x > width - margin or center_y > height - margin
+                        or (center_x < 0.20 * width and center_y < 0.35 * height)
+                    ):
+                        continue
+                    d = math.hypot(center_x - x, center_y - y)
+                    if d <= max_distance:
+                        candidates.append((d, h))
         candidates.sort(key=lambda item: item[0])
         return candidates
 
@@ -1649,6 +2332,7 @@ class TpTask:
         target_x, target_y, target_country, target_point = self._resolve_tp_target(
             wx, wy, force=force,
         )
+        neighbor_point = self._nearest_teleport_neighbor(wx, wy, target_point)
         self.log(f"[tp] 目标世界坐标 ({target_x:.1f}, {target_y:.1f})")
         if target_point is not None:
             label = target_point.name or target_point.point_type or "传送点"
@@ -1659,7 +2343,6 @@ class TpTask:
             )
         if force:
             self.log("[tp] 使用 force 坐标，不吸附到最近传送点")
-        tx, ty = self.big.world_to_feature(target_x, target_y)
         t = self.ctx.transform
         view = self._move_map_view_to(
             target_x,
@@ -1669,14 +2352,24 @@ class TpTask:
             log_prefix="[tp] 迭代",
             max_iterations=TP_MOVE_MAX_ITERATIONS,
             error_message="传送失败：未能把目标移动到可点击区域（迭代/超时耗尽）",
+            ensure_ground_layer=True,
         )
-        vx, vy, px_per_map = view
-        dx_screen = (tx - vx) * px_per_map
-        dy_screen = (ty - vy) * px_per_map
-        tol = 0.05 * t.device_width
-        tap_x = t.device_width / 2 + dx_screen
-        tap_y = t.device_height / 2 + dy_screen
-        if not self._is_clickable_map_point(tap_x, tap_y):
+        prepared = self._prepare_teleport_click_view(
+            target_x,
+            target_y,
+            target_point,
+            neighbor_point,
+            timeout_s,
+        )
+        view = prepared.view
+        tap_x = prepared.tap_x
+        tap_y = prepared.tap_y
+        tol = max(0.05 * t.device_width, prepared.required_visible_radius)
+        if not self._is_clickable_map_point(
+            tap_x,
+            tap_y,
+            prepared.required_visible_radius,
+        ):
             raise RuntimeError("传送失败：目标点仍位于大地图不可点击区域")
         frame = getattr(self, "_last_located_frame", None)
         if frame is None:
@@ -1684,7 +2377,7 @@ class TpTask:
             # mover without going through _move_map_view_to.
             frame = self.ctx.capture_bgr()
         map_region = ImageRegion(self.ctx, frame)
-        corrected_point = self._absolute_map_click_point(
+        click_plan = self._absolute_map_click_plan(
             map_region, view, tap_x, tap_y,
         )
         if not self._select_target_and_confirm(
@@ -1692,14 +2385,16 @@ class TpTask:
             tap_y,
             tol,
             target_point=target_point,
-            corrected_point=corrected_point,
+            click_plan=click_plan,
             map_region=map_region,
+            anchor_search_radius=prepared.required_visible_radius,
         ):
             raise TeleportPanelNotOpenedError(
                 "传送失败：点击传送点后未出现交互面板，可能是传送点未激活"
             )
         self.log("[tp] 已确认传送，等待加载…")
         self._wait_for_teleport_completion()
+        self._mark_teleport_success(target_country)
         return True
 
     def _resolve_tp_target(
@@ -1722,16 +2417,306 @@ class TpTask:
             return request_x, request_y, None, None
         return point.x, point.y, point.country, point
 
-    def _is_clickable_map_point(self, x: float, y: float) -> bool:
+    def _is_clickable_map_point(
+        self,
+        x: float,
+        y: float,
+        required_visible_radius: float = 0.0,
+    ) -> bool:
+        """Return whether a point and its nearby icon neighborhood are safe.
+
+        The desktop implementation reserves room around the target for
+        neighboring teleport icons before using absolute-icon correction. On
+        iOS the wider screen makes the raw point look safe even when the
+        neighborhood is clipped by a HUD corner, so keep the radius in native
+        pixels and include it in the same safe-area check.
+        """
         width = float(self.ctx.transform.device_width)
         height = float(self.ctx.transform.device_height)
-        margin = max(35.0, 0.035 * min(width, height))
+        try:
+            required = max(0.0, float(required_visible_radius))
+        except (TypeError, ValueError, OverflowError):
+            required = 0.0
+        margin = max(35.0, 0.035 * min(width, height)) + required
         if x < margin or y < margin or x > width - margin or y > height - margin:
             return False
-        return not (x < 0.20 * width and y < 0.35 * height)
+        return not (
+            x < 0.20 * width + required
+            and y < 0.35 * height + required
+        )
 
-    def _dismiss_teleport_panel(self) -> None:
-        """Close a possibly stale map selection before a retry."""
+    @staticmethod
+    def _display_tp_zoom_level(map_name: str) -> float:
+        """Return the zoom at which the game's teleport icons are visible."""
+        return (
+            TELEPORT_FINAL_ZOOM_MOON_CANON_DISPLAY_LEVEL
+            if str(map_name) == "MoonCanon"
+            else TELEPORT_FINAL_ZOOM_DEFAULT_DISPLAY_LEVEL
+        )
+
+    @classmethod
+    def _final_tp_zoom_level(cls, neighbor_world_distance: float, map_name: str) -> float:
+        """Choose the upstream final click zoom from the nearest neighbor.
+
+        A very close pair of anchors needs a zoomed-in final frame to make
+        icon matching unambiguous.  For isolated points, stopping at the
+        normal display level avoids unnecessary pinch gestures.
+        """
+        try:
+            distance = float(neighbor_world_distance)
+        except (TypeError, ValueError, OverflowError):
+            distance = float("inf")
+        if not math.isfinite(distance) or distance <= 0:
+            return cls._display_tp_zoom_level(map_name)
+        return cls._clamp_big_map_zoom_level(
+            min(
+                distance / TELEPORT_FINAL_ZOOM_DISTANCE_FACTOR,
+                cls._display_tp_zoom_level(map_name),
+            )
+        )
+
+    def _nearby_icon_search_radius(self, neighbor_screen_distance: float) -> float:
+        """Scale the icon neighborhood reserved for one map-point click."""
+        scale = max(0.5, float(getattr(self.ctx.transform, "scale", 1.0)))
+        minimum = TELEPORT_NEARBY_ICON_MIN_SEARCH_RADIUS * scale
+        maximum = TELEPORT_NEARBY_ICON_MAX_SEARCH_RADIUS * scale
+        try:
+            distance = float(neighbor_screen_distance)
+        except (TypeError, ValueError, OverflowError):
+            distance = float("nan")
+        if not math.isfinite(distance) or distance <= 0:
+            return minimum
+        return max(
+            minimum,
+            min(maximum, distance * TELEPORT_NEARBY_ICON_NEIGHBOR_DISTANCE_RATIO),
+        )
+
+    def _nearest_teleport_neighbor(
+        self,
+        request_x: float,
+        request_y: float,
+        target_point: TeleportPoint | None,
+    ) -> TeleportPoint | None:
+        """Find the second point used for final-zoom/safe-neighborhood checks."""
+        if target_point is None:
+            return None
+        nearest = getattr(self._teleport_points, "nearest", None)
+        if not callable(nearest):
+            return None
+        try:
+            points = tuple(nearest(self.map_name, request_x, request_y, 2))
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            return None
+        for point in points:
+            if point is target_point:
+                continue
+            if getattr(point, "point_id", None) != getattr(target_point, "point_id", None):
+                return point
+        return None
+
+    def _teleport_neighbor_screen_distance(
+        self,
+        view: tuple[float, float, float],
+        target_point: TeleportPoint | None,
+        neighbor_point: TeleportPoint | None,
+    ) -> float:
+        if target_point is None or neighbor_point is None:
+            return float("inf")
+        try:
+            target = self.big.world_to_feature(target_point.x, target_point.y)
+            neighbor = self.big.world_to_feature(neighbor_point.x, neighbor_point.y)
+            distance = math.hypot(
+                (neighbor[0] - target[0]) * view[2],
+                (neighbor[1] - target[1]) * view[2],
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return float("inf")
+        return distance if math.isfinite(distance) else float("inf")
+
+    @staticmethod
+    def _predict_zoomed_click(
+        tap_x: float,
+        tap_y: float,
+        current_zoom: float,
+        target_zoom: float,
+        width: float,
+        height: float,
+    ) -> tuple[float, float]:
+        if (
+            not math.isfinite(current_zoom)
+            or not math.isfinite(target_zoom)
+            or target_zoom <= 0
+        ):
+            return tap_x, tap_y
+        ratio = current_zoom / target_zoom
+        return (
+            width / 2.0 + (tap_x - width / 2.0) * ratio,
+            height / 2.0 + (tap_y - height / 2.0) * ratio,
+        )
+
+    def _prepare_teleport_click_view(
+        self,
+        target_x: float,
+        target_y: float,
+        target_point: TeleportPoint | None,
+        neighbor_point: TeleportPoint | None,
+        timeout_s: float,
+    ) -> _TeleportClickView:
+        """Move/zoom the map until a target point has a reliable click frame.
+
+        The regular map mover already brings the target near the center. This
+        bounded second phase handles the cases that the desktop implementation
+        treats specially: nearby icons need a final zoom-in, and a pinch may
+        push a target out of the safe area. Every accepted view owns the frame
+        later used for icon correction, so no extra stale screenshot is taken
+        between recognition and the click.
+        """
+        self._check_cancelled()
+        tx, ty = self.big.world_to_feature(target_x, target_y)
+        display_zoom = self._display_tp_zoom_level(self.map_name)
+        neighbor_world_distance = float("inf")
+        if target_point is not None and neighbor_point is not None:
+            neighbor_world_distance = math.hypot(
+                target_point.x - neighbor_point.x,
+                target_point.y - neighbor_point.y,
+            )
+        final_zoom = self._final_tp_zoom_level(
+            neighbor_world_distance,
+            self.map_name,
+        )
+        last_view: _TeleportClickView | None = None
+
+        for attempt in range(TELEPORT_CLICKABLE_RETRY_LIMIT + 1):
+            self._check_cancelled()
+            frame = getattr(self, "_last_located_frame", None)
+            if frame is None:
+                frame = self.ctx.capture_bgr()
+            view = self.big.locate_view(frame)
+            if view is None:
+                if attempt >= TELEPORT_CLICKABLE_RETRY_LIMIT:
+                    break
+                refreshed = self._capture_fresh_map_frame()
+                if refreshed is not None:
+                    self._last_located_frame = refreshed
+                self._sleep(TELEPORT_CLICKABLE_RETRY_DELAY_MS)
+                continue
+
+            tap_x = self.ctx.transform.device_width / 2.0 + (tx - view[0]) * view[2]
+            tap_y = self.ctx.transform.device_height / 2.0 + (ty - view[1]) * view[2]
+            neighbor_screen_distance = self._teleport_neighbor_screen_distance(
+                view, target_point, neighbor_point,
+            )
+            required_radius = self._nearby_icon_search_radius(neighbor_screen_distance)
+            current_zoom = self._read_map_zoom_level(capture_if_missing=False)
+            prepared = _TeleportClickView(
+                view=view,
+                tap_x=tap_x,
+                tap_y=tap_y,
+                zoom_level=current_zoom,
+                neighbor_screen_distance=neighbor_screen_distance,
+                required_visible_radius=required_radius,
+            )
+            last_view = prepared
+
+            if not self._is_clickable_map_point(tap_x, tap_y, required_radius):
+                if attempt >= TELEPORT_CLICKABLE_RETRY_LIMIT:
+                    break
+                # Move the target toward the center without changing the
+                # selected map area. The normal mover also verifies that a
+                # swipe produced a fresh frame before continuing.
+                self._move_map_view_to(
+                    target_x,
+                    target_y,
+                    min(timeout_s, 12.0),
+                    log_prefix="[tp] 点击区迭代",
+                    max_iterations=8,
+                    error_message="传送失败：目标传送点未进入安全点击区",
+                )
+                self._sleep(TELEPORT_CLICKABLE_RETRY_DELAY_MS)
+                continue
+
+            # If the slider is unavailable on an older headless build, keep
+            # the measured map view and let the icon/OCR fallback handle it.
+            if current_zoom is None:
+                return prepared
+
+            should_zoom = current_zoom > display_zoom + MAP_ZOOM_MEASURE_TOLERANCE
+            if (
+                math.isfinite(neighbor_screen_distance)
+                and neighbor_screen_distance <
+                TELEPORT_FINAL_ZOOM_MIN_NEIGHBOR_SCREEN_DISTANCE
+                * max(0.5, float(getattr(self.ctx.transform, "scale", 1.0)))
+                and current_zoom > final_zoom + MAP_ZOOM_MEASURE_TOLERANCE
+            ):
+                should_zoom = True
+            if not should_zoom:
+                return prepared
+
+            target_zoom = min(final_zoom, display_zoom)
+            predicted_x, predicted_y = self._predict_zoomed_click(
+                tap_x,
+                tap_y,
+                current_zoom,
+                target_zoom,
+                float(self.ctx.transform.device_width),
+                float(self.ctx.transform.device_height),
+            )
+            zoom_ratio = current_zoom / target_zoom if target_zoom > 0 else 1.0
+            predicted_neighbor_distance = (
+                neighbor_screen_distance * zoom_ratio
+                if math.isfinite(neighbor_screen_distance)
+                else neighbor_screen_distance
+            )
+            predicted_radius = self._nearby_icon_search_radius(
+                predicted_neighbor_distance,
+            )
+            if not self._is_clickable_map_point(
+                predicted_x, predicted_y, predicted_radius,
+            ):
+                if attempt >= TELEPORT_CLICKABLE_RETRY_LIMIT:
+                    break
+                self._move_map_view_to(
+                    target_x,
+                    target_y,
+                    min(timeout_s, 12.0),
+                    log_prefix="[tp] 缩放前居中迭代",
+                    max_iterations=8,
+                    error_message="传送失败：缩放后目标将位于不可点击区域",
+                )
+                self._sleep(TELEPORT_CLICKABLE_RETRY_DELAY_MS)
+                continue
+
+            before = current_zoom
+            adjusted = self._set_big_map_zoom_level(target_zoom)
+            self.log(
+                f"[tp] 传送点最终缩放：{before:.2f} → {adjusted:.2f}，"
+                f"邻点屏幕距离 {neighbor_screen_distance:.0f}px"
+            )
+            refreshed = self._capture_fresh_map_frame(self._frame_cursor())
+            if refreshed is not None:
+                self._last_located_frame = refreshed
+            self._sleep(TELEPORT_CLICKABLE_RETRY_DELAY_MS)
+
+        if last_view is not None:
+            if self._is_clickable_map_point(
+                last_view.tap_x,
+                last_view.tap_y,
+                last_view.required_visible_radius,
+            ):
+                return last_view
+        raise RuntimeError("传送失败：目标传送点未进入可点击安全区")
+
+    def _dismiss_teleport_panel(self, *, force: bool = False) -> bool:
+        """Close a known stale teleport panel before a retry.
+
+        A point click can fail while the map is still the useful current UI.
+        Sending ESC for every ``RuntimeError`` would close that map and make
+        the next retry operate on the world HUD.  Only a previously observed
+        panel is dismissed implicitly; callers explicitly requesting cleanup
+        can pass ``force=True``.
+        """
+        if not force and not bool(getattr(self, "_teleport_panel_open", False)):
+            return False
         try:
             input_controller = getattr(self.ctx, "input", None)
             key_press = getattr(input_controller, "key_press", None)
@@ -1739,13 +2724,16 @@ class TpTask:
                 key_press("ESCAPE")
             else:
                 self.ctx.device.press_key("ESCAPE")
-            self.ctx.sleep(350)
+            self._sleep(350)
+            self._teleport_panel_open = False
+            return True
         except Exception as error:
             self.log(f"[tp] 关闭传送面板失败（忽略）：{error}")
+            return False
 
     def dismiss_after_failure(self) -> None:
         """Public retry cleanup used by the genshin API wrapper."""
-        self._dismiss_teleport_panel()
+        self._dismiss_teleport_panel(force=True)
 
     def _confirm_selected_target(self, target_point: TeleportPoint | None) -> bool:
         """Keep the no-target call shape compatible with lightweight test hosts."""
@@ -1761,36 +2749,71 @@ class TpTask:
         *,
         target_point: TeleportPoint | None = None,
         corrected_point: tuple[float, float] | None = None,
+        click_plan: _AbsoluteMapClickPlan | None = None,
         map_region: ImageRegion | None = None,
+        anchor_search_radius: float | None = None,
     ) -> bool:
-        """Click one resolved point and allow one precomputed fallback only."""
+        """Click one resolved point and allow one precomputed fallback only.
+
+        A failed candidate selection can leave the overlap panel visible.  In
+        that case an alternate map tap is not meaningful until the panel is
+        explicitly dismissed; otherwise the game keeps treating the tap as a
+        list interaction and the realtime picker may report repeated direct
+        interactions.  ``click_plan`` is optional to keep lightweight callers
+        using the older ``corrected_point`` argument compatible.
+        """
+        self._check_cancelled()
         width = self.ctx.transform.device_width
-        if corrected_point is not None:
-            corrected_x, corrected_y = corrected_point
-            self.log("[tp] 先点击地图图标绝对校正坐标")
+        plan = click_plan or _AbsoluteMapClickPlan(corrected_point=corrected_point)
+
+        def tap(x: float, y: float) -> None:
             self.ctx.device.tap(
-                corrected_x,
-                corrected_y,
+                x,
+                y,
                 image_width=width,
                 image_height=self.ctx.transform.device_height,
             )
+
+        fallback_point = plan.fallback_point
+        if plan.raw_first:
+            self.log("[tp] 校正量不安全，先点击原始目标点")
+            tap(tap_x, tap_y)
+            if self._confirm_selected_target(target_point):
+                return True
+            self._dismiss_teleport_panel()
+            if fallback_point is not None:
+                self.log("[tp] 原始点未弹出面板，回退一次绝对校正坐标")
+                tap(*fallback_point)
+                return self._confirm_selected_target(target_point)
+            return False
+
+        if plan.corrected_point is not None:
+            corrected_x, corrected_y = plan.corrected_point
+            self.log("[tp] 先点击地图图标绝对校正坐标")
+            tap(corrected_x, corrected_y)
             if self._confirm_selected_target(target_point):
                 return True
             self.log("[tp] 绝对校正坐标未弹出面板，回退原始目标点")
+            self._dismiss_teleport_panel()
 
-        if map_region is None:
-            candidates = self._anchor_icons_near(
-                tap_x,
-                tap_y,
-                max(0.10 * width, 1.8 * tol),
+        icon_kwargs = {}
+        if target_point is not None:
+            icon_kwargs["allowed_types"] = self._map_icon_types_for_point(
+                target_point.point_type
             )
-        else:
-            candidates = self._anchor_icons_near(
-                tap_x,
-                tap_y,
-                max(0.10 * width, 1.8 * tol),
-                region=map_region,
-            )
+        if map_region is not None:
+            icon_kwargs["region"] = map_region
+        max_anchor_distance = (
+            float(anchor_search_radius)
+            if anchor_search_radius is not None
+            else max(0.10 * width, 1.8 * tol)
+        )
+        candidates = self._anchor_icons_near(
+            tap_x,
+            tap_y,
+            max_anchor_distance,
+            **icon_kwargs,
+        )
         fallback = None
         if candidates:
             nearest_distance, nearest = candidates[0]
@@ -1802,24 +2825,14 @@ class TpTask:
             )
             if ambiguous and nearest_distance > 6:
                 self.log("[tp] 邻近图标间距不足，先点击原始目标点")
-                self.ctx.device.tap(
-                    tap_x,
-                    tap_y,
-                    image_width=width,
-                    image_height=self.ctx.transform.device_height,
-                )
+                tap(tap_x, tap_y)
                 fallback = nearest
             else:
                 self.log(f"[tp] 点击校正后的锚点（偏差 {nearest_distance:.0f}px）")
                 nearest.click()
         else:
             self.log("[tp] 未匹配到邻近锚点图标，点击原始目标点")
-            self.ctx.device.tap(
-                tap_x,
-                tap_y,
-                image_width=width,
-                image_height=self.ctx.transform.device_height,
-            )
+            tap(tap_x, tap_y)
 
         if self._confirm_selected_target(target_point):
             return True
@@ -1827,6 +2840,7 @@ class TpTask:
             return False
 
         self.log("[tp] 原始点未弹出面板，回退一次校正锚点")
+        self._dismiss_teleport_panel()
         fallback.click()
         return self._confirm_selected_target(target_point)
 
@@ -1837,6 +2851,7 @@ class TpTask:
         observed_loading = False
         stable_main_ui = 0
         while time.monotonic() < deadline:
+            self._check_cancelled()
             frame = self.ctx.capture_bgr()
             in_main_ui = is_main_ui(self.ctx, frame)
             if in_main_ui:
@@ -1849,5 +2864,5 @@ class TpTask:
                 stable_main_ui = 0
                 if not observed_loading and not is_big_map_ui(self.ctx, frame):
                     observed_loading = True
-            self.ctx.sleep(350)
+            self._sleep(350)
         self.log("[tp] 传送加载等待超时，继续执行后续任务")

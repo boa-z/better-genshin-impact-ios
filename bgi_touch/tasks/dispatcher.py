@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -211,6 +212,37 @@ class TaskDispatcher:
             except Exception:
                 pass
         return slots
+
+    @contextmanager
+    def _suspend_auto_pick(self):
+        """Temporarily disable only AutoPick for a route combat action.
+
+        BetterGI's ``DisableAutoPickupForNonElite`` policy leaves the other
+        realtime helpers alone.  Toggling the existing trigger avoids creating
+        a second screenshot loop and keeps route-owned AutoSkip/SkillCd
+        behavior intact.
+        """
+        loop = getattr(self.ctx, "_trigger_loop", None)
+        get_trigger = getattr(loop, "get", None)
+        if not callable(get_trigger):
+            yield
+            return
+        try:
+            trigger = get_trigger("AutoPick")
+        except Exception:
+            trigger = None
+        if trigger is None:
+            yield
+            return
+        previous = bool(getattr(trigger, "enabled", True))
+        try:
+            trigger.enabled = False
+            yield
+        finally:
+            try:
+                trigger.enabled = previous
+            except Exception:
+                pass
 
     def _is_cancelled(self, token: Any = None) -> bool:
         return bool(self.cancelled()) or _requested(token)
@@ -447,8 +479,19 @@ class TaskDispatcher:
         # BetterGI AutoFightParam.Timeout is expressed in seconds.
         timeout_s = float(timeout) if timeout else 120
         pickup_config = PostFightPickupConfig.from_mapping(param)
+        effective_pickup_config, suspend_auto_pick = (
+            pickup_config.apply_pathing_monster_policy(
+                enabled=_boolean(
+                    _value(param, "_pathingEnableMonsterLootSplit", False), False
+                ),
+                monster_tag=_value(param, "_pathingMonsterTag", ""),
+            )
+        )
+        if effective_pickup_config != pickup_config:
+            self.log("[pathing] 当前非精英或传奇点位，关闭战斗后拾取配置")
+        pickup_config = effective_pickup_config
         party_slots = self._resolve_auto_fight_party()
-        return AutoFightTask(
+        task = AutoFightTask(
             self.ctx,
             combat_strategy_path=strategy,
             timeout_s=timeout_s,
@@ -464,7 +507,12 @@ class TaskDispatcher:
             experience_detector_config=_value(
                 param, "experienceDetectorConfig", {}
             ) or {},
-        ).run(cancelled=self._callback(ct))
+        )
+        scope = self._suspend_auto_pick() if suspend_auto_pick else nullcontext()
+        if suspend_auto_pick:
+            self.log("[pathing] 当前非精英或传奇点位，暂停 AutoPick")
+        with scope:
+            return task.run(cancelled=self._callback(ct))
 
     def run_auto_wood_task(self, param: Any = None, ct: Any = None) -> bool:
         """Run the direct AutoWood entry point used by newer JS scripts.
@@ -931,6 +979,12 @@ class TaskDispatcher:
 
     def run_auto_fishing_task(self, param: Any = None, ct: Any = None) -> bool:
         from .auto_fishing import AutoFishingTask
+
+        # ``genshin.autoFishing(1)`` and the native dispatcher overload both
+        # pass the fishing time policy as a scalar.  Keep the shared task
+        # entry point tolerant of that form as well as the SoloTask mapping.
+        if isinstance(param, (str, int, float)) and not isinstance(param, bool):
+            param = {"fishingTimePolicy": param}
         target_catches = _value(
             param, "targetCatches", _value(param, "fishCount", 0)
         )
@@ -1538,7 +1592,7 @@ class TaskDispatcher:
     def run_combat_script(self, script: str, avatar: str | None = None) -> Any:
         return CombatExecutor.for_context(
             self.ctx, party_slots=self.party_slots, log=self.log
-        ).run(str(script))
+        ).run(str(script), default_avatar=avatar)
 
     def add_timer(self, timer: Any, *, clear_existing: bool = True) -> None:
         name = str(_value(timer, "name", timer))
@@ -1559,8 +1613,7 @@ class TaskDispatcher:
                 "pickKey",
                 _value(config, "pick_key", "F"),
             )
-            self.ctx.enable_trigger(
-                name,
+            trigger_kwargs = dict(
                 force_interaction=_boolean(force_interaction, False),
                 pick_key=str(pick_key or "F").strip() or "F",
                 mode=_value(config, "mode", "Whitelist"),
@@ -1596,6 +1649,21 @@ class TaskDispatcher:
                     _value(config, "whitelistModeDoNotPickEnabled", True), True
                 ),
             )
+            user_dir = _value(
+                config,
+                "userDir",
+                _value(config, "user_dir", None),
+            )
+            if user_dir is not None:
+                trigger_kwargs["user_dir"] = str(user_dir)
+            require_prompt = _value(
+                config,
+                "requirePickPrompt",
+                _value(config, "require_pick_prompt", None),
+            )
+            if require_prompt is not None:
+                trigger_kwargs["require_pick_prompt"] = _boolean(require_prompt, True)
+            self.ctx.enable_trigger(name, **trigger_kwargs)
         elif name in ("AutoEat", "自动吃药"):
             self.ctx.enable_trigger(
                 "AutoEat",

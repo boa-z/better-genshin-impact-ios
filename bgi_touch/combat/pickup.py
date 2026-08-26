@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable
 
 from .dsl import CombatCommand, CombatExecutor
@@ -40,6 +40,19 @@ def _bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _normalize_only_pick_elite_drops_mode(value: Any) -> str:
+    """Normalize BetterGI's route loot policy enum and Chinese aliases."""
+    normalized = str(value or "").strip().casefold().replace("_", "")
+    if normalized in {"allowautopickupfornonelite", "非精英允许自动拾取"}:
+        return "AllowAutoPickupForNonElite"
+    if normalized in {"disableautopickupfornonelite", "非精英关闭拾取"}:
+        return "DisableAutoPickupForNonElite"
+    return "Closed"
+
+
+_ELITE_MONSTER_TAGS = frozenset({"elite", "legendary"})
+
+
 @dataclass(frozen=True)
 class PostFightPickupConfig:
     """Subset of BetterGI AutoFight pickup options usable on iOS."""
@@ -51,6 +64,7 @@ class PostFightPickupConfig:
     battle_threshold_for_loot: int = -1
     kazuha_party_name: str = ""
     qin_double_pick_up: bool = False
+    only_pick_elite_drops_mode: str = "Closed"
 
     @classmethod
     def from_mapping(cls, raw: Any) -> "PostFightPickupConfig":
@@ -80,7 +94,38 @@ class PostFightPickupConfig:
             qin_double_pick_up=_bool(
                 _value(raw, "qinDoublePickUp", False), False,
             ),
+            only_pick_elite_drops_mode=_normalize_only_pick_elite_drops_mode(
+                _value(raw, "onlyPickEliteDropsMode", "Closed")
+            ),
         )
+
+    def apply_pathing_monster_policy(
+        self,
+        *,
+        enabled: bool = False,
+        monster_tag: Any = "",
+    ) -> tuple["PostFightPickupConfig", bool]:
+        """Apply BetterGI's route-level elite-only pickup policy.
+
+        ``enableMonsterLootSplit`` is a route default copied onto every
+        waypoint by BetterGI.  For non-elite waypoints the desktop runner
+        disables post-fight Kazuha/scan pickup; the stricter mode also pauses
+        the realtime AutoPick trigger while combat is running.  Return the
+        effective config and whether the caller must suspend AutoPick.
+        """
+        if not enabled:
+            return self, False
+        tag = str(monster_tag or "").strip().casefold()
+        if tag in _ELITE_MONSTER_TAGS:
+            return self, False
+        if self.only_pick_elite_drops_mode == "Closed":
+            return self, False
+        effective = replace(
+            self,
+            kazuha_pickup_enabled=False,
+            pick_drops_after_fight_enabled=False,
+        )
+        return effective, self.only_pick_elite_drops_mode == "DisableAutoPickupForNonElite"
 
 
 @dataclass(frozen=True)

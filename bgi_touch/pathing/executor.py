@@ -22,6 +22,7 @@ import numpy as np
 
 from ..engine.context import GameContext
 from .actions import PathingActionRunner
+from .cancellation import PathingCancelled
 from .farming import (
     FarmingRouteInfo,
     FarmingSession,
@@ -60,11 +61,14 @@ class PathingExecutor:
                  farming_config_path: str | Path | None = None,
                  farming_route_info: dict | FarmingRouteInfo | None = None,
                  farming_recorder: FarmingStatsRecorder | None = None,
-                 pathing_config: PathingPartyConfig | dict | None = None):
+                 pathing_config: PathingPartyConfig | dict | None = None,
+                 cancelled: Callable[[], bool] | None = None):
         self.ctx = ctx
         self.positioner = positioner
         self._map_name = map_name
         self.log = log
+        self._cancel_probe = cancelled or (lambda: False)
+        self._has_cancel_probe = cancelled is not None
         self.party_config = PathingPartyConfig.from_mapping(pathing_config)
         self._tp_task = None
         self._party_switcher = None
@@ -74,7 +78,14 @@ class PathingExecutor:
         # BetterGI keeps this counter on PathExecutor, so repeated traps in
         # different waypoints still cause a route retry after the third one.
         self._stuck_detector = StuckDetector()
-        self.actions = PathingActionRunner(ctx, party_slots=party_slots, log=log)
+        self.actions = PathingActionRunner(
+            ctx,
+            party_slots=party_slots,
+            log=log,
+            pathing_config=self.party_config,
+            sleep=self._sleep,
+            cancelled=self._is_cancelled if self._has_cancel_probe else None,
+        )
         self.farming = farming_recorder or FarmingStatsRecorder(
             farming_config_path, log=log
         )
@@ -83,6 +94,36 @@ class PathingExecutor:
             if isinstance(farming_route_info, FarmingRouteInfo)
             else FarmingRouteInfo.from_mapping(farming_route_info)
         )
+
+    def _is_cancelled(self) -> bool:
+        """Read the worker-safe cancellation probe without touching JS objects."""
+        probe = getattr(self, "_cancel_probe", None)
+        if probe is None:
+            return False
+        try:
+            return bool(probe())
+        except Exception:
+            # A disposed cancellation source must fail closed. The route's
+            # finally block will release all held input before the exception
+            # reaches the JavaScript Promise.
+            return True
+
+    def _check_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise PathingCancelled("地图追踪任务已取消")
+
+    def _sleep(self, milliseconds: float) -> None:
+        """Sleep in short slices so a long route wait can be cancelled."""
+        remaining = max(0.0, float(milliseconds))
+        if not getattr(self, "_has_cancel_probe", False):
+            self.ctx.sleep(remaining)
+            return
+        while remaining > 0:
+            self._check_cancelled()
+            step = min(100.0, remaining)
+            self.ctx.sleep(step)
+            remaining -= step
+        self._check_cancelled()
 
     def _route_farming_info(self, task: PathingTask) -> FarmingRouteInfo:
         configured = self.farming_route_info
@@ -275,9 +316,11 @@ class PathingExecutor:
 
         try:
             with teleport.exclusive_triggers():
+                self._check_cancelled()
                 if self.party_config.is_visit_statue_before_switch_party:
                     self.log(f"[pathing] 切换队伍前前往七天神像：{target}")
                     teleport.tp_to_statue()
+                    self._check_cancelled()
                     success = switcher.switch(target)
                 else:
                     success = switcher.switch(target)
@@ -285,8 +328,12 @@ class PathingExecutor:
                         self.log(
                             f"[pathing] 原地切换队伍失败，前往七天神像重试：{target}"
                         )
+                        self._check_cancelled()
                         teleport.tp_to_statue()
+                        self._check_cancelled()
                         success = switcher.switch(target)
+        except PathingCancelled:
+            raise
         except Exception as error:
             self.log(f"[pathing] 队伍切换失败：{error}")
             return False
@@ -299,39 +346,72 @@ class PathingExecutor:
         self.log(f"[pathing] 已切换到队伍：{target}")
         return True
 
-    def run(self, task: PathingTask) -> bool:
-        task.validate()
-        self.log(f"[pathing] {task.name}: {len(task.positions)} 个路点 @ {task.map_name}")
-        farming_session = FarmingSession.from_mapping(task.farming_info)
-        decision = self.farming.check_limit(farming_session)
-        if decision.skip:
-            route_name = task.name or self._route_farming_info(task).project_name
-            self.log(f"[pathing] {route_name}:{decision.message}，跳过此任务")
-            return True
-        if task.map_match_method.lower() not in {"sift"}:
-            self.log(f"[pathing] {task.map_match_method} 暂未移植，回退 SIFT")
-        self._ensure_positioner(task.map_name)
-        if not self._switch_party_for_route():
-            self.ctx.input.release_all()
-            return False
-        trigger_state = self._enable_realtime_triggers(task)
-        retry_count = self._retry_count(task)
-        success = False
+    def run(
+        self,
+        task: PathingTask,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Execute one route and stop at the next safe input boundary."""
+        previous_probe = getattr(self, "_cancel_probe", lambda: False)
+        if cancelled is not None:
+            self._cancel_probe = cancelled
         try:
-            for index, wp in enumerate(task.positions, start=1):
-                self.log(f"[pathing] 路点 {index}/{len(task.positions)} id={wp.id}")
+            return self._run(task)
+        finally:
+            self._cancel_probe = previous_probe
+
+    def _run(self, task: PathingTask) -> bool:
+        trigger_state: tuple[list[str], list[object] | None] = ([], None)
+        success = False
+        cleanup_required = False
+        try:
+            self._check_cancelled()
+            task.validate()
+            self.log(f"[pathing] {task.name}: {len(task.positions)} 个路点 @ {task.map_name}")
+            farming_session = FarmingSession.from_mapping(task.farming_info)
+            decision = self.farming.check_limit(farming_session)
+            if decision.skip:
+                route_name = task.name or self._route_farming_info(task).project_name
+                self.log(f"[pathing] {route_name}:{decision.message}，跳过此任务")
+                return True
+            cleanup_required = True
+            if task.map_match_method.lower() not in {"sift"}:
+                self.log(f"[pathing] {task.map_match_method} 暂未移植，回退 SIFT")
+            self._ensure_positioner(task.map_name)
+            self._check_cancelled()
+            if not self._switch_party_for_route():
+                return False
+            trigger_state = self._enable_realtime_triggers(task)
+            retry_count = self._retry_count(task)
+            for index, wp in enumerate(task.positions):
+                self._check_cancelled()
+                self.log(f"[pathing] 路点 {index + 1}/{len(task.positions)} id={wp.id}")
+
+                previous_waypoint = task.positions[index - 1] if index > 0 else None
+                next_waypoint = (
+                    task.positions[index + 1]
+                    if index + 1 < len(task.positions)
+                    else None
+                )
 
                 self._run_with_retry(
-                    lambda wp=wp: self._run_waypoint(wp),
+                    lambda wp=wp, previous_waypoint=previous_waypoint, next_waypoint=next_waypoint:
+                    self._run_waypoint(
+                        wp,
+                        previous_waypoint=previous_waypoint,
+                        next_waypoint=next_waypoint,
+                    ),
                     wp,
                     retry_count,
                 )
             success = True
             return True
         finally:
-            self.ctx.input.release_all()
-            self._clear_realtime_triggers(trigger_state)
-            if success and farming_session.allow_farming_count:
+            if cleanup_required:
+                self.ctx.input.release_all()
+                self._clear_realtime_triggers(trigger_state)
+            farming_session = locals().get("farming_session")
+            if success and farming_session is not None and farming_session.allow_farming_count:
                 try:
                     self.farming.record(
                         farming_session, self._route_farming_info(task)
@@ -339,9 +419,16 @@ class PathingExecutor:
                 except Exception as error:
                     self.log(f"[farming] 锄地进度记录失败：{error}")
 
-    def _run_waypoint(self, wp: Waypoint) -> None:
+    def _run_waypoint(
+        self,
+        wp: Waypoint,
+        *,
+        previous_waypoint: Waypoint | None = None,
+        next_waypoint: Waypoint | None = None,
+    ) -> None:
         """Execute one waypoint, including the upstream recovery pre-check."""
 
+        self._check_cancelled()
         self._recover_when_low_hp(wp)
 
         # BetterGI handles four-leaf seals before normal movement. The
@@ -359,12 +446,18 @@ class PathingExecutor:
         elif wp.type == "orientation":
             self._face_to(wp)
         elif wp.type in ("path", "target"):
-            self._move_to(wp, arrive_dist=2.0 if wp.type == "target" else 4.0)
+            self._move_to(
+                wp,
+                arrive_dist=2.0 if wp.type == "target" else 4.0,
+                previous_waypoint=previous_waypoint,
+                next_waypoint=next_waypoint,
+            )
         else:
             self.log(f"[pathing] 未知路点类型 {wp.type}，跳过移动")
 
         if wp.action and wp.action not in {"force_tp", "log_output"}:
             self._do_action(wp)
+        self._check_cancelled()
 
     def _latest_frame(self) -> np.ndarray | None:
         """Read the trigger-owned frame before falling back to device capture."""
@@ -410,13 +503,21 @@ class PathingExecutor:
     def _recover_to_statue(self) -> None:
         from .tp import TpTask
 
+        self._check_cancelled()
         self.log("[pathing] 当前角色需要恢复，前往七天神像")
         # A route may be running on an independent map; statue recovery always
         # uses the Teyvat map just like BetterGI's TpStatueOfTheSeven helper.
-        TpTask(self.ctx, log=self.log, map_name="Teyvat").tp_to_statue()
+        TpTask(
+            self.ctx,
+            log=self.log,
+            map_name="Teyvat",
+            cancelled=self._is_cancelled,
+        ).tp_to_statue()
+        self._check_cancelled()
         self.log("[pathing] 七天神像恢复完成")
 
     def _recover_when_low_hp(self, wp: Waypoint) -> None:
+        self._check_cancelled()
         timing = self.party_config.recover_timing
         if timing == "Never" or (
             timing == "OnlyTeleport" and wp.type != "teleport"
@@ -438,7 +539,8 @@ class PathingExecutor:
         # recover without a map trip. Reuse the cached trigger frame after the
         # wait, so an active realtime loop remains the sole screenshot owner.
         self.ctx.input.key_press("Z")
-        self.ctx.sleep(1200 if low_hp else 3500)
+        self._sleep(1200 if low_hp else 3500)
+        self._check_cancelled()
         after = self._latest_frame()
         if after is not None and not current_avatar_is_low_hp(after):
             return
@@ -459,6 +561,7 @@ class PathingExecutor:
 
     def _run_with_retry(self, operation, waypoint: Waypoint, retries: int) -> None:
         for attempt in range(retries + 1):
+            self._check_cancelled()
             try:
                 operation()
                 return
@@ -473,15 +576,22 @@ class PathingExecutor:
                     if callable(reset):
                         reset()
                 self.ctx.input.release_all()
-                self.ctx.sleep(800)
+                self._sleep(800)
 
     # ---- movement ----
 
     def _teleport(self, wp: Waypoint) -> None:
+        self._check_cancelled()
         if self._tp_task is None:
             from .tp import TpTask
-            self._tp_task = TpTask(self.ctx, log=self.log, map_name=self._map_name)
+            self._tp_task = TpTask(
+                self.ctx,
+                log=self.log,
+                map_name=self._map_name,
+                cancelled=self._is_cancelled,
+            )
         self._tp_task.tp(wp.x, wp.y, force=wp.action == "force_tp")
+        self._check_cancelled()
         if self.positioner is not None:
             # 传送落点≈目标锚点：直接设为局部搜索先验（白天/城内全局匹配不稳）
             if hasattr(self.positioner, "set_prior"):
@@ -509,6 +619,7 @@ class PathingExecutor:
         return self.positioner.get_position(frame)
 
     def _face_to(self, wp: Waypoint) -> None:
+        self._check_cancelled()
         if self.positioner is None:
             self.log("[pathing] 方位点缺少地图定位，跳过朝向")
             return
@@ -525,7 +636,7 @@ class PathingExecutor:
         delta = (desired - current + 540) % 360 - 180
         if abs(delta) > 10:
             self.ctx.input.move_camera_by(self._cam_sign * delta * self._cam_gain, 0)
-            self.ctx.sleep(500)
+            self._sleep(500)
 
     @staticmethod
     def _misidentification_type_names(wp: Waypoint) -> set[str]:
@@ -546,11 +657,17 @@ class PathingExecutor:
 
         from .tp import TpTask
 
+        self._check_cancelled()
         task = self._tp_task
         opened = False
         try:
             if task is None:
-                task = TpTask(self.ctx, log=self.log, map_name=self._map_name)
+                task = TpTask(
+                    self.ctx,
+                    log=self.log,
+                    map_name=self._map_name,
+                    cancelled=self._is_cancelled,
+                )
                 self._tp_task = task
             with task.exclusive_triggers():
                 opened = task.open_map()
@@ -560,6 +677,7 @@ class PathingExecutor:
                     view = task.big.locate_view(self.ctx.capture_bgr())
                     if view is None:
                         return None
+                    self._check_cancelled()
                     return task.big.feature_to_world(view[0], view[1])
                 finally:
                     # Keep the map close inside exclusive_triggers so an
@@ -568,9 +686,13 @@ class PathingExecutor:
                     if opened:
                         try:
                             self.ctx.input.key_press("ESCAPE")
-                            self.ctx.sleep(500)
+                            self._sleep(500)
                         except Exception as error:
+                            if isinstance(error, PathingCancelled):
+                                raise
                             self.log(f"[pathing] 关闭异常识别地图失败：{error}")
+        except PathingCancelled:
+            raise
         except Exception as error:
             self.log(f"[pathing] 大地图异常识别失败：{error}")
             return None
@@ -630,7 +752,35 @@ class PathingExecutor:
             return last_good_position, last_map_recognition_at
         return None, last_map_recognition_at
 
-    def _move_to(self, wp: Waypoint, timeout_s: float = 120, arrive_dist: float = 3.0) -> None:
+    @staticmethod
+    def _turn_angle(
+        previous_waypoint: Waypoint | None,
+        current_waypoint: Waypoint,
+        next_waypoint: Waypoint | None,
+    ) -> float:
+        """Return the route turn angle used by continuous hurry mode."""
+        if previous_waypoint is None or next_waypoint is None:
+            return 0.0
+        ba_x = current_waypoint.x - previous_waypoint.x
+        ba_y = current_waypoint.y - previous_waypoint.y
+        bc_x = next_waypoint.x - current_waypoint.x
+        bc_y = next_waypoint.y - current_waypoint.y
+        mag_ba = math.hypot(ba_x, ba_y)
+        mag_bc = math.hypot(bc_x, bc_y)
+        if mag_ba < 1e-6 or mag_bc < 1e-6:
+            return 0.0
+        cosine = max(-1.0, min(1.0, (ba_x * bc_x + ba_y * bc_y) / (mag_ba * mag_bc)))
+        return math.degrees(math.acos(cosine))
+
+    def _move_to(
+        self,
+        wp: Waypoint,
+        timeout_s: float = 120,
+        arrive_dist: float = 3.0,
+        *,
+        previous_waypoint: Waypoint | None = None,
+        next_waypoint: Waypoint | None = None,
+    ) -> None:
         if self.positioner is None:
             raise NotImplementedError(
                 "寻路需要小地图定位（Positioner）。当前未配置地图特征资产，"
@@ -652,13 +802,15 @@ class PathingExecutor:
             log=self.log,
         )
         hurry_started = False
+        hurry_sprint_held = False
         try:
             while time.monotonic() < deadline:
+                self._check_cancelled()
                 try:
                     frame = self.ctx.capture_bgr()
                 except Exception as e:  # 设备偶发超时，重试
                     self.log(f"[pathing] 截图失败重试: {e}")
-                    self.ctx.sleep(1000)
+                    self._sleep(1000)
                     continue
                 now = time.monotonic()
                 raw_pos = self._get_position(frame)
@@ -685,11 +837,16 @@ class PathingExecutor:
                         if callable(reset):
                             reset()
                         lost_fixes = 0
-                    self.ctx.sleep(600)
+                    self._sleep(600)
                     continue
                 lost_fixes = 0
                 dx, dy = wp.x - pos[0], wp.y - pos[1]
                 dist = math.hypot(dx, dy)
+                next_distance = (
+                    math.hypot(next_waypoint.x - pos[0], next_waypoint.y - pos[1])
+                    if next_waypoint is not None
+                    else None
+                )
                 if raw_pos is not None and (raw_distance is None or raw_distance <= 500):
                     last_good_position = raw_pos
                 if dist <= arrive_dist:
@@ -710,13 +867,39 @@ class PathingExecutor:
                     hurry_avatar = hurry.start()
                     if hurry_avatar:
                         self.actions.combat.switch_to(hurry_avatar)
-                        self.ctx.sleep(600)
+                        self._sleep(600)
                         hurry_started = True
 
                 hurry_action = hurry.tick(
                     distance=dist,
                     move_mode=wp.move_mode,
+                    next_distance=next_distance,
+                    next_type=next_waypoint.type if next_waypoint is not None else None,
+                    next_move_mode=(
+                        next_waypoint.move_mode
+                        if next_waypoint is not None
+                        else None
+                    ),
+                    current_type=wp.type,
+                    current_action=wp.action,
+                    turn_angle=self._turn_angle(
+                        previous_waypoint,
+                        wp,
+                        next_waypoint,
+                    ),
+                    motion_status=(
+                        self.actions.motion_status(frame)
+                        if hurry.enabled and wp.move_mode in {"run", "dash"}
+                        else None
+                    ),
                 )
+
+                if hurry_action.stop_flying:
+                    self.ctx.input.release_all()
+                    moving = False
+                    hurry_sprint_held = False
+                    self.ctx.input.key_press("E")
+                    self._sleep(100)
 
                 if hurry_action.switch_to_walk:
                     self.ctx.input.release_all()
@@ -724,10 +907,17 @@ class PathingExecutor:
                     if walk_avatar:
                         self.log(f"[pathing] 切换步行角色：{walk_avatar}")
                         self.actions.combat.switch_to(walk_avatar)
-                        self.ctx.sleep(600)
+                        self._sleep(600)
                     else:
                         self.log("[pathing] 未找到安全步行角色，继续当前角色")
                     moving = False
+
+                if hurry_action.hold_sprint and not hurry_sprint_held:
+                    self.ctx.input.key_down("LSHIFT")
+                    hurry_sprint_held = True
+                elif not hurry_action.hold_sprint and hurry_sprint_held:
+                    self.ctx.input.key_up("LSHIFT")
+                    hurry_sprint_held = False
 
                 if hurry_action.press_skill and hurry.profile is not None:
                     self.ctx.input.key_press(
@@ -742,7 +932,7 @@ class PathingExecutor:
                         # introduced for the C6 Mavuika compatibility option.
                         self.ctx.input.key_press("LSHIFT", hold_ms=100)
                     self.ctx.input.key_press("SPACE")
-                    self.ctx.sleep(100)
+                    self._sleep(100)
 
                 # BetterGI samples once per second, compares an eight-point
                 # window, and allows only two recoveries before retrying the
@@ -769,7 +959,9 @@ class PathingExecutor:
                             cam_gain=self._cam_gain,
                         )
                         escaper.rotate_and_move()
+                        self._check_cancelled()
                         escaper.move_to((wp.x, wp.y), wp.move_mode)
+                        self._check_cancelled()
                         self.ctx.input.key_down("W")
                         moving = True
                         last_fix = None
@@ -799,11 +991,11 @@ class PathingExecutor:
                             moving = False
                             # 等手势泵当前原子手势(≤1.4s)走完，否则滑动会被
                             # 当成第二根手指而失效
-                            self.ctx.sleep(1600)
+                            self._sleep(1600)
                             turn = max(-90.0, min(90.0, err))  # 单次限幅防过冲
                             self.ctx.input.move_camera_by(
                                 self._cam_sign * turn * self._cam_gain, 0)
-                            self.ctx.sleep(500)
+                            self._sleep(500)
                         last_fix = (pos[0], pos[1], now)
                 elif last_fix is None:
                     # 起步引导：用小地图扇形粗对准一次（失败就直接开走靠反馈纠偏）
@@ -813,7 +1005,7 @@ class PathingExecutor:
                         if abs(delta) > 12:
                             self.ctx.input.move_camera_by(
                                 self._cam_sign * max(-90.0, min(90.0, delta)) * self._cam_gain, 0)
-                            self.ctx.sleep(500)
+                            self._sleep(500)
                     last_fix = (pos[0], pos[1], now)
 
                 if not moving:
@@ -838,17 +1030,24 @@ class PathingExecutor:
                         self.ctx.input.key_press("SPACE")
                     self._last_mode_action_at = now
                 if last_fix is not None and now - last_fix[2] < 0.9:
-                    self.ctx.sleep(400)  # 攒足位移再做下一次航向估计
+                    self._sleep(400)  # 攒足位移再做下一次航向估计
         finally:
             if moving:
                 self.ctx.input.key_up("W")
         if not reached:
+            self._check_cancelled()
             raise TimeoutError(f"[pathing] 路点 ({wp.x:.0f},{wp.y:.0f}) 执行超时")
 
     # ---- actions ----
 
     def _do_action(self, wp: Waypoint) -> None:
-        if self.actions.run(wp):
+        self._check_cancelled()
+        if not getattr(self, "_has_cancel_probe", False):
+            result = self.actions.run(wp)
+        else:
+            result = self.actions.run(wp, cancelled=self._is_cancelled)
+        if result:
+            self._check_cancelled()
             return
         action = wp.action.strip() or "<empty>"
         raise RuntimeError(

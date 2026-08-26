@@ -123,6 +123,52 @@ def test_fight_action_dispatches_to_auto_fight_instead_of_blind_attacks():
     )
 
 
+def test_fight_action_forwards_route_monster_loot_policy():
+    ctx = SimpleNamespace(
+        input=SimpleNamespace(key_press=Mock()),
+        sleep=Mock(), party_slots={"钟离": 1},
+    )
+    waypoint = _waypoint("fight", "route.txt")
+    waypoint.enable_monster_loot_split = True
+    waypoint.monster_tag = "normal"
+    with patch("bgi_touch.pathing.actions.TaskDispatcher") as dispatcher_type:
+        dispatcher_type.return_value.run_auto_fight_task.return_value = True
+        assert PathingActionRunner(ctx, log=Mock()).run(waypoint)
+
+    dispatcher_type.return_value.run_auto_fight_task.assert_called_once_with({
+        "combatStrategyPath": "route.txt",
+        "_pathingEnableMonsterLootSplit": True,
+        "_pathingMonsterTag": "normal",
+    })
+
+
+def test_fight_action_merges_pathing_autofight_config_before_action_overrides():
+    from bgi_touch.pathing.party_config import PathingPartyConfig
+
+    ctx = SimpleNamespace(
+        input=SimpleNamespace(key_press=Mock()),
+        sleep=Mock(), party_slots={"钟离": 1},
+    )
+    runner = PathingActionRunner(
+        ctx,
+        log=Mock(),
+        pathing_config=PathingPartyConfig.from_mapping({
+            "autoFightConfig": {
+                "onlyPickEliteDropsMode": "DisableAutoPickupForNonElite",
+                "timeout": 300,
+            },
+        }),
+    )
+    with patch("bgi_touch.pathing.actions.TaskDispatcher") as dispatcher_type:
+        dispatcher_type.return_value.run_auto_fight_task.return_value = True
+        assert runner.run(_waypoint("fight", '{"timeout":90}'))
+
+    dispatcher_type.return_value.run_auto_fight_task.assert_called_once_with({
+        "onlyPickEliteDropsMode": "DisableAutoPickupForNonElite",
+        "timeout": 90,
+    })
+
+
 def test_mining_uses_the_first_matching_character_macro():
     ctx = SimpleNamespace(
         input=SimpleNamespace(key_press=Mock()),
@@ -139,6 +185,47 @@ def test_mining_uses_the_first_matching_character_macro():
 
     script = runner.combat.run.call_args.args[0]
     assert script.startswith("钟离 e(hold,wait)")
+
+
+def test_mining_runs_shared_scan_pick_when_route_requests_pickup_around():
+    ctx = SimpleNamespace(
+        input=SimpleNamespace(key_press=Mock()),
+        sleep=Mock(), party_slots={"钟离": 1},
+    )
+    runner = PathingActionRunner(ctx, log=Mock())
+    runner.combat = Mock()
+    cancelled = Mock(return_value=False)
+
+    with patch(
+        "bgi_touch.engine.party_hud.canonical_avatar_name",
+        side_effect=lambda value: str(value),
+    ), patch("bgi_touch.tasks.common_jobs.ScanPickTask") as scan_type:
+        scan_type.return_value.run.return_value = True
+        assert runner.run(
+            _waypoint("mining", "foo DisablePickupAround bar"),
+            cancelled=cancelled,
+        )
+
+    scan_type.assert_called_once_with(ctx, log=runner.log)
+    scan_type.return_value.run.assert_called_once_with(cancelled=cancelled)
+    assert ctx.sleep.call_args_list == [call(1000)]
+
+
+def test_mining_without_pickup_parameter_does_not_start_scan_pick():
+    ctx = SimpleNamespace(
+        input=SimpleNamespace(key_press=Mock()),
+        sleep=Mock(), party_slots={"钟离": 1},
+    )
+    runner = PathingActionRunner(ctx, log=Mock())
+    runner.combat = Mock()
+
+    with patch(
+        "bgi_touch.engine.party_hud.canonical_avatar_name",
+        side_effect=lambda value: str(value),
+    ), patch("bgi_touch.tasks.common_jobs.ScanPickTask") as scan_type:
+        assert runner.run(_waypoint("mining"))
+
+    scan_type.assert_not_called()
 
 
 def test_stop_flying_always_releases_glider_before_attack():

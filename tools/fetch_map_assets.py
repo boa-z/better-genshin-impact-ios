@@ -3,12 +3,16 @@
 
 用法：.venv/bin/python tools/fetch_map_assets.py [--models] [--tcg] [--auto-boss]
 资产较大（~180MB 下载，解出 ~120MB），已在 .gitignore 中排除。
+
+默认校验 BetterGI.Assets.Map 1.0.21 的提瓦特底图尺寸；已有旧版资产时会
+自动重新解出。使用 --refresh 可在上游资产更新但尺寸未变时强制刷新。
 """
 
 from __future__ import annotations
 
 import argparse
 import shutil
+import struct
 import tempfile
 import urllib.request
 import zipfile
@@ -22,6 +26,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEST = PROJECT_ROOT / "assets" / "map"
 NUPKG_URL = "https://www.nuget.org/api/v2/package/BetterGI.Assets.Map/{version}"
 PKG_PREFIX = "contentFiles/any/any/Assets/Map/"
+DEFAULT_MAP_VERSION = "1.0.21"
+
+# The dimensions are deliberately checked from the image header rather than
+# by decoding the complete map.  Teyvat_0_256.png is the cheap, authoritative
+# layout sentinel: 22 columns × 256 and 19 rows × 256 in BetterGI 1.0.21.
+# Keep unknown package versions usable; when the upstream map expands again,
+# adding one entry here makes stale local assets self-healing instead of being
+# silently accepted.
+EXPECTED_MAP_IMAGE_SIZES: dict[str, dict[str, tuple[int, int]]] = {
+    "1.0.21": {
+        "Teyvat/Teyvat_0_256.png": (5632, 4864),
+    },
+}
 
 # 需要的文件（相对 Assets/Map/）：曲面层 SIFT 特征 + 各尺度整图
 WANTED = [
@@ -56,7 +73,72 @@ KP_DTYPE = np.dtype([
 ])
 
 
-def build_map_features() -> None:
+def image_size(path: str | Path) -> tuple[int, int]:
+    """Read an image's dimensions without decoding large map bitmaps."""
+
+    path = Path(path)
+    with path.open("rb") as stream:
+        header = stream.read(32)
+    if header.startswith(b"\x89PNG\r\n\x1a\n") and header[12:16] == b"IHDR":
+        return tuple(int(value) for value in struct.unpack(">II", header[16:24]))
+    if header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        chunk = header[12:16]
+        if chunk == b"VP8X" and len(header) >= 30:
+            width = 1 + int.from_bytes(header[24:27], "little")
+            height = 1 + int.from_bytes(header[27:30], "little")
+            return width, height
+        if chunk == b"VP8 " and len(header) >= 30 and header[23:26] == b"\x9d\x01\x2a":
+            width = int.from_bytes(header[26:28], "little") & 0x3FFF
+            height = int.from_bytes(header[28:30], "little") & 0x3FFF
+            return width, height
+        if chunk == b"VP8L" and len(header) >= 25 and header[20] == 0x2F:
+            b1, b2, b3, b4 = header[21:25]
+            width = 1 + b1 + ((b2 & 0x3F) << 8)
+            height = 1 + (b2 >> 6) + (b3 << 2) + ((b4 & 0x0F) << 10)
+            return width, height
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise FileNotFoundError(f"无法读取地图图像: {path}")
+    return int(image.shape[1]), int(image.shape[0])
+
+
+def expected_map_image_sizes(version: str) -> dict[str, tuple[int, int]]:
+    """Return known layout sentinels for a map package version."""
+
+    return EXPECTED_MAP_IMAGE_SIZES.get(str(version).strip(), {})
+
+
+def map_asset_is_usable(relative: str, path: Path, version: str) -> bool:
+    """Check existence and, for known sentinels, the expected dimensions."""
+
+    if not path.is_file() or path.stat().st_size <= 0:
+        return False
+    expected = expected_map_image_sizes(version).get(relative)
+    if expected is None:
+        return True
+    try:
+        return image_size(path) == expected
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def maps_ready(version: str) -> bool:
+    return all(
+        map_asset_is_usable(relative, DEST / relative, version)
+        for relative in WANTED
+    )
+
+
+def download_file(url: str, destination: Path) -> None:
+    """Download through a sibling temporary file and atomically install it."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_name(destination.name + ".part")
+    urllib.request.urlretrieve(url, partial)
+    partial.replace(destination)
+
+
+def build_map_features(force: bool = False) -> None:
     """Generate BetterGI-compatible SIFT stores for independent maps."""
     sift = cv2.SIFT_create()
     for relative in FEATURE_SOURCES:
@@ -64,7 +146,7 @@ def build_map_features() -> None:
         stem = source.with_suffix("")
         keypoint_path = stem.with_name(stem.name + "_SIFT.kp.bin")
         descriptor_path = stem.with_name(stem.name + "_SIFT.mat.png")
-        if keypoint_path.is_file() and descriptor_path.is_file():
+        if not force and keypoint_path.is_file() and descriptor_path.is_file():
             continue
         image = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
         if image is None:
@@ -145,9 +227,7 @@ def fetch_tcg_assets(ref: str) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         source_path = quote(sources[relative], safe="/")
         url = f"{TCG_REPOSITORY}/{quote(ref, safe='')}/{source_path}"
-        partial = out.with_suffix(out.suffix + ".part")
-        urllib.request.urlretrieve(url, partial)
-        partial.replace(out)
+        download_file(url, out)
         print(f"下载 TCG/{relative}")
     print(f"七圣召唤资产完成：{destination}")
 
@@ -159,9 +239,7 @@ def fetch_quick_buy_asset(ref: str) -> None:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     url = f"{TCG_REPOSITORY}/{quote(ref, safe='')}/{quote(QUICK_BUY_SOURCE, safe='/')}"
-    partial = destination.with_suffix(".png.part")
-    urllib.request.urlretrieve(url, partial)
-    partial.replace(destination)
+    download_file(url, destination)
     print(f"快速购买资产完成：{destination.parent}")
 
 
@@ -176,16 +254,14 @@ def fetch_auto_boss_assets(ref: str) -> None:
         out = destination / name
         source = f"{AUTO_BOSS_ASSET_ROOT}/{name}"
         url = f"{TCG_REPOSITORY}/{quote(ref, safe='')}/{quote(source, safe='/')}"
-        partial = out.with_suffix(out.suffix + ".part")
-        urllib.request.urlretrieve(url, partial)
-        partial.replace(out)
+        download_file(url, out)
         print(f"下载 AutoBoss/{name}")
     print(f"自动首领资产完成：{destination}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.0.21")
+    ap.add_argument("--version", default=DEFAULT_MAP_VERSION)
     ap.add_argument("--nupkg", help="已下载的 .nupkg 路径（跳过下载）")
     ap.add_argument("--models", action="store_true", help="同时下载 YOLO 模型资产（BetterGI.Assets.Model）")
     ap.add_argument("--tcg", action="store_true", help="同时下载七圣召唤模板与角色卡配置")
@@ -197,14 +273,20 @@ def main() -> None:
     )
     ap.add_argument("--quick-buy", action="store_true", help="同时下载快速购买识别模板")
     ap.add_argument("--auto-boss", action="store_true", help="同时下载自动首领识别模板")
+    ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="强制从地图包刷新全部地图资产（上游内容变更但尺寸未变时使用）",
+    )
     args = ap.parse_args()
 
     DEST.mkdir(parents=True, exist_ok=True)
-    maps_ready = all((DEST / w).exists() for w in WANTED)
-    if maps_ready:
+    ready = maps_ready(args.version)
+    refresh_maps = bool(args.refresh or not ready)
+    if ready and not args.refresh:
         print(f"地图资产已就绪：{DEST}")
 
-    if not maps_ready:
+    if refresh_maps:
         if args.nupkg:
             pkg = Path(args.nupkg)
         else:
@@ -212,21 +294,42 @@ def main() -> None:
             pkg = Path(tempfile.gettempdir()) / f"bettergi-map-{args.version}.nupkg"
             if not pkg.exists():
                 print(f"下载 {url} …")
-                urllib.request.urlretrieve(url, pkg)
+                download_file(url, pkg)
             print(f"包就绪：{pkg}（{pkg.stat().st_size / 1e6:.0f} MB）")
 
         with zipfile.ZipFile(pkg) as z:
-            for w in WANTED:
-                out = DEST / w
-                if out.exists():
-                    continue
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with z.open(PKG_PREFIX + w) as src, open(out, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                print(f"解出 {w}")
+            # Stage the complete requested set before replacing any current
+            # file.  A cancelled/failed download therefore leaves the old
+            # usable map intact instead of producing a half-new asset set.
+            with tempfile.TemporaryDirectory(
+                prefix="bgi-map-assets-", dir=str(DEST.parent)
+            ) as staging_root:
+                staging = Path(staging_root)
+                staged: list[tuple[Path, Path, str]] = []
+                for w in WANTED:
+                    member = PKG_PREFIX + w
+                    try:
+                        z.getinfo(member)
+                    except KeyError as error:
+                        raise FileNotFoundError(
+                            f"地图包 {args.version} 缺少资产: {member}"
+                        ) from error
+                    staged_path = staging / w
+                    staged_path.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(member) as src, staged_path.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    if not map_asset_is_usable(w, staged_path, args.version):
+                        expected = expected_map_image_sizes(args.version).get(w)
+                        detail = f"，期望尺寸 {expected}" if expected else ""
+                        raise ValueError(f"地图资产无效: {w}{detail}")
+                    staged.append((staged_path, DEST / w, w))
+                for staged_path, out, relative in staged:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    staged_path.replace(out)
+                    print(f"解出 {relative}")
         print(f"完成：{DEST}")
 
-    build_map_features()
+    build_map_features(force=refresh_maps)
 
     if args.models:
         mdl_dest = PROJECT_ROOT / "assets" / "models"
@@ -237,7 +340,10 @@ def main() -> None:
             pkg2 = Path(tempfile.gettempdir()) / "bettergi-model-1.0.29.nupkg"
             if not pkg2.exists():
                 print("下载模型包（~160MB）…")
-                urllib.request.urlretrieve(NUPKG_URL.format(version="1.0.29").replace("Assets.Map", "Assets.Model"), pkg2)
+                download_file(
+                    NUPKG_URL.format(version="1.0.29").replace("Assets.Map", "Assets.Model"),
+                    pkg2,
+                )
             with zipfile.ZipFile(pkg2) as z:
                 for w in missing_yolo:
                     out = mdl_dest / Path(w).name
@@ -253,7 +359,7 @@ def main() -> None:
             if out.exists():
                 continue
             print(f"下载 ItemV2/{name} …")
-            urllib.request.urlretrieve(item_base + name, out)
+            download_file(item_base + name, out)
         print(f"模型完成：{mdl_dest}")
 
     if args.tcg:

@@ -58,11 +58,11 @@ def test_map_mask_tracks_minimap_from_existing_frame_without_capture():
         "worldX": 100.0,
         "worldY": -50.0,
         "imageX": 4071.0,
-        "imageY": 2060.5,
+        "imageY": 3084.5,
     }
     assert state["viewport"] == {
         "x": 4026.0,
-        "y": 2015.5,
+        "y": 3039.5,
         "width": 90.0,
         "height": 90.0,
         "layer": 0,

@@ -190,6 +190,10 @@ class PathingPartyConfig:
     auto_eat_enabled: bool = False
     auto_eat_config: AutoEatConfig = field(default_factory=AutoEatConfig)
     auto_fight_enabled: bool = True
+    # BetterGI supplies a nested AutoFightConfig to pathing action handlers.
+    # Keep its mapping intact so newer combat/pickup fields can flow through
+    # without making this movement config depend on the whole combat model.
+    auto_fight_config: dict[str, Any] = field(default_factory=dict)
     recover_timing: str = "AnyWaypoint"
     use_gadget_interval_ms: int = 0
     distance: int = 45
@@ -229,6 +233,9 @@ class PathingPartyConfig:
             auto_eat_raw, AutoEatConfig
         ):
             auto_eat_raw = {}
+        auto_fight_raw = _value(raw, "autoFightConfig", default=None)
+        if not isinstance(auto_fight_raw, Mapping):
+            auto_fight_raw = {}
 
         distance = max(1, _int(_value(raw, "distance", default=45), 45))
         approach = max(
@@ -311,6 +318,7 @@ class PathingPartyConfig:
             auto_fight_enabled=as_bool(
                 _value(raw, "autoFightEnabled", default=True), True
             ),
+            auto_fight_config=dict(auto_fight_raw),
             recover_timing=_recover_timing(
                 _value(raw, "recoverTiming", default=None),
                 _value(raw, "onlyInTeleportRecover", default=False),

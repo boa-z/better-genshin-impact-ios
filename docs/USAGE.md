@@ -372,6 +372,11 @@ bgi-touch macro ~/dev/bettergi-scripts-list/repo/js/AutoCrystalfly/assets/枫丹
 # pathing：--dry-run 会校验 BetterGI 路线字段并输出统计
 bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json --dry-run
 
+# 地图资产：默认会校验 1.0.21 提瓦特底图尺寸；旧版资产会自动刷新
+.venv/bin/python tools/fetch_map_assets.py
+# 上游内容更新但尺寸未变时，强制刷新（先暂存完整文件集再替换）
+.venv/bin/python tools/fetch_map_assets.py --refresh
+
 # 地图追踪：需要 tools/fetch_map_assets.py 安装的官方地图/SIFT 资产
 bgi-touch pathing scripts/pathing/01-孑遗的留迹x2.json
 

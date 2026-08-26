@@ -11,6 +11,7 @@ continuing to use its normal movement frame.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Callable, Mapping
@@ -42,6 +43,24 @@ HURRY_PROFILES: dict[str, HurryProfile] = {
     "夜兰": HurryProfile(10.0, 800),
 }
 
+FLIGHT_HURRY_AVATARS = frozenset({"恰斯卡", "伊法", "流浪者"})
+
+# BetterGI lets vehicle-like hurry characters keep running through a dense
+# route, but asks them to dismount before a sharp turn or a non-running
+# waypoint.  Keep the same per-character thresholds in the mobile decision
+# layer; the executor supplies the route context and the current frame only.
+TURN_ANGLE_THRESHOLDS: dict[str, float] = {
+    "桑多涅": 45.0,
+    "恰斯卡": 45.0,
+    "伊法": 45.0,
+    "流浪者": 45.0,
+    "玛薇卡": 60.0,
+    "闲云": 120.0,
+    "希诺宁": 120.0,
+    "法尔伽": 120.0,
+    "夜兰": 120.0,
+}
+
 
 @dataclass(frozen=True)
 class HurryAction:
@@ -52,6 +71,8 @@ class HurryAction:
     sprint_jump: bool = False
     switch_to_walk: bool = False
     suppress_sprint: bool = False
+    hold_sprint: bool = False
+    stop_flying: bool = False
 
     @property
     def handled(self) -> bool:
@@ -60,6 +81,7 @@ class HurryAction:
             or self.press_jump
             or self.sprint_jump
             or self.switch_to_walk
+            or self.stop_flying
         )
 
 
@@ -85,6 +107,7 @@ class HurryOnController:
         self._last_tick_at = float("-inf")
         self._mavika_sprint_jump_count = 0
         self._walk_switched = False
+        self._flight_active = False
         self._started = False
 
     @property
@@ -117,6 +140,13 @@ class HurryOnController:
         *,
         distance: float,
         move_mode: str,
+        next_distance: float | None = None,
+        next_type: str | None = None,
+        next_move_mode: str | None = None,
+        current_type: str | None = None,
+        current_action: str | None = None,
+        turn_angle: float = 0.0,
+        motion_status: str | None = None,
         now: float | None = None,
     ) -> HurryAction:
         """Return the next action for one already-captured pathing frame.
@@ -143,11 +173,48 @@ class HurryOnController:
         if mode not in {"run", "dash"}:
             return HurryAction()
 
-        approaching = distance <= self.config.approach_stop_distance
+        motion = str(motion_status or "").strip().casefold()
+        if self.avatar in FLIGHT_HURRY_AVATARS:
+            if motion in {"fly", "flying", "1"}:
+                self._flight_active = True
+            elif motion in {"normal", "0", "landed"}:
+                self._flight_active = False
+
+        approaching = self._should_approach(
+            distance,
+            next_distance=next_distance,
+            next_type=next_type,
+            next_move_mode=next_move_mode,
+            current_type=current_type,
+            current_action=current_action,
+            turn_angle=turn_angle,
+        )
+        if approaching and self._flight_active:
+            self._flight_active = False
+            switch_to_walk = (
+                self.config.switch_to_walk_enabled and not self._walk_switched
+            )
+            if switch_to_walk:
+                self._walk_switched = True
+            self.log(f"[pathing] {self.avatar} 接近路点，结束飞行")
+            return HurryAction(
+                switch_to_walk=switch_to_walk,
+                stop_flying=True,
+            )
         if approaching and self.config.switch_to_walk_enabled and not self._walk_switched:
             self._walk_switched = True
             self.log(f"[pathing] {self.avatar} 接近路点，切换步行角色")
             return HurryAction(switch_to_walk=True)
+
+        if self._flight_active:
+            # Chasca/Ifa/Wanderer need a sustained sprint input while their
+            # flight prompt is visible. The executor keeps W and this sprint
+            # state alive through the same DeviceHub lease; no new frame is
+            # requested here.
+            return HurryAction(
+                suppress_sprint=True,
+                hold_sprint=True,
+            )
 
         if distance <= self.config.distance:
             return HurryAction(
@@ -195,5 +262,76 @@ class HurryOnController:
             ),
         )
 
+    def _should_approach(
+        self,
+        distance: float,
+        *,
+        next_distance: float | None,
+        next_type: str | None,
+        next_move_mode: str | None,
+        current_type: str | None,
+        current_action: str | None,
+        turn_angle: float,
+    ) -> bool:
+        """Mirror BetterGI's precise/continuous dismount boundary.
 
-__all__ = ["HURRY_PROFILES", "HurryAction", "HurryOnController", "HurryProfile"]
+        The Windows implementation reads the next route point from the
+        active path and uses it to decide whether a hurry character should
+        pass the current point.  The old mobile controller only compared the
+        current distance, which made ``连续赶路`` stop at every point and
+        caused overshoot when a non-running segment followed.  All inputs are
+        route metadata or values derived from the current frame; this method
+        never captures a new screenshot.
+        """
+        try:
+            distance = float(distance)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(distance):
+            return False
+
+        effective_stop = min(
+            self.config.approach_stop_distance,
+            self.config.distance,
+        )
+        if self.config.travel_mode == "精准靠近":
+            return distance < effective_stop
+
+        if self.config.travel_mode != "连续赶路":
+            # Unknown values should remain conservative and preserve the
+            # mobile runner's original precise-stop behaviour.
+            return distance < effective_stop
+
+        try:
+            angle = float(turn_angle)
+        except (TypeError, ValueError):
+            angle = 0.0
+        if not math.isfinite(angle):
+            angle = 0.0
+        threshold = TURN_ANGLE_THRESHOLDS.get(self.avatar or "", 120.0)
+
+        next_mode = str(next_move_mode or "").strip().casefold()
+        next_kind = str(next_type or "").strip().casefold()
+        current_kind = str(current_type or "").strip().casefold()
+        action = str(current_action or "").strip().casefold()
+        next_is_run = next_mode in {"run", "dash"}
+        boundary = (
+            (next_distance is not None and next_distance < 25)
+            or next_kind == "target"
+            or next_distance is None
+            or not next_is_run
+            or action in {"fight", "combat_script"}
+            or current_kind == "target"
+            or angle >= threshold
+        )
+        return distance < max(effective_stop, 15) and boundary
+
+
+__all__ = [
+    "HURRY_PROFILES",
+    "FLIGHT_HURRY_AVATARS",
+    "HurryAction",
+    "HurryOnController",
+    "HurryProfile",
+    "TURN_ANGLE_THRESHOLDS",
+]

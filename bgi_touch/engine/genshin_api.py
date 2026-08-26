@@ -204,6 +204,11 @@ class GenshinApi:
         self.ctx = ctx
         self.log = log
         self._tp_task = None
+        # Keep one teleport helper per map for the lifetime of this API.  The
+        # helper owns the selected independent-map area and zoom state; making
+        # a fresh instance for every ``moveIndependentMapTo`` call re-opened
+        # the area selector on consecutive script waypoints.
+        self._tp_tasks = {}
         self._big_locator = None
         self._big_locators = {}
         self._positioners = {}
@@ -235,9 +240,17 @@ class GenshinApi:
         from ..pathing.map_locator import resolve_map_name
 
         name = resolve_map_name(map_name)
-        if name == "Teyvat" and self._tp_task is not None:
-            return self._tp_task
-        task = TpTask(self.ctx, log=self.log, map_name=name)
+        cache = getattr(self, "_tp_tasks", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._tp_tasks = cache
+        legacy = getattr(self, "_tp_task", None)
+        if legacy is not None and name == "Teyvat":
+            cache.setdefault(name, legacy)
+        task = cache.get(name)
+        if task is None:
+            task = TpTask(self.ctx, log=self.log, map_name=name)
+            cache[name] = task
         if name == "Teyvat":
             self._tp_task = task
         return task
@@ -552,6 +565,14 @@ class GenshinApi:
         return 0
 
     def relogin(self) -> None:
+        from ..pathing.tp import reset_tp_session_state
+
+        # The selected map/area belongs to the previous game session.  Clear
+        # it before switching accounts so the next teleport cannot skip the
+        # area selector based on stale state from the old account.
+        reset_tp_session_state(self.ctx)
+        self._tp_tasks = {}
+        self._tp_task = None
         self.ctx.device.stop_app(GENSHIN_BUNDLE_ID)
         self.ctx.sleep(3000)
         self.ctx.device.launch_app(GENSHIN_BUNDLE_ID)
@@ -834,9 +855,22 @@ class GenshinApi:
         return self._tp_for().get_big_map_zoom_level()
 
     def autoFishing(self, policy=None):
+        # BetterGI exposes ``AutoFishing(int fishingTimePolicy = 0)`` as a
+        # scalar overload.  The shared dispatcher also accepts a parameter
+        # object, but passing the scalar through unchanged makes ``_value``
+        # treat it as an object with no fields and silently selects the
+        # default ``ALL`` policy.  Normalize only scalar values here so both
+        # the native overload and the extended object form keep their
+        # original contracts.
+        if policy is None:
+            param = {}
+        elif isinstance(policy, (str, int, float)) and not isinstance(policy, bool):
+            param = {"fishingTimePolicy": policy}
+        else:
+            param = policy
         from ..tasks.dispatcher import TaskDispatcher
         return TaskDispatcher(self.ctx, party_slots=self._party_slots,
-                              log=self.log).run_auto_fishing_task(policy)
+                              log=self.log).run_auto_fishing_task(param)
 
     def _text_capture_region(self):
         """Return one OCR frame without competing with an active frame loop.

@@ -71,6 +71,42 @@ def test_genshin_tp_invalid_string_coordinate_matches_try_parse_zero():
     task.tp.assert_called_once_with(0.0, 0.0, force=False)
 
 
+def test_genshin_auto_fishing_preserves_scalar_time_policy_overload():
+    from bgi_touch.engine.genshin_api import GenshinApi
+
+    api = GenshinApi.__new__(GenshinApi)
+    api.ctx = SimpleNamespace()
+    api.log = Mock()
+    api._party_slots = {}
+
+    with patch("bgi_touch.tasks.dispatcher.TaskDispatcher") as dispatcher_type:
+        api.autoFishing(2)
+
+    dispatcher_type.return_value.run_auto_fishing_task.assert_called_once_with(
+        {"fishingTimePolicy": 2}
+    )
+
+
+def test_dispatcher_auto_fishing_normalizes_scalar_time_policy():
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    dispatcher = TaskDispatcher.__new__(TaskDispatcher)
+    dispatcher.ctx = SimpleNamespace()
+    dispatcher.log = Mock()
+    dispatcher.cancelled = lambda: False
+    dispatcher.party_slots = {}
+
+    task = Mock()
+    with patch(
+        "bgi_touch.tasks.auto_fishing.AutoFishingTask",
+        return_value=task,
+    ) as task_type:
+        dispatcher.run_auto_fishing_task("1")
+
+    task_type.assert_called_once()
+    assert task_type.call_args.kwargs["fishing_time_policy"] == "1"
+
+
 def test_genshin_tp_does_not_retry_when_point_panel_is_not_opened():
     from bgi_touch.pathing.tp import TeleportPanelNotOpenedError
 

@@ -186,3 +186,24 @@ def test_switch_area_clicks_selector_and_lowest_matching_ocr_candidate():
     upper.click.assert_not_called()
     lower.click.assert_called_once_with()
     assert logs == ["[tp] 切换地图区域：层岩巨渊·地下矿区"]
+
+
+def test_wait_for_target_map_does_not_accept_the_previous_teyvat_country():
+    import bgi_touch.pathing.tp as module
+
+    ctx = SimpleNamespace(
+        capture_bgr=Mock(return_value=object()),
+        sleep=Mock(),
+    )
+    task = module.TpTask.__new__(module.TpTask)
+    task.ctx = ctx
+    task.map_name = "Teyvat"
+    task.big = SimpleNamespace(locate_view=Mock(return_value=(1.0, 2.0, 3.0)))
+    task.log = Mock()
+    task._accept_target_view = Mock(side_effect=[False, True])
+
+    assert task._wait_for_target_map(timeout_s=1.0, target_area="Fontaine")
+    assert [item.args for item in task._accept_target_view.call_args_list] == [
+        ((1.0, 2.0, 3.0), "Fontaine"),
+        ((1.0, 2.0, 3.0), "Fontaine"),
+    ]

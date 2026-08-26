@@ -618,6 +618,99 @@ def test_map_drag_returns_the_frame_after_its_own_gesture():
     ctx.sleep.assert_called_once_with(700)
 
 
+def test_map_drag_uses_cursor_returned_by_the_final_swipe():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    feedback = np.ones((4, 8, 3), dtype=np.uint8)
+    device = SimpleNamespace(last_frame_version=41, swipe=Mock())
+
+    def swipe_and_publish(*_args, **_kwargs):
+        device.last_frame_version = 44
+
+    device.swipe.side_effect = swipe_and_publish
+    ctx = SimpleNamespace(
+        device=device,
+        transform=SimpleNamespace(device_width=1000, device_height=600),
+        capture_bgr_after_frame=Mock(return_value=feedback),
+        sleep=Mock(),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+
+    assert task._drag_map(120, -60) is feedback
+    ctx.capture_bgr_after_frame.assert_called_once_with(44, timeout_ms=1800)
+
+
+def test_map_drag_seeds_a_frame_cursor_when_screenshot_has_no_version():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    feedback = np.ones((4, 8, 3), dtype=np.uint8)
+    device = SimpleNamespace(
+        last_frame_version=None,
+        wait_for_frame=Mock(return_value={"frame_version": 17}),
+        swipe=Mock(),
+    )
+    ctx = SimpleNamespace(
+        device=device,
+        transform=SimpleNamespace(device_width=1000, device_height=600),
+        capture_bgr_after_frame=Mock(return_value=feedback),
+        sleep=Mock(),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+
+    assert task._drag_map(120, -60) is feedback
+
+    device.wait_for_frame.assert_called_once_with(
+        after_version=None,
+        timeout_ms=1200,
+    )
+    ctx.capture_bgr_after_frame.assert_called_once_with(17, timeout_ms=1800)
+
+
+def test_map_drag_splits_long_gesture_without_intermediate_screenshots():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    feedback = np.ones((4, 8, 3), dtype=np.uint8)
+    device = SimpleNamespace(last_frame_version=9, swipe=Mock())
+    ctx = SimpleNamespace(
+        device=device,
+        transform=SimpleNamespace(device_width=1920, device_height=1080),
+        capture_bgr_after_frame=Mock(return_value=feedback),
+        capture_bgr=Mock(),
+        sleep=Mock(),
+    )
+    task = TpTask.__new__(TpTask)
+    task.ctx = ctx
+
+    assert task._drag_map(900, 0) is feedback
+
+    # A long map move is divided into four central gestures, while the frame
+    # stream is consumed only once after the complete gesture sequence.
+    assert device.swipe.call_count == 4
+    sent_dx = 0.0
+    for swipe_call in device.swipe.call_args_list:
+        x1, y1, x2, y2 = swipe_call.args[:4]
+        sent_dx += x2 - x1
+        assert 128 <= x1 <= 1792
+        assert 128 <= x2 <= 1792
+        assert 96 <= y1 <= 984
+        assert 96 <= y2 <= 984
+    assert sent_dx == pytest.approx(900)
+    ctx.capture_bgr.assert_not_called()
+    ctx.capture_bgr_after_frame.assert_called_once_with(9, timeout_ms=1800)
+    assert [item.args[0] for item in ctx.sleep.call_args_list] == [90, 90, 90, 700]
+
+
 def test_move_map_consumes_drag_feedback_without_requesting_an_extra_frame():
     from types import SimpleNamespace
     from unittest.mock import Mock

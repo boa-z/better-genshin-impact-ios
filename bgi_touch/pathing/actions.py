@@ -19,7 +19,9 @@ from ..combat.dsl import CombatCommand, CombatExecutor
 from ..engine.context import GameContext
 from ..tasks.dispatcher import TaskDispatcher
 from ..vision.ocr import get_ocr
+from .cancellation import PathingCancelled
 from .model import Waypoint
+from .party_config import PathingPartyConfig
 
 
 _PICK_UP_ACTION_BODIES = {
@@ -76,8 +78,19 @@ _MINING_ACTIONS = (
 # which must not be treated as a centred 16:9 canvas.
 _GADGET_COOLDOWN_RECT = (1790.0, 814.0, 60.0, 24.0)
 _MOTION_KEY_TIP_RECT = (1570.0, 1010.0, 200.0, 70.0)
-_MOTION_TEMPLATE_DIR = (
-    Path(__file__).resolve().parents[2] / "assets" / "templates" / "pathing"
+_MOTION_TEMPLATE_DIRS = (
+    Path(__file__).resolve().parents[2] / "assets" / "templates" / "pathing",
+    # Keep the checked-out upstream asset tree as a development fallback. The
+    # iOS repository can still run without it; in that case motion detection
+    # returns None and callers use their conservative fallback behavior.
+    Path(__file__).resolve().parents[3]
+    / "better-genshin-impact"
+    / "BetterGenshinImpact"
+    / "GameTask"
+    / "Common"
+    / "Element"
+    / "Assets"
+    / "1920x1080",
 )
 _MOTION_TEMPLATE_NAMES = {"space": "key_space.png", "x": "key_x.png"}
 _MOTION_TEMPLATE_CACHE: dict[str, tuple[np.ndarray, np.ndarray | None] | None] = {}
@@ -176,7 +189,11 @@ def _load_motion_template(kind: str) -> tuple[np.ndarray, np.ndarray | None] | N
     if not name:
         _MOTION_TEMPLATE_CACHE[kind] = None
         return None
-    image = cv2.imread(str(_MOTION_TEMPLATE_DIR / name), cv2.IMREAD_UNCHANGED)
+    image = None
+    for directory in _MOTION_TEMPLATE_DIRS:
+        image = cv2.imread(str(directory / name), cv2.IMREAD_UNCHANGED)
+        if image is not None and image.size:
+            break
     if image is None or image.size == 0:
         _MOTION_TEMPLATE_CACHE[kind] = None
         return None
@@ -324,10 +341,17 @@ class PathingActionRunner:
         party_slots: dict[str, int] | None = None,
         log: Callable[[str], None] = print,
         motion_detector: Callable[[np.ndarray], str | None] | None = None,
+        pathing_config: PathingPartyConfig | None = None,
+        sleep: Callable[[float], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ):
         self.ctx = ctx
         self.log = log
         self.motion_detector = motion_detector
+        self.pathing_config = pathing_config
+        self.sleep = sleep or ctx.sleep
+        self._cancel_probe = cancelled or (lambda: False)
+        self._has_cancel_probe = cancelled is not None
         configured_slots = party_slots
         if configured_slots is None:
             configured_slots = getattr(ctx, "party_slots", None)
@@ -339,7 +363,10 @@ class PathingActionRunner:
             and 1 <= int(slot) <= 4
         }
         self.combat = CombatExecutor.for_context(
-            ctx, party_slots=self.party_slots, log=log
+            ctx,
+            party_slots=self.party_slots,
+            log=log,
+            sleep=self.sleep,
         )
 
     @staticmethod
@@ -349,22 +376,42 @@ class PathingActionRunner:
         except (TypeError, ValueError):
             return default
 
-    def run(self, waypoint: Waypoint) -> bool:
-        action = waypoint.action.strip().lower()
-        if not action:
+    def _check_cancelled(self) -> None:
+        try:
+            requested = bool(self._cancel_probe())
+        except Exception:
+            requested = True
+        if requested:
+            raise PathingCancelled("地图追踪动作已取消")
+
+    def run(
+        self,
+        waypoint: Waypoint,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        previous_probe = self._cancel_probe
+        if cancelled is not None:
+            self._cancel_probe = cancelled
+        try:
+            self._check_cancelled()
+            action = waypoint.action.strip().lower()
+            if not action:
+                return True
+            handler = getattr(self, f"_action_{action}", None)
+            if handler is None:
+                self.log(f"[pathing] 动作 {action} 暂不支持，已停止在该路点前")
+                return False
+            handler(waypoint)
+            self._check_cancelled()
             return True
-        handler = getattr(self, f"_action_{action}", None)
-        if handler is None:
-            self.log(f"[pathing] 动作 {action} 暂不支持，已停止在该路点前")
-            return False
-        handler(waypoint)
-        return True
+        finally:
+            self._cancel_probe = previous_probe
 
     def _action_combat_script(self, waypoint: Waypoint) -> None:
         if not waypoint.action_params.strip():
             self.log("[pathing] combat_script 缺少 action_params")
             return
-        self.combat.run(waypoint.action_params)
+        self.combat.run(waypoint.action_params, cancelled=self._cancel_probe)
 
     def _action_fight(self, waypoint: Waypoint) -> None:
         self.log("[pathing] 执行通用战斗")
@@ -381,19 +428,40 @@ class PathingActionRunner:
             # Route authors commonly put a strategy filename directly in
             # action_params; keep accepting a full task mapping as well.
             config["combatStrategyPath"] = raw
-        result = TaskDispatcher(
+        if (
+            self.pathing_config is not None
+            and self.pathing_config.enabled
+            and self.pathing_config.auto_fight_enabled
+            and self.pathing_config.auto_fight_config
+        ):
+            pathing_fight_config = dict(self.pathing_config.auto_fight_config)
+            pathing_fight_config.update(config)
+            config = pathing_fight_config
+        if waypoint.enable_monster_loot_split:
+            # BetterGI passes the converted WaypointForTrack to AutoFightHandler.
+            # Keep the route-only metadata out of ordinary JS AutoFight params
+            # while preserving the same behavior for pathing ``fight`` points.
+            config["_pathingEnableMonsterLootSplit"] = True
+            config["_pathingMonsterTag"] = waypoint.monster_tag
+        dispatcher = TaskDispatcher(
             self.ctx, party_slots=self.party_slots, log=self.log
-        ).run_auto_fight_task(config)
+        )
+        if self._has_cancel_probe:
+            result = dispatcher.run_auto_fight_task(
+                config, ct=self._cancel_probe,
+            )
+        else:
+            result = dispatcher.run_auto_fight_task(config)
         if result is False:
             raise RuntimeError("fight 动作失败")
 
     def _action_normal_attack(self, waypoint: Waypoint) -> None:
         seconds = max(0.2, self._number(waypoint.action_params, 1.2))
-        self.combat.run(f"attack({seconds})")
+        self.combat.run(f"attack({seconds})", cancelled=self._cancel_probe)
 
     def _action_elemental_skill(self, waypoint: Waypoint) -> None:
         self.ctx.input.key_press("E")
-        self.ctx.sleep(1000)
+        self.sleep(1000)
 
     def _action_stop_flying(self, waypoint: Waypoint) -> None:
         # BetterGI's optional parameter is a free-fall interval in milliseconds
@@ -406,9 +474,9 @@ class PathingActionRunner:
             wait_ms = None
         if wait_ms is not None:
             self.ctx.input.key_press("SPACE")
-            self.ctx.sleep(max(0, wait_ms))
+            self.sleep(max(0, wait_ms))
             self.ctx.input.key_press("SPACE")
-            self.ctx.sleep(300)
+            self.sleep(300)
 
         self.log("[pathing] 执行动作：下落攻击")
         self.ctx.input.attack()
@@ -430,7 +498,7 @@ class PathingActionRunner:
                 return
             status = self._motion_status(frame)
             if status == "fly":
-                self.ctx.sleep(300)
+                self.sleep(300)
                 continue
             if status is None:
                 self.log("[pathing] 无法识别飞行提示，结束下落攻击")
@@ -442,7 +510,13 @@ class PathingActionRunner:
     def _motion_status(self, frame: np.ndarray) -> str | None:
         detector = self.motion_detector
         if detector is None:
-            return detect_motion_status(frame, getattr(self.ctx, "transform", None))
+            try:
+                return detect_motion_status(
+                    frame, getattr(self.ctx, "transform", None)
+                )
+            except Exception as error:
+                self.log(f"[pathing] 默认飞行状态识别失败：{error}")
+                return None
         try:
             value = detector(frame)
         except Exception as error:
@@ -456,6 +530,10 @@ class PathingActionRunner:
             "climb": "climb", "climbing": "climb", "2": "climb",
         }.get(normalized)
 
+    def motion_status(self, frame: np.ndarray) -> str | None:
+        """Expose motion recognition for callers that already own a frame."""
+        return self._motion_status(frame)
+
     def _action_mining(self, waypoint: Waypoint) -> None:
         # BetterGI chooses a character-specific mining macro from the current
         # party.  Reuse the same combat DSL so the mobile profile receives
@@ -466,10 +544,30 @@ class PathingActionRunner:
             if selected is None:
                 continue
             self.log(f"[pathing] 使用 {selected} 挖矿动作")
-            self.combat.run(f"{selected} {body}")
+            self.combat.run(
+                f"{selected} {body}", cancelled=self._cancel_probe,
+            )
+            break
+        else:
+            self.log("[pathing] 队伍中没有专用挖矿角色，使用通用攻击")
+            self.combat.run("attack(1.6)", cancelled=self._cancel_probe)
+
+        # BetterGI's MiningHandler optionally follows the character action
+        # with its shared ScanPickTask.  Keep the same switch spelling and
+        # case-insensitive matching used by WaypointForTrack so converted
+        # routes can retain their original action parameters.  ScanPickTask
+        # deliberately reuses the existing AutoPick frame loop and therefore
+        # does not create a competing screenshot producer on iOS.
+        if "disablepickuparound" not in waypoint.action_params.casefold():
             return
-        self.log("[pathing] 队伍中没有专用挖矿角色，使用通用攻击")
-        self.combat.run("attack(1.6)")
+        self._check_cancelled()
+        self.sleep(1000)
+        self._check_cancelled()
+        from ..tasks.common_jobs import ScanPickTask
+
+        ScanPickTask(self.ctx, log=self.log).run(
+            cancelled=self._cancel_probe,
+        )
 
     def _action_linnea_mining(self, waypoint: Waypoint) -> None:
         from .linnea_mining import LinneaMiningTask, parse_linnea_mining_params
@@ -488,7 +586,7 @@ class PathingActionRunner:
             scan_rounds=scan_rounds,
             mine_count=mine_count,
             log=self.log,
-        ).run():
+        ).run(cancelled=self._cancel_probe):
             raise RuntimeError("linnea_mining 执行失败")
 
     def _action_nahida_collect(self, waypoint: Waypoint) -> None:
@@ -496,21 +594,21 @@ class PathingActionRunner:
         self.combat.switch_to("纳西妲")
         self.combat.exec(CombatCommand("ready"))
         self.ctx.input.move_camera_by(0, 10000)
-        self.ctx.sleep(200)
+        self.sleep(200)
         self.ctx.input.key_down("E")
         try:
             for _ in range(15):
                 self.ctx.input.move_camera_by(400, 500)
-                self.ctx.sleep(30)
+                self.sleep(30)
             for index in range(60, 0, -1):
                 vertical = -50 if index <= 40 else -30
                 self.ctx.input.move_camera_by(400, vertical)
-                self.ctx.sleep(30)
+                self.sleep(30)
         finally:
             self.ctx.input.key_up("E")
-        self.ctx.sleep(800)
+        self.sleep(800)
         self._middle_click()
-        self.ctx.sleep(1000)
+        self.sleep(1000)
 
     def _action_hydro_collect(self, waypoint: Waypoint) -> None:
         self._action_elemental_collect(waypoint, "hydro")
@@ -553,27 +651,27 @@ class PathingActionRunner:
     def _move_pickup_circle(self, edge_ms: float, count: int) -> None:
         self.ctx.input.key_down("A")
         try:
-            self.ctx.sleep(30)
+            self.sleep(30)
             for _ in range(max(0, int(count))):
                 self._middle_click()
-                self.ctx.sleep(int(round(edge_ms)))
+                self.sleep(int(round(edge_ms)))
         finally:
             self.ctx.input.key_up("A")
-            self.ctx.sleep(200)
+            self.sleep(200)
 
     def _move_after_pickup_turn(self, direction: str, milliseconds: int = 0) -> None:
         self.ctx.input.key_press(direction)
-        self.ctx.sleep(200)
+        self.sleep(200)
         self._middle_click()
-        self.ctx.sleep(500)
+        self.sleep(500)
         if milliseconds <= 0:
             return
         self.ctx.input.key_down("W")
         try:
-            self.ctx.sleep(int(milliseconds))
+            self.sleep(int(milliseconds))
         finally:
             self.ctx.input.key_up("W")
-        self.ctx.sleep(200)
+        self.sleep(200)
 
     def _move_to_next_pickup_start(
         self, old_radius: float, new_radius: float, angle: float
@@ -581,7 +679,7 @@ class PathingActionRunner:
         x = new_radius - old_radius * math.cos(angle)
         y = old_radius * math.sin(angle)
         self._middle_click()
-        self.ctx.sleep(500)
+        self.sleep(500)
         self._move_after_pickup_turn("S", int(round(y)) + 200)
         self._move_after_pickup_turn("A", int(round(x)))
 
@@ -662,7 +760,9 @@ class PathingActionRunner:
                 # the caller.
                 selected = base_name
             body = _PICK_UP_ACTION_BODIES[action_key]
-            self.combat.run(f"{selected} {body}")
+            self.combat.run(
+                f"{selected} {body}", cancelled=self._cancel_probe,
+            )
 
     @staticmethod
     def _pickup_name(value: str) -> str:
@@ -691,7 +791,11 @@ class PathingActionRunner:
                 self.log("[pathing] fishing action_params 不是有效 JSON，使用默认参数")
         elif raw:
             config["targetCatches"] = max(1, int(self._number(raw, 1)))
-        TaskDispatcher(self.ctx, log=self.log).run_auto_fishing_task(config)
+        dispatcher = TaskDispatcher(self.ctx, log=self.log)
+        if self._has_cancel_probe:
+            dispatcher.run_auto_fishing_task(config, ct=self._cancel_probe)
+        else:
+            dispatcher.run_auto_fishing_task(config)
 
     def _action_use_gadget(self, waypoint: Waypoint) -> None:
         self.log("[pathing] 执行：使用小道具")
@@ -701,7 +805,7 @@ class PathingActionRunner:
             # Keep BetterGI's historical not_wait contract: invoke again
             # immediately and only retain the common action settle delay.
             self.ctx.input.key_press("Z")
-            self.ctx.sleep(300)
+            self.sleep(300)
             return
 
         try:
@@ -737,10 +841,10 @@ class PathingActionRunner:
                 )
             else:
                 self.log(f"[pathing] 等待小道具冷却 {cooldown:.1f}秒")
-            self.ctx.sleep(int(wait_seconds * 1000) + 100)
+            self.sleep(int(wait_seconds * 1000) + 100)
 
         self.ctx.input.key_press("Z")
-        self.ctx.sleep(300)
+        self.sleep(300)
 
     def _action_up_down_grab_leaf(self, waypoint: Waypoint) -> None:
         direction = -1.0 if waypoint.action_params.strip().lower() == "down" else 1.0
@@ -755,17 +859,17 @@ class PathingActionRunner:
                 if consecutive_detections >= 2:
                     self.log("[pathing] 连续检测到四叶印，执行交互")
                     self.ctx.input.key_press("F")
-                    self.ctx.sleep(200)
+                    self.sleep(200)
                     self._middle_click()
                     self.ctx.input.key_press("SPACE")
                     return
-                self.ctx.sleep(150)
+                self.sleep(150)
                 continue
             consecutive_detections = 0
             self.ctx.input.move_camera_by(0, vertical_movement)
-            self.ctx.sleep(100)
+            self.sleep(100)
         self._middle_click()
-        self.ctx.sleep(300)
+        self.sleep(300)
         self.log("[pathing] 未检测到四叶印，已恢复视角")
 
     def _leaf_prompt_visible(self, bgr: np.ndarray) -> bool:

@@ -83,6 +83,31 @@ def test_post_fight_pickup_config_accepts_bettergi_names_and_clamps_seconds():
     assert config.qin_double_pick_up is True
 
 
+def test_pathing_monster_policy_disables_post_fight_pickup_for_non_elite():
+    from bgi_touch.combat.pickup import PostFightPickupConfig
+
+    config = PostFightPickupConfig.from_mapping({
+        "onlyPickEliteDropsMode": "DisableAutoPickupForNonElite",
+        "kazuhaPickupEnabled": True,
+        "pickDropsAfterFightEnabled": True,
+    })
+    effective, suspend = config.apply_pathing_monster_policy(
+        enabled=True,
+        monster_tag="normal",
+    )
+
+    assert effective.kazuha_pickup_enabled is False
+    assert effective.pick_drops_after_fight_enabled is False
+    assert suspend is True
+
+    elite, elite_suspend = config.apply_pathing_monster_policy(
+        enabled=True,
+        monster_tag="legendary",
+    )
+    assert elite == config
+    assert elite_suspend is False
+
+
 def test_dispatcher_passes_post_fight_options_to_auto_fight():
     from unittest.mock import patch
 
@@ -103,3 +128,26 @@ def test_dispatcher_passes_post_fight_options_to_auto_fight():
     assert config.pick_drops_after_fight_seconds == 9
     assert config.exp_based_pickup_enabled is True
 
+
+def test_dispatcher_suspends_only_autopick_for_non_elite_route_fight():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from bgi_touch.tasks.dispatcher import TaskDispatcher
+
+    trigger = SimpleNamespace(enabled=True)
+    loop = SimpleNamespace(get=lambda name: trigger if name == "AutoPick" else None)
+    ctx = SimpleNamespace(_trigger_loop=loop)
+    observed = []
+
+    with patch("bgi_touch.tasks.auto_fight.AutoFightTask") as task:
+        task.return_value.run.side_effect = lambda **_kwargs: observed.append(
+            trigger.enabled
+        ) or True
+        assert TaskDispatcher(ctx).run_auto_fight_task({
+            "onlyPickEliteDropsMode": "DisableAutoPickupForNonElite",
+            "_pathingEnableMonsterLootSplit": True,
+            "_pathingMonsterTag": "normal",
+        })
+
+    assert observed == [False]
+    assert trigger.enabled is True

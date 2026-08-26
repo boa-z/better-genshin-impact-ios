@@ -5,12 +5,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config_values import as_bool
+from .json_merge import load_merged_pathing_mapping
 
 
 def _field(raw: dict, *names: str, default=None):
@@ -67,12 +67,28 @@ class Waypoint:
     items: list[dict] = field(default_factory=list)
 
     @classmethod
-    def parse(cls, raw: dict) -> "Waypoint":
+    def parse(
+        cls,
+        raw: dict,
+        *,
+        default_enable_monster_loot_split: bool = False,
+    ) -> "Waypoint":
         if not isinstance(raw, dict):
             raise ValueError("地图追踪路点必须是对象")
         ext = _field(raw, "point_ext_params", "pointExtParams", default={})
         ext = ext if isinstance(ext, dict) else {}
         items = _field(raw, "items", default=[])
+        loot_split = default_enable_monster_loot_split
+        if (
+            "enable_monster_loot_split" in ext
+            or "enableMonsterLootSplit" in ext
+        ):
+            loot_split = as_bool(_field(
+                ext,
+                "enable_monster_loot_split",
+                "enableMonsterLootSplit",
+                default=False,
+            ))
         return cls(
             id=int(_field(raw, "id", default=0)),
             x=float(_field(raw, "x", "X", "game_x", "gameX", "GameX")),
@@ -85,9 +101,7 @@ class Waypoint:
                 _field(ext, "misidentification", default={})
             ),
             monster_tag=str(_field(ext, "monster_tag", "monsterTag", default="") or ""),
-            enable_monster_loot_split=as_bool(_field(
-                ext, "enable_monster_loot_split", "enableMonsterLootSplit", default=False
-            )),
+            enable_monster_loot_split=loot_split,
             description=str(_field(ext, "description", default="") or ""),
             items=items if isinstance(items, list) else [],
         )
@@ -110,7 +124,7 @@ class PathingTask:
         # BetterGI's bundled route set contains both plain UTF-8 and UTF-8 BOM
         # files. ``utf-8-sig`` accepts both without leaking U+FEFF into JSON.
         source = Path(path).expanduser()
-        raw = json.loads(source.read_text(encoding="utf-8-sig"))
+        raw = load_merged_pathing_mapping(source)
         task = cls.parse(raw)
         task.source_path = str(source.resolve())
         return task
@@ -122,6 +136,12 @@ class PathingTask:
         info = raw.get("info") or {}
         if not isinstance(info, dict):
             info = {}
+        default_enable_monster_loot_split = as_bool(_field(
+            info,
+            "enable_monster_loot_split",
+            "enableMonsterLootSplit",
+            default=False,
+        ))
         config = raw.get("config") or {}
         if not isinstance(config, dict):
             config = {}
@@ -140,7 +160,13 @@ class PathingTask:
         return cls(
             name=str(_field(info, "name", default="") or ""),
             map_name=str(map_name or "Teyvat"),
-            positions=[Waypoint.parse(p) for p in raw.get("positions", []) or []],
+            positions=[
+                Waypoint.parse(
+                    p,
+                    default_enable_monster_loot_split=default_enable_monster_loot_split,
+                )
+                for p in raw.get("positions", []) or []
+            ],
             info=info,
             config=config,
             map_match_method=str(match_method or "SIFT"),

@@ -64,6 +64,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e .                       # 核心：mcp + opencv + numpy
 .venv/bin/pip install -e '.[ocr,js,models]'      # 推荐：OCR + JS + BetterGI ONNX 模型运行时
 .venv/bin/python tools/fetch_map_assets.py --models --tcg --quick-buy --auto-boss  # 地图、模型与任务识别资产
+# 上游地图内容更新但尺寸未变时，显式刷新地图包：
+.venv/bin/python tools/fetch_map_assets.py --refresh
 ```
 
 前置：macOS/Linux 上运行 DeviceHub Mask 并连接 iPhone（**建议 USB**，Wi-Fi 通道输入注入不稳定），iPhone 已安装原神。

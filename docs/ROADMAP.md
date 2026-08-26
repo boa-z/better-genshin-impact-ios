@@ -6,6 +6,8 @@
 - `Genshin-Impact-fixed-16by9` profile 的原始 KeyboardEvent.code 映射，以及
   `config/controls/genshin-native-ui.json` 的小游戏键位覆盖。
 - BetterGI 兼容 JS 运行时、统一 `TaskDispatcher`、战斗 DSL、宏和 WebUI/CLI 任务入口。
+- `DisableInputMonitor` 已接入 DeviceHub 配置；iOS 端可关闭 WebUI `KeyMouseHook` 事件入队，
+  且不影响截图器和普通设备触控。
 - BvLocator 已复用统一识别层支持 `TemplateMatch`、`Ocr`、`OcrMatch`、`ColorMatch` 和
   `ColorRangeAndOcr`，颜色识别不会再因宿主类型被错误拒绝。
 - AutoFight、AutoWood、AutoDomain、AutoCook、AutoFishing（主动任务与实时触发器鱼条控制）、
@@ -114,6 +116,10 @@
    - 打开地图 → OCR 切换目标区域 → 按该地图坐标系拖动 → 点传送锚点 → OCR/模板确认。
    - 已接入上游 `tp.json` 传送点索引；`force=false` 会按最近点语义吸附并选择国家，
      `force=true` 保留原始坐标点击。
+   - 点击前会按最近邻传送点计算最终缩放级别，预测 pinch 后的目标位置并预留邻点搜索
+     安全区；每次缩放后复用新鲜地图帧重新定位，避免相邻锚点误点和旧帧恒定偏移。
+   - 传送入口会识别层岩等地图的地下图层按钮，等待动画完成后校验并切回地表；不含
+     图层模板的旧 DeviceHub 资源继续走兼容路径。
    - `genshin.moveMapTo`、`set/getBigMapZoomLevel` 和可见七天神像传送已接入；
      pinch 缩放仍需在真机上校准等级与手势增益。
 

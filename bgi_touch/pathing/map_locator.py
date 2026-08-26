@@ -48,7 +48,10 @@ class MapDefinition:
 MAP_DEFINITIONS = {
     definition.name: definition for definition in (
         MapDefinition(
-            "Teyvat", 32768, 16384, 2.0, 2048, 256, 0.25,
+            # BetterGI 1.0.21 expanded Teyvat northward.  The origin stays
+            # at the right-hand edge of column 15, while the upper offset is
+            # now row 11 (12 * 2048 = 24576), not the pre-5.x row 7.
+            "Teyvat", 32768, 24576, 2.0, 2048, 256, 0.25,
             ("提瓦特", "提瓦特大陆"),
         ),
         MapDefinition("TheChasm", 2048, 2048, 1.0, 1024, 1024,
@@ -141,11 +144,11 @@ def get_map_definition(value: str | None) -> MapDefinition:
 class MapConfig:
     """世界坐标 ↔ 地图原生特征尺度像素（移植自 SceneBaseMap.cs）。
 
-    Teyvat：原点在图像 (32768, 16384)，块宽 2048 → scale = 2048/1024 = 2，
+    Teyvat：原点在图像 (32768, 24576)，块宽 2048 → scale = 2048/1024 = 2，
     双轴反向：img = origin − world × scale。
     """
     origin_x: float = 32768.0  # (GameMapLeftCols+1) × 2048
-    origin_y: float = 16384.0  # (GameMapUpRows+1) × 2048
+    origin_y: float = 24576.0  # (GameMapUpRows+1) × 2048
     scale: float = 2.0         # mapImageBlockWidth / 1024
 
     @classmethod

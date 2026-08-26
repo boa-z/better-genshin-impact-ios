@@ -11,6 +11,26 @@ FIXTURES = Path(__file__).parent / "fixtures"
 ASSETS = Path(__file__).parents[1] / "assets" / "map"
 
 
+def _has_current_teyvat_assets():
+    """Only run coordinate/feature checks against the matching map layout."""
+
+    keypoints = ASSETS / "Teyvat" / "Teyvat_0_2048_SIFT.kp.bin"
+    sentinel = ASSETS / "Teyvat" / "Teyvat_0_256.png"
+    if not keypoints.is_file() or not sentinel.is_file():
+        return False
+    try:
+        with sentinel.open("rb") as stream:
+            header = stream.read(24)
+        return (
+            header.startswith(b"\x89PNG\r\n\x1a\n")
+            and header[12:16] == b"IHDR"
+            and int.from_bytes(header[16:20], "big") == 5632
+            and int.from_bytes(header[20:24], "big") == 4864
+        )
+    except OSError:
+        return False
+
+
 # ---- 坐标系 ----
 
 def test_screen_transform_anchors():
@@ -32,7 +52,7 @@ def test_teyvat_world_image_roundtrip():
     from bgi_touch.pathing.map_locator import MapConfig
     c = MapConfig()
     ix, iy = c.world_to_image(0, 0)
-    assert (ix, iy) == (32768, 16384)
+    assert (ix, iy) == (32768, 24576)
     wx, wy = c.image_to_world(*c.world_to_image(-910.5, 2249.9))
     assert wx == pytest.approx(-910.5)
     assert wy == pytest.approx(2249.9)
@@ -2241,8 +2261,8 @@ def test_pathing_executor_enables_all_migrated_realtime_triggers():
 
 # ---- 地图定位（需要资产与夹具，缺则跳过）----
 
-@pytest.mark.skipif(not (ASSETS / "Teyvat" / "Teyvat_0_2048_SIFT.kp.bin").exists(),
-                    reason="地图资产未下载")
+@pytest.mark.skipif(not _has_current_teyvat_assets(),
+                    reason="未安装 BetterGI 1.0.21 地图资产")
 def test_minimap_localization_mondstadt():
     import cv2
     from bgi_touch.pathing.map_locator import MapLocator

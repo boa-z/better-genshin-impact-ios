@@ -67,6 +67,146 @@ def test_tp_target_resolution_matches_force_contract():
     assert task._resolve_tp_target(120, 230, force=True) == (120.0, 230.0, None, None)
 
 
+def test_tp_final_zoom_matches_upstream_neighbor_distance_policy():
+    import pytest
+
+    from bgi_touch.pathing.tp import TpTask
+
+    assert TpTask._final_tp_zoom_level(float("inf"), "Teyvat") == pytest.approx(4.4)
+    assert TpTask._final_tp_zoom_level(180, "Teyvat") == pytest.approx(4.4)
+    assert TpTask._final_tp_zoom_level(90, "Teyvat") == pytest.approx(2.5)
+    assert TpTask._final_tp_zoom_level(10, "Teyvat") == pytest.approx(1.0)
+    assert TpTask._final_tp_zoom_level(float("inf"), "MoonCanon") == pytest.approx(3.0)
+
+
+def test_tp_nearby_icon_search_radius_is_bounded_and_scaled():
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.tp import TpTask
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    task = TpTask.__new__(TpTask)
+    task.ctx = SimpleNamespace(transform=ScreenTransform(1920, 1080))
+
+    assert task._nearby_icon_search_radius(20) == 120
+    assert task._nearby_icon_search_radius(150) == 195
+    assert task._nearby_icon_search_radius(500) == 260
+
+
+def test_tp_predicts_pinch_around_the_map_center():
+    from bgi_touch.pathing.tp import TpTask
+
+    assert TpTask._predict_zoomed_click(1000, 500, 4, 2, 1920, 1080) == (1040, 460)
+
+
+def test_tp_click_view_zoom_in_reuses_fresh_frame(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import bgi_touch.pathing.tp as module
+    from bgi_touch.pathing.teleport_points import TeleportPoint
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    task = module.TpTask.__new__(module.TpTask)
+    task.map_name = "Teyvat"
+    task.ctx = SimpleNamespace(
+        transform=ScreenTransform(1920, 1080),
+        sleep=Mock(),
+        capture_bgr=Mock(return_value=object()),
+    )
+    task.big = SimpleNamespace(
+        world_to_feature=lambda x, y: (x, y),
+        locate_view=Mock(return_value=(0.0, 0.0, 1.0)),
+    )
+    task._last_located_frame = object()
+    task._read_map_zoom_level = Mock(side_effect=[6.0, 1.0])
+    task._set_big_map_zoom_level = Mock(return_value=1.0)
+    task._capture_fresh_map_frame = Mock(return_value=object())
+    task._frame_cursor = Mock(return_value=17)
+    task.log = Mock()
+
+    target = TeleportPoint(
+        "Teyvat", "target", "TeleportWaypoint", "传送锚点", "蒙德", (), 0, 0, 0, 0,
+    )
+    neighbor = TeleportPoint(
+        "Teyvat", "neighbor", "TeleportWaypoint", "传送锚点", "蒙德", (), 10, 0, 10, 0,
+    )
+
+    prepared = task._prepare_teleport_click_view(0, 0, target, neighbor, 10)
+
+    assert prepared.tap_x == 960
+    assert prepared.tap_y == 540
+    assert prepared.zoom_level == 1.0
+    task._set_big_map_zoom_level.assert_called_once_with(1.0)
+    task._capture_fresh_map_frame.assert_called_once_with(17)
+
+
+def test_tp_clickable_radius_protects_neighbor_icon_area():
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.tp import TpTask
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    task = TpTask.__new__(TpTask)
+    task.ctx = SimpleNamespace(transform=ScreenTransform(1920, 1080))
+
+    assert task._is_clickable_map_point(960, 540, 260)
+    assert not task._is_clickable_map_point(100, 540, 260)
+
+
+def test_tp_ground_layer_switch_waits_for_animation_and_verifies_ground():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask
+
+    switch_template = object()
+    ground_template = object()
+    switch_hit = SimpleNamespace(is_exist=lambda: True, click=Mock())
+    ground_hit = SimpleNamespace(is_exist=lambda: True, click=Mock())
+    states = [
+        {switch_template: switch_hit, ground_template: SimpleNamespace(is_exist=lambda: False)},
+        {switch_template: SimpleNamespace(is_exist=lambda: True), ground_template: ground_hit},
+        {switch_template: SimpleNamespace(is_exist=lambda: False), ground_template: SimpleNamespace(is_exist=lambda: False)},
+    ]
+
+    class Region:
+        def __init__(self, values):
+            self.values = values
+
+        def find(self, recognition):
+            return self.values[recognition]
+
+    task = TpTask.__new__(TpTask)
+    task._map_underground_switch = switch_template
+    task._map_underground_to_ground = ground_template
+    task.ctx = SimpleNamespace(
+        capture_region=Mock(side_effect=[Region(state) for state in states]),
+        sleep=Mock(),
+    )
+    task.log = Mock()
+
+    assert task._switch_to_ground_map_layer_if_needed()
+    switch_hit.click.assert_called_once_with()
+    ground_hit.click.assert_called_once_with()
+
+
+def test_tp_ground_layer_switch_is_noop_without_map_layer_assets():
+    from unittest.mock import Mock
+
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.tp import TpTask
+
+    task = TpTask.__new__(TpTask)
+    task._map_underground_switch = None
+    task._map_underground_to_ground = None
+    task.ctx = SimpleNamespace(capture_region=Mock())
+
+    assert task._switch_to_ground_map_layer_if_needed()
+    task.ctx.capture_region.assert_not_called()
+
+
 def test_tp_json_point_types_map_to_quick_teleport_icon_types():
     from bgi_touch.pathing.tp import TpTask
 
@@ -240,6 +380,48 @@ def test_panel_candidate_retries_a_tap_before_reporting_failure(monkeypatch):
     assert candidate_text.click.call_count == 2
 
 
+def test_teleport_confirm_accepts_map_closure_after_candidate_selection(monkeypatch):
+    """iOS can start loading without rendering a separate confirm button."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import numpy as np
+
+    import bgi_touch.pathing.tp as module
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    candidate_text = SimpleNamespace(text="优兰尼娅湖", click=Mock())
+    candidate = module._TeleportPanelCandidate(
+        1, {"TeleportWaypoint"}, "优兰尼娅湖", None, candidate_text, 300,
+    )
+
+    class Region:
+        bgr = np.zeros((4, 8, 3), dtype=np.uint8)
+
+        def find(self, _recognition):
+            return SimpleNamespace(is_exist=lambda: False)
+
+        def find_multi(self, *_args, **_kwargs):
+            return []
+
+    task = module.TpTask.__new__(module.TpTask)
+    task.ctx = SimpleNamespace(
+        capture_region=Mock(side_effect=[Region(), Region()]),
+        sleep=Mock(),
+        transform=ScreenTransform(1920, 1080),
+    )
+    task.log = Mock()
+    task._go_teleport = object()
+    task._find_panel_candidates = Mock(side_effect=[[candidate], []])
+    task._find_target_text_candidate = Mock(return_value=None)
+    map_states = iter((True, False))
+    monkeypatch.setattr(module, "is_big_map_ui", lambda *_args, **_kwargs: next(map_states))
+
+    assert task._find_and_tap_confirm(timeout_s=5, initial_delay_ms=0)
+    candidate_text.click.assert_called_once_with()
+    assert "地图面板已关闭" in task.log.call_args_list[-1].args[0]
+
+
 def test_absolute_map_icon_alignment_recovers_small_layer_translation():
     from pytest import approx
 
@@ -316,3 +498,72 @@ def test_absolute_map_click_point_applies_safe_translation():
     )
 
     assert corrected == (1008, 496)
+
+
+def test_absolute_map_click_plan_prefers_raw_point_when_correction_is_too_large():
+    from types import SimpleNamespace
+
+    from bgi_touch.pathing.tp import (
+        TpTask,
+        _AbsoluteMapClickPlan,
+        _ExpectedMapIcon,
+        _ObservedMapIcon,
+    )
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    expected = [
+        _ExpectedMapIcon(1000, 500, frozenset({"TeleportWaypoint"})),
+        _ExpectedMapIcon(1060, 500, frozenset({"TeleportWaypoint"})),
+        _ExpectedMapIcon(1120, 500, frozenset({"Domain"})),
+    ]
+    observed = [
+        _ObservedMapIcon(1020, 500, {"TeleportWaypoint"}),
+        _ObservedMapIcon(1080, 500, {"TeleportWaypoint"}),
+        _ObservedMapIcon(1140, 500, {"Domain"}),
+    ]
+    task = TpTask.__new__(TpTask)
+    task.ctx = SimpleNamespace(transform=ScreenTransform(1920, 1080))
+    task.log = lambda _message: None
+    task._expected_visible_map_icons = lambda _view: expected
+    task._observed_visible_map_icons = lambda _region, _types: observed
+
+    plan = task._absolute_map_click_plan(object(), (0, 0, 1), 1000, 500)
+
+    assert isinstance(plan, _AbsoluteMapClickPlan)
+    assert plan.raw_first is True
+    assert plan.corrected_point is None
+    assert plan.fallback_point == (1020, 500)
+
+
+def test_target_selection_dismisses_stale_panel_before_raw_fallback():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from bgi_touch.pathing.tp import TpTask, _AbsoluteMapClickPlan
+    from bgi_touch.vision.coordinate import ScreenTransform
+
+    tap = Mock()
+    key_press = Mock()
+    task = TpTask.__new__(TpTask)
+    task.ctx = SimpleNamespace(
+        device=SimpleNamespace(tap=tap),
+        input=SimpleNamespace(key_press=key_press),
+        sleep=Mock(),
+        transform=ScreenTransform(1920, 1080),
+    )
+    task.log = Mock()
+    task._teleport_panel_open = True
+    task._anchor_icons_near = Mock(return_value=[])
+    task._confirm_selected_target = Mock(side_effect=[False, True])
+
+    assert task._select_target_and_confirm(
+        960,
+        540,
+        80,
+        click_plan=_AbsoluteMapClickPlan(corrected_point=(980, 540)),
+    )
+    assert [call.args[:2] for call in tap.call_args_list] == [
+        (980, 540),
+        (960, 540),
+    ]
+    key_press.assert_called_once_with("ESCAPE")
